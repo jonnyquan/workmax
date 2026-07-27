@@ -1,0 +1,167 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+/admin/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*.local
+.env
+.env.development
+.env.production
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+
+# Logs
+logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# parcel-bundler cache (https://parceljs.org/)
+.cache
+.parcel-cache
+
+# next.js build output
+.next
+
+# nuxt.js build output
+.nuxt
+
+# vuepress build output
+.vuepress/dist
+
+# Serverless directories
+.serverless
+
+# FuseBox cache
+.fusebox/
+
+# DynamoDB Local files
+.dynamodb/
+
+# TernJS port file
+.tern-port
+
+# Stores VSCode versions used for testing VSCode extensions
+.vscode-test
+
+# Temporary folders
+tmp/
+temp/
+
+# web
+web/public/uploads/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Prompt seed export — 100MB+ data dump, kept out of git history
+server/migrations/prompts.sql
+
+# Cache
+.cache/
+
+# Server
+server/server
+server/uploads
+server/main
+server/server_test
+server/guard
+
+# Compiled Go cmd binaries (built into server/ root by `go build ./cmd/...`)
+/server/backfill_image_dims
+/server/expand_translations
+/server/import_video_prompts
+/server/retranslate_prompts
+/server/recalc_prompt_popularity
+/server/workagent-desktop
+/server/*.test
+
+#python
+python/**/__pycache__/
+server/.gocache/
+
+# Scripts with sensitive data
+*.tar.gz
+
+# Firecrawl artifacts
+.firecrawl/
+
+# Playwright artifacts
+.playwright-cli
+output/
+web/playwright-report/
+web/test-results/
+web/e2e/.auth/
+
+# Claude Code local config (per-developer, not portable)
+.claude/
