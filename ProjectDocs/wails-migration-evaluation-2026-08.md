@@ -167,6 +167,18 @@
 
 **倾向 (c)**：能力路径落地后，它的安全性质与绑定等价甚至更好（凭据只经过我们自己的进程内调用），而且少一个对 beta 框架内部的依赖。W2 开工时定。
 
+### 0.5.22 `--verify-app`：第一次跑用户实际走的那条路（2026-08-08）
+
+此前所有检查验的都是**零件**：行为套件在 VM 里用 mock 驱动 `renderer.js`，`--verify-shim` 验桥接面和一次 turn，`--kill-check` 验传输。**没有一个跑过用户实际拿到的组合**——未经修改的 `index.html` + 出货的 shim + 真 sidecar + 真 webview。
+
+`--verify-app` 补上这一条。关键约束是**不能为了观测而改动页面**：一旦往 `index.html` 注入探针，被测的就不再是出货的东西（何况 `script-src 'self'` 也会拒绝）。所以断言从**反代侧**做——`renderer.js` 启动时打了什么，从外面看得见。
+
+**只有一条必需请求，而这不是弱检查**：`GET /auth/status` 能到达，意味着 `shim.js` 装好了全局、`renderer.js` 认可了它、fetch 在能力路径下解析正确、反代注入了 token、sidecar 应答了。这条链之后的东西不构成新种类的证明。
+
+第一次跑就失败了——但**是我的期望写错了**：我把 `/agent/threads` 也列成必需，而 `renderer.js` 只在 `/auth/status` 报 `authenticated` 后才加载 threads/skills/recoverable。harness 没有云会话，所以它们缺席是 renderer 的**正确行为**。改成会话依赖的可选项后两次连过。
+
+> 这个失败本身有价值：它说明"照抄启动时序当断言"是不够的，得知道每一步的**前置条件**。写下来的期望如果不区分"必须发生"和"取决于状态"，红灯就会指向错误的地方。
+
 ### 0.5.21 RAG on/off 基准，以及它抓出的两个缺陷（2026-08-08）
 
 §14 要求性能基准**分 RAG on/off 两组**（"否则 ONNX 的体积/内存会污染 shell 瘦身的归因"）。补测之后，这条要求兑现了它的价值——两组数字直接推翻了 §5 的 RAG 说法，并牵出两个缺陷。
@@ -876,7 +888,8 @@ Wails **无 preload 世界**，故 `desktop/electron/src/preload.ts`（`AgentSSE
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | rev.1 | 2026-08-08 | 首版评估 + Part B 落地方案；D1/D4/入口结构三项决策落定（v3 / A2 / 单入口双模式） |
-| **rev.16** | **2026-08-08** | **补齐 RAG on/off 基准，抓出两个缺陷。** 新增 §0.5.21：实测 RAG 增量 **+223 MB**（§5 写的是"+数十 MB"，差一个数量级）。① embedder 改为**懒加载**，资源在场但未使用的成本回到 32 MB/48 ms，与 RAG-off 相同；② 修复**关闭竞态**——后台索引 goroutine 与 ONNX 环境销毁并发导致 SIGSEGV（"回答刚出来就关窗即崩溃"），`Close` 改为停单→等待→销毁，超时则不销毁。另验证 `smoke-local.sh` 核心集对新二进制通过（含 `--check-pid-lock`），两个可选检查依赖云端会话 |
+| **rev.17** | **2026-08-08** | **新增 `--verify-app`**（§0.5.22）：第一次运行用户实际走的路径——未经修改的 `index.html` + 出货 shim + 真 sidecar + 真 webview。断言从反代侧做，因为为观测而改页面就等于不再测出货物。唯一必需请求 `/auth/status` 覆盖整条链；其余启动请求是会话依赖的可选项（首次跑因把它们列为必需而误红，已修正） |
+| rev.16 | 2026-08-08 | **补齐 RAG on/off 基准，抓出两个缺陷。** 新增 §0.5.21：实测 RAG 增量 **+223 MB**（§5 写的是"+数十 MB"，差一个数量级）。① embedder 改为**懒加载**，资源在场但未使用的成本回到 32 MB/48 ms，与 RAG-off 相同；② 修复**关闭竞态**——后台索引 goroutine 与 ONNX 环境销毁并发导致 SIGSEGV（"回答刚出来就关窗即崩溃"），`Close` 改为停单→等待→销毁，超时则不销毁。另验证 `smoke-local.sh` 核心集对新二进制通过（含 `--check-pid-lock`），两个可选检查依赖云端会话 |
 | rev.15 | 2026-08-08 | **首个打包产物 + 性能实测。** 新增 §0.5.20：`build-mac.sh` 按 Wails 布局重写并强制过检查器，arm64 `.app` 端到端可用。修复 `resolveResourcesDir()` 与下载目的地错位（打包后才显形）。实测替换 §5 估算：安装包 22 MB ✅、冷启动 ~48ms/~100ms ✅、**稳态内存 ~109–126 MB（§5 估的 40–80 MB 偏低约 50%）** ❌。记录一个流程错误：同机对照基线未在删除 Electron 前采集，比值暂无可引用实测 |
 | rev.14 | 2026-08-08 | **W4 起步。** 新增 §0.5.19：entitlements 从 4 条减到 1 条（去掉 V8/dyld 三条，`disable-library-validation` 待 RAG 里程碑再加，缺席理由写进 plist）；`inspect-mac-package.sh` 按 Wails 布局重写并配 16 项负向测试，补上 `notarize-mac.sh` 的失败关闭，两者已接回 CI。修掉自己写的一条静默失效检查（`grep -E` 不支持负向先行断言 + stderr 被丢），并把两处重叠检查收敛到一处 |
 | rev.13 | 2026-08-08 | **W2 安全收尾。** 新增 §0.5.18：CSP 去掉 `'unsafe-inline'`（出货 renderer 实测不需要，harness 的 `<style>` 一并外置）、DevTools 改为仅 env 显式开启且应用内无法开启、单实例两层实测。契约增至 12 条保证（新增 `devtools-off-by-default`，`containment-headers` 加缺席断言），`uiserver_test.go` 独立复核 |

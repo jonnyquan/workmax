@@ -49,6 +49,8 @@ func main() {
 	serveOnly := flag.Bool("serve-only", false, "run the sidecar without a window (dev + smoke target)")
 	killCheck := flag.Bool("kill-check", false, "run the W1 SSE kill check (Go control + webview replay) and exit")
 	verifyShim := flag.Bool("verify-shim", false, "load the real renderer shim in the webview, check the bridge surface, and exit")
+	verifyApp := flag.Bool("verify-app", false, "load the unmodified renderer in the webview and check it completes its boot sequence")
+	verifyAppWait := flag.Duration("verify-app-wait", 12*time.Second, "how long to watch the renderer boot")
 	killCheckTimeout := flag.Duration("kill-check-timeout", 45*time.Second, "how long to wait for the webview replay")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
@@ -80,6 +82,10 @@ func main() {
 
 	if *serveOnly {
 		runServeOnly(boot)
+		return
+	}
+	if *verifyApp {
+		runVerifyApp(boot, *verifyAppWait)
 		return
 	}
 	if *killCheck || *verifyShim {
@@ -431,6 +437,64 @@ func runKillCheck(boot *desktop.Boot, timeout time.Duration, verifyShim bool) {
 
 // killCheckAssetHandler serves the test page and, under /sidecar/, the
 // same-origin reverse proxy the second probe exercises.
+// runVerifyApp opens the real app and watches whether the shipped renderer
+// completes its boot sequence against a real sidecar. Nothing about the page
+// is altered to observe it — see verifyapp.go for why that constraint shapes
+// the whole check.
+func runVerifyApp(boot *desktop.Boot, wait time.Duration) {
+	rendererDir, err := resolveRendererDir()
+	if err != nil {
+		log.Printf("verify-app: %v", err)
+		finishKillCheck(boot, 2)
+	}
+	log.Printf("verify-app: serving the shipped renderer from %s", rendererDir)
+
+	capability, err := mintCapability()
+	if err != nil {
+		log.Printf("verify-app: %v", err)
+		finishKillCheck(boot, 2)
+	}
+	watcher := &bootWatcher{}
+	handler := watchBoot(UIHandler(os.DirFS(rendererDir), capability, boot.Port(), boot.LocalToken), capability, watcher)
+	uiOrigin, stopUI, err := serveLoopback(handler)
+	if err != nil {
+		log.Printf("verify-app: ui listener: %v", err)
+		finishKillCheck(boot, 2)
+	}
+	defer func() { _ = stopUI() }()
+
+	boot.Start()
+	go func() {
+		if err := boot.Serve(); err != nil && err != http.ErrServerClosed {
+			log.Printf("server error: %v", err)
+		}
+	}()
+
+	app := application.New(application.Options{
+		Name:   "WorkMax verify-app",
+		Assets: application.AssetOptions{Handler: killCheckAssetHandler(boot)},
+		Mac:    application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
+	})
+	app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name:   "verify-app",
+		Title:  "WorkMax verify-app",
+		Width:  1200,
+		Height: 800,
+		URL:    uiOrigin + "/" + capability + "/",
+	})
+
+	started := time.Now()
+	go func() {
+		time.Sleep(wait)
+		finishKillCheck(boot, reportAppBoot(watcher, time.Since(started)))
+	}()
+
+	if err := app.Run(); err != nil {
+		log.Printf("verify-app: wails run: %v", err)
+		finishKillCheck(boot, 2)
+	}
+}
+
 // killCheckAssetHandler exists only to satisfy the Wails runtime, which wants
 // somewhere to serve its own bits from. The page under test is served over
 // loopback HTTP instead — see startHarnessServer.

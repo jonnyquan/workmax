@@ -464,7 +464,14 @@ Two checks worth running by hand, because they use a real webview:
 ```bash
 ./desktop/scripts/dev.sh --kill-check     # SSE through WKWebView, byte-for-byte
 ./desktop/scripts/dev.sh --verify-shim    # the shipped shim satisfies the renderer contract
+./desktop/scripts/dev.sh --verify-app     # the unmodified renderer boots against a real sidecar
 ```
+
+`--verify-app` is the only check that runs what a user actually gets: the
+unmodified `index.html`, the shipped shim, a real sidecar, in a real webview.
+It asserts from the proxy rather than from inside the page, because injecting a
+probe into the page would mean testing something other than what ships. Run it
+signed in to exercise the session-gated part of the boot as well.
 
 Script regression tests:
 
