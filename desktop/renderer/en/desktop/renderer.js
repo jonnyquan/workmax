@@ -38,6 +38,9 @@ const state = {
   // turn (localSingleUserUID, L3d/D2), so it is what decides whether this app
   // is usable without an account.
   localRoute: false,
+  // Whether a local turn right now runs the L2 tool loop or pure chat. The
+  // dispatch falls back silently; the composer must not.
+  toolLoop: false,
 };
 
 const AUTH_POLL_INTERVAL_MS = 1000;
@@ -1246,9 +1249,10 @@ async function loadSkills(expectedSessionGeneration = state.sessionGeneration) {
 // half-understood payload must be an error rather than a permissive default.
 function parseAgentModes(value) {
   if (
-    !hasExactKeys(value, ["allowed_modes", "local_route"]) ||
+    !hasExactKeys(value, ["allowed_modes", "local_route", "tool_loop"]) ||
     !Array.isArray(value.allowed_modes) ||
-    typeof value.local_route !== "boolean"
+    typeof value.local_route !== "boolean" ||
+    typeof value.tool_loop !== "boolean"
   ) {
     throw new Error("Malformed agent modes response");
   }
@@ -1261,7 +1265,7 @@ function parseAgentModes(value) {
     seen.add(mode);
     modes.push(mode);
   }
-  return { allowed_modes: modes, local_route: value.local_route };
+  return { allowed_modes: modes, local_route: value.local_route, tool_loop: value.tool_loop };
 }
 
 // Reads the Desktop's own answer to "what may I run, and would it run here".
@@ -1293,6 +1297,7 @@ async function loadLocalModes(expectedSessionGeneration = state.sessionGeneratio
     return false;
   }
   state.localRoute = modes.local_route;
+  state.toolLoop = modes.tool_loop;
   // The catalog is authoritative when there is a session — it carries the same
   // allowlist plus the live skill details. This only fills the gap the catalog
   // cannot cover, which is having no session at all.
@@ -2197,7 +2202,9 @@ function updateComposerState() {
       ? "Stopping this turn..."
       : "WorkMax Agent is responding...";
   } else if (isLocalOnlySession()) {
-    composerStatus.textContent = `${state.selectedMode.toUpperCase()} on your local model. Signed out — nothing leaves this machine.`;
+    composerStatus.textContent = state.toolLoop
+      ? `${state.selectedMode.toUpperCase()} on your local model with tools. Signed out — nothing leaves this machine.`
+      : `${state.selectedMode.toUpperCase()} on your local model, chat only. Signed out — nothing leaves this machine.`;
   } else if (state.skillsDegraded) {
     composerStatus.textContent = `${state.selectedMode.toUpperCase()} is available; live skill details are offline.`;
   } else {
@@ -4544,6 +4551,13 @@ function renderDeliverables() {
     ctxEl("deliverables-list").appendChild(item);
   }
   if (ctxEl("deliverables-empty")) ctxEl("deliverables-empty").hidden = items.length > 0;
+  if (ctxEl("open-workspace-button")) {
+    // Offered only when there is something to open, and only when the bridge
+    // can actually open it — a button that silently fails is worse than none.
+    ctxEl("open-workspace-button").hidden =
+      items.length === 0 ||
+      typeof window.desktopBridge?.agent?.revealWorkspace !== "function";
+  }
   if (ctxEl("deliverables-meta")) {
     ctxEl("deliverables-meta").textContent = contextState.deliverablesTruncated
       ? `${items.length}+`
@@ -4647,6 +4661,21 @@ const renameThreadCancel = document.querySelector("#rename-thread-cancel");
 if (renameThreadCancel) {
   renameThreadCancel.addEventListener("click", () => {
     closeRenameForm();
+  });
+}
+
+const openWorkspaceButton = document.querySelector("#open-workspace-button");
+if (openWorkspaceButton) {
+  openWorkspaceButton.addEventListener("click", () => {
+    const threadUUID = state.selectedThreadUUID;
+    const agent = window.desktopBridge?.agent;
+    if (!threadUUID || typeof agent?.revealWorkspace !== "function") return;
+    void agent.revealWorkspace(threadUUID).then(
+      (result) => {
+        if (!result?.ok) setStatus("Could not open the workspace folder.", "error");
+      },
+      () => setStatus("Could not open the workspace folder.", "error")
+    );
   });
 }
 

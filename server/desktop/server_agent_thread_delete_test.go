@@ -512,3 +512,90 @@ func TestListWorkspaceFiles_BoundsAndSymlinks(t *testing.T) {
 		}
 	}
 }
+
+// --- Workspace reveal ------------------------------------------------------
+
+func TestRevealWorkspace_OpensExactlyTheOwnedDir(t *testing.T) {
+	base, db, fixtureFilesDir, _ := newDeleteFixture(t)
+	seedLocalThreadForDelete(t, db, localSingleUserUID, deleteTestThreadUUID)
+	ws := filepath.Join(filepath.Dir(fixtureFilesDir), "agent_workspace", "thread_"+deleteTestThreadUUID)
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var opened []string
+	restore := revealWorkspaceDir
+	revealWorkspaceDir = func(dir string) error { opened = append(opened, dir); return nil }
+	t.Cleanup(func() { revealWorkspaceDir = restore })
+
+	req, _ := http.NewRequest(http.MethodPost, base+"/agent/threads/"+deleteTestThreadUUID+"/workspace/reveal", nil)
+	req.Header.Set("X-Local-Token", "tok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	if len(opened) != 1 || opened[0] != ws {
+		t.Fatalf("opened = %v, want exactly %s", opened, ws)
+	}
+}
+
+// No workspace directory → 404, and crucially: the OS opener must not run.
+// Opening a nonexistent path is harmless; the rule matters so a future edit
+// cannot loosen the path derivation without a test noticing.
+func TestRevealWorkspace_RefusesWhenNothingExists(t *testing.T) {
+	base, db, _, _ := newDeleteFixture(t)
+	seedLocalThreadForDelete(t, db, localSingleUserUID, deleteTestThreadUUID)
+
+	var opened []string
+	restore := revealWorkspaceDir
+	revealWorkspaceDir = func(dir string) error { opened = append(opened, dir); return nil }
+	t.Cleanup(func() { revealWorkspaceDir = restore })
+
+	req, _ := http.NewRequest(http.MethodPost, base+"/agent/threads/"+deleteTestThreadUUID+"/workspace/reveal", nil)
+	req.Header.Set("X-Local-Token", "tok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	if len(opened) != 0 {
+		t.Fatalf("the opener ran for a missing workspace: %v", opened)
+	}
+}
+
+func TestRevealWorkspace_ScopedToTheCaller(t *testing.T) {
+	base, db, fixtureFilesDir, _ := newDeleteFixture(t)
+	if err := db.Exec(
+		`INSERT INTO w_workagent_thread (uid, uuid, name, cloud_sync_state) VALUES (?, ?, 'Not yours', 'local')`,
+		localSingleUserUID+1, deleteTestThreadUUID,
+	).Error; err != nil {
+		t.Fatal(err)
+	}
+	// The directory exists — ownership alone must refuse.
+	ws := filepath.Join(filepath.Dir(fixtureFilesDir), "agent_workspace", "thread_"+deleteTestThreadUUID)
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var opened []string
+	restore := revealWorkspaceDir
+	revealWorkspaceDir = func(dir string) error { opened = append(opened, dir); return nil }
+	t.Cleanup(func() { revealWorkspaceDir = restore })
+
+	req, _ := http.NewRequest(http.MethodPost, base+"/agent/threads/"+deleteTestThreadUUID+"/workspace/reveal", nil)
+	req.Header.Set("X-Local-Token", "tok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound || len(opened) != 0 {
+		t.Fatalf("status = %d opened = %v; another identity's workspace must be invisible", resp.StatusCode, opened)
+	}
+}

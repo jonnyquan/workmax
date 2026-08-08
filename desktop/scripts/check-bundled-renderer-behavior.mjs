@@ -1474,13 +1474,14 @@ async function testThreadDeleteIsTwoStepAndLocalOnly() {
 async function testToolLoopActivityAndDeliverables() {
   let emit = null;
   let turnDone = false;
+  const revealed = [];
   const bridge = {
     async fetch(pathname) {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
       if (pathname === "/agent/threads?include_paused=false") {
-        return response({ items: [thread("l2-thread", "Tool loop")] });
+        return response({ items: [thread("00000000-0000-4000-8000-0000000d2c01", "Tool loop")] });
       }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
       throw new Error(`unexpected fetch path ${pathname}`);
@@ -1490,6 +1491,10 @@ async function testToolLoopActivityAndDeliverables() {
     agent: {
       async uploadThreadFile() { throw new Error("not exercised"); },
       async listSkills() { return typedSuccess(pptCatalog()); },
+      async revealWorkspace(uuid) {
+        revealed.push(uuid);
+        return typedSuccess({ revealed: true });
+      },
       async listWorkspaceFiles() {
         return typedSuccess({
           items: turnDone
@@ -1518,6 +1523,11 @@ async function testToolLoopActivityAndDeliverables() {
     document.byId.get("deliverables-meta").textContent,
     "0",
     "an empty workspace is an empty panel",
+  );
+  assert.equal(
+    document.byId.get("open-workspace-button").hidden,
+    true,
+    "nothing to open, no button",
   );
 
   const input = document.byId.get("chat-input");
@@ -1559,6 +1569,18 @@ async function testToolLoopActivityAndDeliverables() {
     document.byId.get("deliverables-empty").hidden,
     true,
     "with files present the empty note must give way",
+  );
+  assert.equal(
+    document.byId.get("open-workspace-button").hidden,
+    false,
+    "files the user can see but not open are still a screenshot — the folder must be openable",
+  );
+  document.byId.get("open-workspace-button").click();
+  await settle();
+  assert.deepEqual(
+    Array.from(revealed),
+    ["00000000-0000-4000-8000-0000000d2c01"],
+    "reveal must name the selected thread",
   );
 
   // A new turn starts its own story: the last turn's activity is not what
@@ -2153,7 +2175,7 @@ function localModeBridge({ localRoute }) {
         return { ok: false, status: 401, statusText: "Unauthorized", headers: {}, error: { error: "authentication_required" } };
       },
       async listModes() {
-        return typedSuccess({ allowed_modes: ["ppt"], local_route: localRoute });
+        return typedSuccess({ allowed_modes: ["ppt"], local_route: localRoute, tool_loop: false });
       },
       async listRecoverableTurns() { return typedSuccess({ items: [], count: 0 }); },
       async createThread() { throw new Error("not exercised"); },
@@ -2194,8 +2216,8 @@ async function testSignedOutLocalRouteCanDriveTheAgent() {
   );
   assert.match(
     document.byId.get("composer-status").textContent,
-    /local model/i,
-    "the composer must say where the turn will run",
+    /local model, chat only/i,
+    "the composer must say where the turn runs AND that no tools are wired — the dispatch falls back silently, the composer must not",
   );
 
   // And a turn actually goes out.

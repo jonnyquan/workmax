@@ -37,6 +37,17 @@ func (s *Server) localTurnRunner() TurnRunner {
 	return s.cfg.LocalInference
 }
 
+// localToolLoopActive reports whether a local turn sent right now would run
+// the L2 tool loop — the same condition localTurnRunner applies, exposed so
+// the modes route can tell the renderer the truth about capability.
+func (s *Server) localToolLoopActive() bool {
+	if !s.shouldUseLocalRoute() || s.cfg.LocalAgent == nil {
+		return false
+	}
+	dto, err := s.cfg.ModelSettings.Get()
+	return err == nil && dto.Local.Protocol == LocalProtocolAnthropicCompatible
+}
+
 func (s *Server) shouldUseLocalRoute() bool {
 	if s.cfg.LocalInference == nil || s.cfg.ModelSettings == nil {
 		return false

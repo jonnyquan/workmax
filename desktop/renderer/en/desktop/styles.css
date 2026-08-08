@@ -1426,6 +1426,19 @@ textarea:focus-visible {
   color: hsl(var(--primary));
 }
 
+.context-action {
+  height: auto;
+  margin-bottom: 8px;
+  padding: 4px 10px;
+  background: hsl(var(--card));
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.context-action:hover {
+  color: hsl(var(--foreground));
+}
+
 .context-empty {
   margin: 0;
   font-size: 11px;

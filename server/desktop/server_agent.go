@@ -500,6 +500,11 @@ type agentModesResponse struct {
 	// which is exactly the condition currentAgentTurnSession applies before it
 	// hands out localSingleUserUID.
 	LocalRoute bool `json:"local_route"`
+	// ToolLoop reports whether that local turn would run the L2 tool loop.
+	// The dispatch falls back to pure chat silently when no CLI is wired, and
+	// a user who configured anthropic_compatible expecting tools deserves to
+	// be told which one they are getting.
+	ToolLoop bool `json:"tool_loop"`
 }
 
 // handleAgentModes answers "which agent modes may this Desktop use", without
@@ -521,6 +526,7 @@ func (s *Server) handleAgentModes(c *gin.Context) {
 	c.JSON(http.StatusOK, agentModesResponse{
 		AllowedModes: DesktopAllowedAgentModes,
 		LocalRoute:   s.shouldUseLocalRoute(),
+		ToolLoop:     s.localToolLoopActive(),
 	})
 }
 

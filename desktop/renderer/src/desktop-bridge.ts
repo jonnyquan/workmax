@@ -258,6 +258,8 @@ export interface AgentSkillCatalog {
 export interface AgentModes {
   allowed_modes: string[];
   local_route: boolean;
+  /** Whether a local turn right now would run the L2 tool loop, or pure chat. */
+  tool_loop: boolean;
 }
 
 export interface AgentTurnInput {
@@ -470,6 +472,9 @@ export interface DesktopBridge {
     listWorkspaceFiles: (
       threadUUID: string
     ) => Promise<DesktopBridgeResult<AgentWorkspaceFileList>>;
+    revealWorkspace: (
+      threadUUID: string
+    ) => Promise<DesktopBridgeResult<{ revealed: boolean }>>;
     listRecoverableTurns: () => Promise<
       DesktopBridgeResult<AgentRecoverableTurnList>
     >;
@@ -638,6 +643,14 @@ const ROUTES = {
     "none",
     null
   ),
+  agentRevealWorkspace: defineTypedRoute(
+    "agent.revealWorkspace",
+    "agent.thread-workspace-reveal",
+    "POST",
+    "/agent/threads/:uuid/workspace/reveal",
+    "none",
+    null
+  ),
   agentRenameThread: defineTypedRoute(
     "agent.renameThread",
     "agent.thread-rename",
@@ -791,6 +804,14 @@ export function createDesktopBridge(
           encodeURIComponent(uuid)
         );
         return execute<AgentWorkspaceFileList>(deps, ROUTES.agentListWorkspaceFiles, path);
+      },
+      revealWorkspace: async (threadUUID) => {
+        const uuid = validateCanonicalV4UUID(threadUUID, "revealWorkspace threadUUID");
+        const path = ROUTES.agentRevealWorkspace.path.replace(
+          ":uuid",
+          encodeURIComponent(uuid)
+        );
+        return execute<{ revealed: boolean }>(deps, ROUTES.agentRevealWorkspace, path);
       },
       renameThread: async (threadUUID, name) => {
         const uuid = validateCanonicalV4UUID(threadUUID, "renameThread threadUUID");

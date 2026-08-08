@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -72,6 +73,57 @@ func (s *Server) handleListWorkspaceFiles(c *gin.Context) {
 	root := filepath.Join(s.cfg.DataDir, "agent_workspace", "thread_"+threadUUID)
 	items, truncated := listWorkspaceFiles(root)
 	c.JSON(http.StatusOK, workspaceListResponse{Items: items, Count: len(items), Truncated: truncated})
+}
+
+// revealWorkspaceDir opens the directory in the OS file manager. A seam so
+// tests can assert the path without opening windows on the test machine.
+var revealWorkspaceDir = func(dir string) error {
+	return exec.Command("open", dir).Start()
+}
+
+// POST /agent/threads/:uuid/workspace/reveal — hand the folder to the user.
+//
+// A Deliverables panel that lists files nobody can open is a screenshot of
+// files. The renderer cannot touch the filesystem, so this is the sidecar's
+// job: validate ownership exactly as the listing does, then ask the OS to
+// show the one directory this thread owns. No path travels in the request —
+// the uuid is the only input, and the path is derived server-side, so there
+// is nothing here that can be pointed anywhere else.
+func (s *Server) handleRevealWorkspace(c *gin.Context) {
+	if s.cfg.DB == nil || s.cfg.DataDir == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "workspace_unavailable"})
+		return
+	}
+	threadUUID, err := canonicalDesktopThreadUUID(c.Param("uuid"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_thread_uuid"})
+		return
+	}
+	uid, _, err := s.currentAgentTurnSession()
+	if err != nil {
+		s.writeAgentTurnSessionError(c, err)
+		return
+	}
+	var threadID uint64
+	if err := s.cfg.DB.Raw(
+		`SELECT id FROM w_workagent_thread WHERE uuid = ? AND uid = ?`,
+		threadUUID, uid,
+	).Row().Scan(&threadID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "thread_not_found"})
+		return
+	}
+	dir := filepath.Join(s.cfg.DataDir, "agent_workspace", "thread_"+threadUUID)
+	if info, serr := os.Stat(dir); serr != nil || !info.IsDir() {
+		// Nothing to show is a state the renderer should not have offered;
+		// answering 404 keeps the button honest if it raced a deletion.
+		c.JSON(http.StatusNotFound, gin.H{"error": "workspace_not_found"})
+		return
+	}
+	if err := revealWorkspaceDir(dir); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "reveal_failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"revealed": true})
 }
 
 // listWorkspaceFiles walks the workspace, newest first, bounded.
