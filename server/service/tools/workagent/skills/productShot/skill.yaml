@@ -1,0 +1,119 @@
+# productShot skill — fully-native (no legacy: block). Body lives in
+# skills/productShot/SKILL.md, hand-rewritten from the legacy
+# identity_productShot.md with five additions:
+#   - 5 product-type taxonomy (electronics / apparel / beauty / food
+#     / home) with per-type lighting + setting recommendations
+#   - 4 setting types (studio / lifestyle / outdoor / flat_lay)
+#     with explicit "use for" / "don't use for" guidance
+#   - 4 lighting tonalities (soft / dramatic / natural / golden_hour)
+#     and platform-default mapping
+#   - Explicit 3-pass workflow (brief → per-shot generate → deliver
+#     with platform-compliance hint)
+#   - **Hard constraint: no asset, no product image** — productShot
+#     is the highest-risk skill for ai-fabricated-product-appearance
+#     issues (e-commerce returns, platform compliance, brand trust).
+#     SKILL.md forbids agent-fabricated product representations
+#     when no source product image / asset exists.
+#   - Platform-specific compliance section (Amazon 85%+ white-bg,
+#     Shopify flexibility, TikTok Shop 9:16 lifestyle, B2B real-env)
+#
+# Stage D migration:
+#   - Pre-graduation (v1.0.0): skill.yaml carried a `legacy:` block
+#     that pulled identity from prompts/templates/identity_productShot.md
+#     (28 lines, English bullet list).
+#   - Post-graduation (v2.0.0, this commit): SKILL.md owns the body;
+#     legacy template deleted in the same commit.
+#
+# Why productShot is a good fifth graduation:
+#   - Highest e-commerce traffic mode; quality wins flow directly
+#     to conversion + return-rate metrics
+#   - Pairs with the asset-library Product surface (P1 #5) — the
+#     @product/<slug> mention path can now feed visualGuidance JSON
+#     into a structured prompt frame instead of the legacy bullet-
+#     prompt template
+#   - The "no source asset, no fabricated product" rule is a real
+#     compliance / brand-trust issue that the legacy template
+#     didn't address at all
+name: productShot
+version: 2.0.0
+description: 电商产品摄影师 — 5 类产品 × 4 setting × 4 lighting，含平台合规规则 (Amazon / Shopify / 小红书 / TikTok Shop / B2B)。叠加事实验证、资产协议、反 AI slop、Junior Designer 工作流四份横向规则。硬约束：无 source asset 不生成产品图。
+
+artifacts:
+  primary_type: product_image
+  output_types: [png, jpg, markdown]
+  preview_types: [image, markdown]
+  export_targets: [png, jpg, zip]
+  critique_anchors: [craft, functionality, brand_fit]
+
+triggers:
+  agent_mode: productShot
+
+required_inputs:
+  # Surfaced to the model BEFORE generation so it asks rather than
+  # generates blind — matches the pattern from ppt / socialAd /
+  # flashCard / logo. product_reference_image is conditional but
+  # CRITICAL — see the "Real product vs concept image" hard
+  # constraint in SKILL.md.
+  - kind: product_type
+  - kind: setting
+  - kind: lighting
+  - kind: target_platform
+  - kind: product_reference_image
+    when: source_asset_required
+  - kind: brand_assets
+    when: brand_specified
+
+references:
+  shared:
+    - fact-verification
+    - asset-protocol
+    - anti-ai-slop
+    - junior-designer-workflow
+  local:
+    - checklist
+
+# M1 turn-1 discovery form. See work-agent-open-design-integration-2026-05.md v2.4 §0.5.
+question_form:
+  enabled: true
+  trigger: first_turn_no_form_answered
+  skip_label_key: form.skip
+  questions:
+    - id: product_type
+      label_key: form.productShot.product_type.label
+      type: single_select
+      required: true
+      default: electronics
+      options:
+        - { value: electronics, label_key: form.productShot.product_type.electronics }
+        - { value: apparel,     label_key: form.productShot.product_type.apparel }
+        - { value: beauty,      label_key: form.productShot.product_type.beauty }
+        - { value: food,        label_key: form.productShot.product_type.food }
+        - { value: home,        label_key: form.productShot.product_type.home }
+    - id: setting
+      label_key: form.productShot.setting.label
+      type: single_select
+      required: true
+      default: studio
+      options:
+        - { value: studio,    label_key: form.productShot.setting.studio }
+        - { value: lifestyle, label_key: form.productShot.setting.lifestyle }
+        - { value: outdoor,   label_key: form.productShot.setting.outdoor }
+        - { value: flat_lay,  label_key: form.productShot.setting.flat_lay }
+    - id: lighting
+      label_key: form.productShot.lighting.label
+      type: single_select
+      required: true
+      default: soft
+      options:
+        - { value: soft,         label_key: form.productShot.lighting.soft }
+        - { value: dramatic,     label_key: form.productShot.lighting.dramatic }
+        - { value: natural,      label_key: form.productShot.lighting.natural }
+        - { value: golden_hour,  label_key: form.productShot.lighting.golden_hour }
+
+# M2 visual directions fallback. Fires AFTER question_form completes
+# and only when no brand context is active.
+directions_fallback:
+  enabled: true
+  trigger: no_brand_no_direction_selected
+  picker_source: fallback_5
+  skip_label_key: form.skip

@@ -1,0 +1,143 @@
+# Visual Directions — Sprint-B DS-3
+#
+# 5 brand-neutral design/media directions the M2 directions_picker
+# offers when no brand asset is active. Each direction is a
+# deterministic spec — radio click → fully specified visual system,
+# zero model freestyle.
+#
+# Naming convention follows §0.7 "命名中性": directions are tone /
+# design/media direction names, not platform brand names. Borrowed structure
+# from Open Design's apps/web/src/prompts/directions.ts (5 directions)
+# but redefined for Work Agent's general design workspace domain:
+# image, video/motion, HTML-native, deck, and marketing artifacts
+# (see work-agent-design-workspace-roadmap-2026-05.md).
+#
+# Palette values are in OKLch — OD's choice for perceptually uniform
+# color manipulation. Each direction also carries hex equivalents
+# for client-side previews where OKLch isn't yet supported (older
+# Safari etc.). Hex is computed once per OKLch and committed; do
+# NOT regenerate at runtime (jitter would break determinism).
+#
+# Used by:
+#   - frontend DirectionsPicker (Sprint C M2 UI) for color-card render
+#   - backend DirectionsFallback dispatcher (Sprint C) for prompt
+#     injection when brand-spec is absent
+#   - DS-1 design-system files (Sprint C) reference these via ds_link
+#
+# When this yaml's schema changes, update:
+#   - skills/loader.go: VisualDirection struct
+#   - server/locales/workagent_form/<lang>.json: form.directions.* keys
+
+# Default rotation — the 5 directions surfaced by the picker when no
+# brand context exists. Skill yaml can extend this list with custom
+# directions via skill.QuestionForm.options_ref.
+fallback_5:
+
+  - id: editorial_magazine
+    label_key: form.directions.editorial_magazine.label
+    description_key: form.directions.editorial_magazine.desc
+    palette:
+      bg:     { oklch: "oklch(98% 0.01 75)",  hex: "#fbf9f5" }   # cream
+      fg:     { oklch: "oklch(20% 0.01 75)",  hex: "#252320" }   # ink
+      accent: { oklch: "oklch(55% 0.15 30)",  hex: "#b75240" }   # warm rust
+      muted:  { oklch: "oklch(70% 0.02 75)",  hex: "#b3aea4" }
+    font_stack:
+      display: "Söhne Breit, Tiempos Headline, Georgia, serif"
+      body:    "Inter Tight, system-ui, -apple-system, sans-serif"
+      mono:    "JetBrains Mono, Menlo, monospace"
+    layout_posture: "wide-margin · grid-12 · large-display · serif-display"
+    audio_style: "ambient_field_recording"
+    transition: "hard_cut"
+    prompt_fragment: |
+      editorial magazine composition, natural light, shallow DOF,
+      muted palette, lifestyle framing, serif display typography,
+      generous negative space
+    suitable_for: [character, productShot, lifestyle, pictureBook]
+    ds_link: editorial-magazine.md
+
+  - id: modern_minimal
+    label_key: form.directions.modern_minimal.label
+    description_key: form.directions.modern_minimal.desc
+    palette:
+      bg:     { oklch: "oklch(99% 0.005 0)",   hex: "#fafafa" }
+      fg:     { oklch: "oklch(15% 0.005 0)",   hex: "#1a1a1a" }
+      accent: { oklch: "oklch(50% 0.18 250)",  hex: "#3151c4" }   # vivid blue
+      muted:  { oklch: "oklch(70% 0.005 0)",   hex: "#a8a8a8" }
+    font_stack:
+      display: "Inter Display, system-ui, -apple-system, sans-serif"
+      body:    "Inter, system-ui, -apple-system, sans-serif"
+      mono:    "JetBrains Mono, Menlo, monospace"
+    layout_posture: "clean composition · neutral palette · sharp edges · ample negative space"
+    audio_style: "ambient_synth_pads"
+    transition: "smooth_dissolve"
+    prompt_fragment: |
+      clean minimalist composition, soft fill light, neutral palette,
+      sharp edges, ample negative space, geometric sans-serif
+      typography, technical product feel
+    suitable_for: [ppt, logo, marketingPoster, webBanner, emailHeader]
+    ds_link: modern-minimal.md
+
+  - id: vintage_film
+    label_key: form.directions.vintage_film.label
+    description_key: form.directions.vintage_film.desc
+    palette:
+      bg:     { oklch: "oklch(96% 0.04 80)",   hex: "#f6ecdb" }   # cream-warm
+      fg:     { oklch: "oklch(25% 0.04 30)",   hex: "#3e2c25" }   # warm ink
+      accent: { oklch: "oklch(60% 0.13 50)",   hex: "#bf7a4d" }   # tan
+      muted:  { oklch: "oklch(70% 0.03 60)",   hex: "#b09a85" }
+    font_stack:
+      display: "Cormorant Garamond, Tiempos, serif"
+      body:    "Tiempos Text, Georgia, serif"
+      mono:    "Courier Prime, Courier New, monospace"
+    layout_posture: "warm tones · film grain · slight halation · vintage palette"
+    audio_style: "vinyl_warmth"
+    transition: "fade_to_black"
+    prompt_fragment: |
+      16mm film grain, warm color grade, halation around highlights,
+      slight chromatic aberration, vintage palette, nostalgic
+      lifestyle framing
+    suitable_for: [character, lifestyle, pictureBook, mobileStory]
+    ds_link: vintage-film.md
+
+  - id: bold_editorial
+    label_key: form.directions.bold_editorial.label
+    description_key: form.directions.bold_editorial.desc
+    palette:
+      bg:     { oklch: "oklch(98% 0 0)",       hex: "#fafafa" }
+      fg:     { oklch: "oklch(10% 0 0)",       hex: "#0a0a0a" }   # near black
+      accent: { oklch: "oklch(60% 0.25 30)",   hex: "#e2492a" }   # high-contrast red
+      muted:  { oklch: "oklch(50% 0 0)",       hex: "#7a7a7a" }
+    font_stack:
+      display: "Roslindale Display, Bricolage Grotesque, sans-serif"
+      body:    "Inter Tight, system-ui, sans-serif"
+      mono:    "JetBrains Mono, monospace"
+    layout_posture: "high-contrast · oversized typography · primary palette · hard light"
+    audio_style: "punchy_drum"
+    transition: "hard_cut"
+    prompt_fragment: |
+      high-contrast bold composition, hard light, oversized
+      typography, primary palette, dynamic asymmetric framing,
+      magazine-cover energy
+    suitable_for: [marketingPoster, socialAd, oohBillboard, packaging]
+    ds_link: bold-editorial.md
+
+  - id: soft_warm_lifestyle
+    label_key: form.directions.soft_warm_lifestyle.label
+    description_key: form.directions.soft_warm_lifestyle.desc
+    palette:
+      bg:     { oklch: "oklch(96% 0.03 60)",   hex: "#f5e8d8" }   # peachy cream
+      fg:     { oklch: "oklch(30% 0.03 30)",   hex: "#473a31" }
+      accent: { oklch: "oklch(75% 0.10 40)",   hex: "#daa687" }   # warm peach
+      muted:  { oklch: "oklch(80% 0.02 60)",   hex: "#cfc4b3" }
+    font_stack:
+      display: "Migra, Cormorant Garamond, serif"
+      body:    "Inter Tight, system-ui, sans-serif"
+      mono:    "JetBrains Mono, monospace"
+    layout_posture: "soft warm pastel · low contrast · golden hour light · intimate framing"
+    audio_style: "warm_acoustic"
+    transition: "soft_fade"
+    prompt_fragment: |
+      soft warm pastel palette, low contrast, golden hour lighting,
+      hazy bokeh, intimate framing, lifestyle photography aesthetic
+    suitable_for: [lifestyle, productShot, modelTryOn, flashCard]
+    ds_link: soft-warm-lifestyle.md

@@ -1,0 +1,254 @@
+# WorkMax Go Server release configuration template.
+#
+# This file is documentation, not a deployable secret. Render a separate
+# mode-0600 YAML file from the deployment Secret Manager and set BODO_CONFIG to
+# that path. A release must reject every CHANGE_ME value before deployment.
+
+system:
+  addr: ":8888"
+  env: production
+  router-prefix: ""
+  # Legacy key retained while auth/email callers migrate. Desktop-only
+  # deployments keep it on the Go Server origin.
+  frontend_url: "https://api.example.invalid"
+  backend_url: "https://api.example.invalid"
+  admin_email: "ops@example.invalid"
+  server_run_path: "/var/lib/workmax"
+  cron:
+    enable: true
+    email_task: true
+    blog_auto_generation: false
+    tag_stats: true
+    generation_object_cleanup: true
+    credit_reservation_sweeper: true
+    # Enable only after migration 20260811 and the Stripe inbox rollout gate.
+    commerce_event_reconciler: false
+  smtp:
+    host: "smtp.example.invalid"
+    port: 465
+    username: "CHANGE_ME_SMTP_USERNAME"
+    password: "CHANGE_ME_SMTP_PASSWORD"
+    from: "noreply@example.invalid"
+    ssl: true
+
+mysql_system:
+  path: "mysql.internal"
+  port: "3306"
+  config: "charset=utf8mb4&parseTime=True&loc=UTC"
+  db-name: "workmax"
+  username: "workmax"
+  password: "CHANGE_ME_DATABASE_PASSWORD"
+  prefix: ""
+  singular: true
+  engine: "InnoDB"
+  max-idle-conns: 20
+  max-open-conns: 100
+  log-mode: "warn"
+  log-zap: true
+
+redis:
+  host: "redis.internal"
+  port: "6379"
+  password: "CHANGE_ME_REDIS_PASSWORD"
+  db: 0
+
+zap:
+  level: "info"
+  prefix: "[workmax]"
+  format: "json"
+  director: "/var/log/workmax"
+  encode-level: "LowercaseLevelEncoder"
+  stacktrace-key: "stacktrace"
+  max-age: 30
+  show-line: true
+  log-in-console: true
+
+jwt:
+  signing-key: "CHANGE_ME_64_BYTE_RANDOM_JWT_SIGNING_KEY"
+  expires-time: "24h"
+  buffer-time: "1h"
+  issuer: "workmax"
+
+credits:
+  signup_bonus: 0
+  invite: 0
+  reward_expire_days: 30
+  checkin:
+    min_per_day: 0
+    max_per_day: 0
+    streak_days: 7
+    streak_bonus: 0
+
+google:
+  client_id: "CHANGE_ME_GOOGLE_CLIENT_ID"
+  client_secret: "CHANGE_ME_GOOGLE_CLIENT_SECRET"
+  redirect_url: "https://api.example.invalid/api/auth/google/callback"
+
+stripe:
+  mode: "live"
+  # Do not enable Stripe until the Server-owned Desktop billing return route
+  # and Desktop resume/entitlement-refresh flow are deployed.
+  domain: "https://api.example.invalid"
+  test_domain: "https://staging-api.example.invalid"
+  callback_path: "/api/stripe/callback"
+  return_path: "/api/desktop/billing/return"
+  public_key: "CHANGE_ME_STRIPE_PUBLIC_KEY"
+  private_key: "CHANGE_ME_STRIPE_PRIVATE_KEY"
+  endpoint_secret: "CHANGE_ME_STRIPE_WEBHOOK_SECRET"
+  plans: {}
+  credit_packs: {}
+
+aihub:
+  text:
+    enabled: false
+    endpoint: "https://llm.example.invalid/v1"
+    api_key: "CHANGE_ME_TEXT_LLM_API_KEY"
+    model: "CHANGE_ME_TEXT_MODEL"
+  image_analysis:
+    enabled: false
+    endpoint: "https://llm.example.invalid/v1"
+    api_key: "CHANGE_ME_IMAGE_LLM_API_KEY"
+    model: "CHANGE_ME_IMAGE_MODEL"
+  tts:
+    enabled: false
+    endpoint: "https://tts.example.invalid/v1"
+    api_key: "CHANGE_ME_TTS_API_KEY"
+    model: "CHANGE_ME_TTS_MODEL"
+  bgm:
+    enabled: false
+    default_path: ""
+    default_gain: 0.15
+  export_color:
+    default_preset: ""
+  local_vector:
+    dimension: 1536
+    memory_limit_mb: 1024
+    cache_enabled: true
+    persistence_path: "/var/lib/workmax/vector"
+  rag:
+    enabled: false
+    batch_size: 32
+    similarity_threshold: 0.75
+    max_results: 8
+    cache_ttl: 24
+
+claude_agent:
+  enabled: false
+  timeout: 1800
+  max_turns: 20
+  max_output_tokens: 64000
+  max_thinking_tokens: 31999
+  max_budget_usd: 25
+  workspace_root: "/var/lib/workmax/workspaces"
+  anthropic_log: "warn"
+  setting_sources:
+    - "user"
+  sandbox:
+    enabled: true
+    auto_allow_bash: false
+    excluded_commands: []
+    allow_unsandboxed: false
+    allow_local_binding: false
+    allow_all_unix_sockets: false
+    allow_unix_sockets: []
+    enable_weaker_nested_sandbox: false
+
+# Keep target Agent platform surfaces closed until production composition
+# derives every readiness signal from installed dependencies.
+agent_platform_rollout:
+  credential:
+    desktop_resource: "off"
+    agent_resource: "off"
+  durable_turn:
+    legacy_shadow: "off"
+    public_api: "off"
+    canary_percent: 0
+    worker: "off"
+    allow_new_starts: false
+  desktop:
+    agent_transport: "legacy"
+  readiness:
+    token_rollover_complete: false
+    active_device_sessions: false
+    sql_store: false
+    atomic_live_event_stream: false
+    worker_lease_fencing: false
+    transactional_outbox: false
+    exactly_once_settlement: false
+
+generator:
+  rate_limit:
+    per_minute: 60
+    per_user_concurrent: 3
+    global_concurrent: 100
+    active_task_limit: 1000
+  task_queue:
+    workers: 8
+    max_queue_size: 1000
+    task_timeout: 900
+    max_retries: 2
+    recover_threshold: 30
+    recover_limit: 500
+    expire_hours: 24
+  file_upload:
+    max_reference_image_size: 10485760
+    max_remote_asset_size: 20971520
+    remote_asset_timeout_seconds: 15
+    allowed_remote_asset_hosts:
+      - "assets.example.invalid"
+  models:
+    production-example:
+      credit_cost: 1
+  storage:
+    type: "r2"
+    local:
+      path: "/var/lib/workmax/uploads"
+      url_prefix: "/uploads"
+    r2:
+      endpoint: "https://CHANGE_ME_ACCOUNT_ID.r2.cloudflarestorage.com"
+      region: "auto"
+      bucket: "CHANGE_ME_GENERATED_ASSET_BUCKET"
+      access_key_id: "CHANGE_ME_R2_ACCESS_KEY_ID"
+      secret_access_key: "CHANGE_ME_R2_SECRET_ACCESS_KEY"
+      cdn_url: "https://generated.example.invalid"
+      public_url: "https://generated.example.invalid"
+      path_prefix: "generated"
+      force_path_style: false
+      use_presigned_url: true
+      presign_ttl_seconds: 900
+      multipart_threshold_mb: 16
+      multipart_part_size_mb: 8
+
+statics:
+  cdn_base_url: "https://static.example.invalid"
+  r2:
+    endpoint: "https://CHANGE_ME_ACCOUNT_ID.r2.cloudflarestorage.com"
+    region: "auto"
+    bucket: "CHANGE_ME_STATIC_ASSET_BUCKET"
+    access_key_id: "CHANGE_ME_R2_ACCESS_KEY_ID"
+    secret_access_key: "CHANGE_ME_R2_SECRET_ACCESS_KEY"
+    public_url: "https://static.example.invalid"
+    force_path_style: false
+    multipart_threshold_mb: 16
+    multipart_part_size_mb: 8
+
+canvas:
+  prompt_guard:
+    max_prompt_len: 0
+    max_negative_prompt_len: 0
+    sensitive_words: []
+    blocked_patterns: []
+  rate_limit:
+    chat:
+      per_minute: 30
+      per_user_concurrent: 3
+    agent:
+      per_minute: 20
+      per_user_concurrent: 2
+    quote:
+      per_minute: 120
+      per_user_concurrent: 6
+    generation:
+      per_minute: 60
+      per_user_concurrent: 5
+    global_concurrent: 200

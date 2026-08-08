@@ -1,0 +1,96 @@
+# PPT skill — fully-native (no legacy: block). Body lives in
+# skills/ppt/SKILL.md, hand-rewritten from the legacy
+# identity_ppt.md + output_format_ppt.md with three additions:
+#   - Chinese-first scenario taxonomy (商务汇报 / 教育培训 / 路演)
+#   - Explicit 4-pass workflow (outline → assets → pptx → verify)
+#   - Anti-AI-slop specific to PPT context (emoji-decorated headings,
+#     edited copy clichés, 6-card metric layout default)
+# Output format folded into SKILL.md "输出规范" section so there's
+# one source of truth for ppt behaviour.
+name: ppt
+version: 2.0.0
+description: 中文商务 / 教育 / 路演 PPT 设计师。叠加事实验证、资产协议、反 AI slop、Junior Designer 工作流四份横向规则。
+
+artifacts:
+  primary_type: deck
+  output_types: [pptx, pdf, html, markdown]
+  preview_types: [deck, pdf, html, markdown]
+  export_targets: [pptx, pdf, html, zip]
+  critique_anchors: [functionality, hierarchy, craft]
+
+triggers:
+  agent_mode: ppt
+
+required_inputs:
+  # Mirrors derivePPTMissingFields' contract — the Go-side post-mortem
+  # at agent_api.go fires if generation completes without a .pptx,
+  # citing the same fields. Listing them here surfaces the same
+  # checklist to the model BEFORE generation so it asks rather than
+  # generates blind.
+  - kind: topic
+  - kind: audience
+  - kind: slide_count
+  - kind: style
+  - kind: supporting_materials
+    when: short_user_message_no_files
+  - kind: brand_assets
+    when: brand_specified
+
+references:
+  shared:
+    - fact-verification
+    - asset-protocol
+    - anti-ai-slop
+    - junior-designer-workflow
+
+scripts:
+  - name: validate-pptx
+    path: scripts/validate-pptx.py
+    when: post_generation
+
+# M1 turn-1 discovery form. Label keys resolve against
+# server/service/tools/workagent/i18n/workagent_form/<lang>.json at
+# emit time.
+question_form:
+  enabled: true
+  trigger: first_turn_no_form_answered
+  skip_label_key: form.skip
+  questions:
+    - id: audience
+      label_key: form.ppt.audience.label
+      type: single_select
+      required: true
+      default: exec
+      options:
+        - { value: exec,     label_key: form.ppt.audience.exec }
+        - { value: investor, label_key: form.ppt.audience.investor }
+        - { value: internal, label_key: form.ppt.audience.internal }
+        - { value: public,   label_key: form.ppt.audience.public }
+    - id: tone
+      label_key: form.ppt.tone.label
+      type: single_select
+      required: true
+      default: modern_minimal
+      options:
+        - { value: editorial_magazine, label_key: form.ppt.tone.editorial_magazine }
+        - { value: modern_minimal,     label_key: form.ppt.tone.modern_minimal }
+        - { value: bold_editorial,     label_key: form.ppt.tone.bold_editorial }
+        - { value: tech_utility,       label_key: form.ppt.tone.tech_utility }
+    - id: scale
+      label_key: form.ppt.scale.label
+      type: single_select
+      required: true
+      default: medium
+      options:
+        - { value: short,  label_key: form.ppt.scale.short }
+        - { value: medium, label_key: form.ppt.scale.medium }
+        - { value: long,   label_key: form.ppt.scale.long }
+
+# M2 visual directions fallback. Fires AFTER question_form completes
+# and only when no brand context is active. See
+# directions_picker_dispatcher.go.
+directions_fallback:
+  enabled: true
+  trigger: no_brand_no_direction_selected
+  picker_source: fallback_5
+  skip_label_key: form.skip

@@ -1,0 +1,12 @@
+# Electron build artifacts and dependencies
+electron/node_modules/
+electron/dist/
+electron/bin/
+
+# Future: electron-builder output (P3)
+electron/release/
+electron/out/
+
+# Editor / OS junk
+.DS_Store
+*.log

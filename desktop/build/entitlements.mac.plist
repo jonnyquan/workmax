@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Minimal hardenedRuntime entitlements for WorkMax Desktop.
+
+  Each entitlement is here for a specific reason — don't add things
+  speculatively. The macOS notarization process inspects this plist
+  and rejects the app if entitlements aren't justified by the binary
+  behavior.
+
+  - com.apple.security.cs.allow-jit:
+      Electron's V8 emits JIT code. Without this entitlement,
+      hardenedRuntime blocks JIT and Electron crashes on launch.
+
+  - com.apple.security.cs.allow-unsigned-executable-memory:
+      Electron's V8 also writes executable memory pages it later
+      JITs into. Without this, hardenedRuntime SIGKILLs on first
+      JS execution.
+
+  - com.apple.security.cs.allow-dyld-environment-variables:
+      Electron Forge / build-from-source workflows occasionally
+      need DYLD_LIBRARY_PATH-style overrides. Without this they
+      get silently scrubbed under hardenedRuntime.
+
+  - com.apple.security.network.client:
+      The sidecar binary makes outbound HTTPS calls to workmax.app
+      (OAuth + Cloud Proxy). Electron's main process makes the
+      authenticated loopback request that starts the system-browser
+      login transaction. Without this entitlement macOS sandbox
+      blocks client TCP.
+
+  NOT included on purpose:
+    - com.apple.security.network.server: we don't accept incoming
+      connections from outside the loopback interface. The sidecar
+      binds 127.0.0.1:0; macOS treats loopback differently.
+    - com.apple.security.files.user-selected.read-write: we don't
+      handle user-picked files in P0 (chat composer attachments
+      are a later milestone).
+    - com.apple.security.device.camera / microphone: no media
+      capture in WorkMax Desktop.
+
+  Public distribution: paired with the codesign runtime option and an
+  Apple Developer ID Application certificate, this plist satisfies
+  notarytool. desktop/scripts/notarize-mac.sh runs the actual upload.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>

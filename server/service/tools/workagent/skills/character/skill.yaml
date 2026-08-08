@@ -1,0 +1,115 @@
+# character skill — fully-native (no legacy: block). Body lives in
+# skills/character/SKILL.md, hand-rewritten from the legacy
+# identity_character.md with five additions:
+#   - 5 use-case taxonomy (avatar / profile turnaround /
+#     expression sheet / outfit / brand mascot) with per-use
+#     output spec
+#   - 3 style families (anime/manga / western cartoon /
+#     realistic/semi-realistic) — explicit no-mixing rule
+#   - 3 hard constraints: spec verbatim copy (AI has no
+#     character memory, every prompt must re-quote full spec),
+#     no style mixing (anime + Pixar = chaos), AI characters
+#     are NOT copyright-safe (USPTO 2023 stance, mandatory
+#     caveat for commercial IP use)
+#   - 5-minute extended Pass 1 with structured spec sheet
+#     (longer than other skills because spec anchors all
+#     downstream assets) + hero-first / turnaround-after
+#     workflow
+#   - Anti-AI-slop character-specifics (no cross-style mixing,
+#     no generic anime face, no over-decoration breaking
+#     silhouette, no IP-similarity)
+#   - 下游 skill 接口: spec sheet 作为 pictureBook / 视频叙事
+#     / 营销动画的 anchor asset
+#
+# Distinction from sibling skills:
+#   - pictureBook: storybook SCENES consuming characters,
+#     narrative-driven, character is one element of a scene
+#   - lifestyle: real-people photography, no design asset
+#     creation, AI tries to look real
+#   - character: ASSET-CREATION skill, output is reusable spec
+#     + hero + turnaround/expression/outfit variations
+#   Distinct because output is a system of assets (not a
+#   single image), spec verbatim-copy discipline is unique.
+#
+# Stage D migration:
+#   - Pre-graduation (v1.0.0): skill.yaml carried a `legacy:` block
+#     that pulled identity from prompts/templates/identity_character.md
+#     (28 lines, English bullet list).
+#   - Post-graduation (v2.0.0, this commit): SKILL.md owns the body;
+#     legacy template deleted in the same commit.
+#   - question_form + directions_fallback preserved verbatim
+#     (already in v1.0.0).
+name: character
+version: 2.0.0
+description: 角色设计师 — 5 类用途 (avatar / turnaround / expression / outfit / mascot) × 3 种风格 (anime / western cartoon / semi-realistic),含 spec verbatim 复用 + 无跨风格混合 + AI 角色版权风险三大硬约束。叠加事实验证、资产协议、反 AI slop、Junior Designer 工作流四份横向规则。
+
+artifacts:
+  primary_type: character_asset
+  output_types: [png, jpg, markdown]
+  preview_types: [image, markdown]
+  export_targets: [png, zip, markdown]
+  critique_anchors: [craft, originality, consistency]
+
+triggers:
+  agent_mode: character
+
+required_inputs:
+  - kind: character_name
+  - kind: character_role
+  - kind: outfit_anchor
+  - kind: style_family
+  - kind: appearance_anchors
+  - kind: use_case
+  - kind: brand_assets
+    when: brand_specified
+
+references:
+  shared:
+    - fact-verification
+    - asset-protocol
+    - anti-ai-slop
+    - junior-designer-workflow
+
+# M1 turn-1 discovery form. See work-agent-open-design-integration-2026-05.md v2.4 §0.5.
+question_form:
+  enabled: true
+  trigger: first_turn_no_form_answered
+  skip_label_key: form.skip
+  questions:
+    - id: role
+      label_key: form.character.role.label
+      type: single_select
+      required: true
+      default: protagonist
+      options:
+        - { value: protagonist,   label_key: form.character.role.protagonist }
+        - { value: supporting,    label_key: form.character.role.supporting }
+        - { value: brand_mascot,  label_key: form.character.role.brand_mascot }
+    - id: outfit
+      label_key: form.character.outfit.label
+      type: single_select
+      required: true
+      default: casual
+      options:
+        - { value: casual,   label_key: form.character.outfit.casual }
+        - { value: business, label_key: form.character.outfit.business }
+        - { value: formal,   label_key: form.character.outfit.formal }
+        - { value: uniform,  label_key: form.character.outfit.uniform }
+    - id: camera_angle
+      label_key: form.character.camera_angle.label
+      type: single_select
+      required: true
+      default: three_quarter
+      options:
+        - { value: front,         label_key: form.character.camera_angle.front }
+        - { value: three_quarter, label_key: form.character.camera_angle.three_quarter }
+        - { value: profile,       label_key: form.character.camera_angle.profile }
+        - { value: full_body,     label_key: form.character.camera_angle.full_body }
+
+# M2 visual directions fallback. Fires AFTER question_form completes
+# and only when no brand context is active.
+directions_fallback:
+  enabled: true
+  trigger: no_brand_no_direction_selected
+  picker_source: fallback_5
+  skip_label_key: form.skip

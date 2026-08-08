@@ -1,0 +1,46 @@
+# Critique skill — first fully-native skill in the work-agent module.
+#
+# Unlike every other skill so far, critique has no `legacy:` block:
+# its body is hand-authored SKILL.md, not synthesized from
+# templates/identity_critique.md. It exists to prove the
+# manifest-driven path works end-to-end without any legacy
+# template_loader fallback.
+#
+# Critique is a horizontal skill: it reviews the OUTPUT of other
+# skills. The user invokes it after a generation turn (UI: "评审上
+# 一轮" button → re-fire with metadata.agentMode = critique). The
+# skill reads the latest assistant message + any attached artifacts
+# and produces a structured 5-dimensional review.
+name: critique
+version: 1.0.0
+description: 横向评审 skill。对上一轮产出做 5 维度结构化评审(目标契合 / 层级 / 细节 / 功能 / 创新),输出评分 + 修复清单。
+
+artifacts:
+  primary_type: critique_report
+  output_types: [json, markdown]
+  preview_types: [json, markdown]
+  export_targets: [json, markdown]
+  critique_anchors: [goal_fit, hierarchy, craft, functionality, originality]
+
+triggers:
+  agent_mode: critique
+
+# Critique is a reflection skill — it operates on prior output, not
+# fresh user input. The required-input here is the artifact to
+# review, which the model checks the conversation history + uploaded
+# files for.
+required_inputs:
+  - kind: artifact_to_review
+
+references:
+  shared:
+    # Critique cares about facts (scores must be defensible, not
+    # hallucinated) and about junior-designer-workflow's
+    # "show your reasoning" posture. Skip asset-protocol /
+    # anti-ai-slop because critique reviews OTHER skills' output
+    # against those rules — quoting them inside the system prompt
+    # would create a self-referential loop.
+    - fact-verification
+    - junior-designer-workflow
+  local:
+    - rubric-detail

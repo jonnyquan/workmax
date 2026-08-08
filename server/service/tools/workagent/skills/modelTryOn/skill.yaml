@@ -1,0 +1,116 @@
+# modelTryOn skill — fully-native (no legacy: block). Body lives in
+# skills/modelTryOn/SKILL.md, hand-rewritten from the legacy
+# identity_modelTryOn.md with five additions:
+#   - 5 use-case taxonomy (e-commerce product listing / lookbook
+#     editorial / streetwear hybrid / luxury editorial / virtual
+#     try-on flat) with per-use pose + background
+#   - 3 try-on styles (commercial clean / editorial moody /
+#     lifestyle authentic) with brand-fit mapping
+#   - 3 hard constraints: AI cannot generate clothing from
+#     concept (reference required), AI-model risks doubled
+#     (uncanny valley / diversity bias / celebrity look-alike,
+#     plus garment-conversion impact), fit + fabric realism
+#     (no perfect skin-tight prints)
+#   - Explicit 3-pass workflow with reference-required gate
+#     in Pass 1 + garment fidelity check on delivery
+#   - Anti-AI-slop tryOn-specifics (no perfect-fit prints, no
+#     AI text on garment, no multi-finger deformities, no
+#     reference color/pattern drift)
+#
+# Distinction from sibling skills:
+#   - productShot: clean product photography, NO model,
+#     garment as packshot
+#   - lifestyle: scene-driven photography, garment is mood
+#     element NOT the SKU subject
+#   - modelTryOn: garment-as-subject photography, model is
+#     mannequin-with-realism, fabric/fit/drape primary signal
+#   Distinct because subject hierarchy (product / mood /
+#   garment) and reference requirement (none / optional /
+#   required) differ.
+#
+# Stage D migration:
+#   - Pre-graduation (v1.0.0): skill.yaml carried a `legacy:` block
+#     that pulled identity from prompts/templates/identity_modelTryOn.md
+#     (28 lines, English bullet list).
+#   - Post-graduation (v2.0.0, this commit): SKILL.md owns the body;
+#     legacy template deleted in the same commit.
+name: modelTryOn
+version: 2.0.0
+description: 模特试穿设计师 — 5 类用途 × 3 种风格,reference 服装图 required,含 AI 模特三大风险 (uncanny / diversity / celebrity 嫌疑) + garment fidelity + fit/fabric 真实性硬约束。叠加事实验证、资产协议、反 AI slop、Junior Designer 工作流四份横向规则。
+
+artifacts:
+  primary_type: tryon_image
+  output_types: [png, jpg, markdown]
+  preview_types: [image, markdown]
+  export_targets: [png, jpg, zip]
+  critique_anchors: [craft, fidelity, functionality]
+
+triggers:
+  agent_mode: modelTryOn
+
+required_inputs:
+  - kind: garment_reference_image
+  - kind: tryon_use_case
+  - kind: tryon_style
+  - kind: model_specification
+  - kind: pose
+  - kind: brand_assets
+    when: brand_specified
+
+references:
+  shared:
+    - fact-verification
+    - asset-protocol
+    - anti-ai-slop
+    - junior-designer-workflow
+  local:
+    - checklist
+
+# M1 turn-1 discovery form. Three axes from SKILL.md taxonomy:
+# tryon_use_case (5 use cases), tryon_style (3 styles), and pose
+# (drives the first generated frame). garment_reference_image and
+# model_specification (diversity matrix) stay free-form — file
+# upload + multi-faceted spec don't fit single_select.
+#
+# directions_fallback is intentionally NOT enabled — design doc §0.5
+# says modelTryOn "不弹" because pose / lighting / model identity
+# are bigger drivers than brand-style direction. The fallback
+# directions are about palette + typography + posture which mostly
+# don't apply to model-on-garment photography.
+question_form:
+  enabled: true
+  trigger: first_turn_no_form_answered
+  skip_label_key: form.skip
+  questions:
+    - id: tryon_use_case
+      label_key: form.modelTryOn.tryon_use_case.label
+      type: single_select
+      required: true
+      default: ecommerce_listing
+      options:
+        - { value: ecommerce_listing,  label_key: form.modelTryOn.tryon_use_case.ecommerce_listing }
+        - { value: lookbook_editorial, label_key: form.modelTryOn.tryon_use_case.lookbook_editorial }
+        - { value: streetwear_hybrid,  label_key: form.modelTryOn.tryon_use_case.streetwear_hybrid }
+        - { value: luxury_editorial,   label_key: form.modelTryOn.tryon_use_case.luxury_editorial }
+        - { value: virtual_try_on,     label_key: form.modelTryOn.tryon_use_case.virtual_try_on }
+    - id: tryon_style
+      label_key: form.modelTryOn.tryon_style.label
+      type: single_select
+      required: true
+      default: commercial_clean
+      options:
+        - { value: commercial_clean,   label_key: form.modelTryOn.tryon_style.commercial_clean }
+        - { value: editorial_moody,    label_key: form.modelTryOn.tryon_style.editorial_moody }
+        - { value: lifestyle_authentic, label_key: form.modelTryOn.tryon_style.lifestyle_authentic }
+    - id: pose
+      label_key: form.modelTryOn.pose.label
+      type: single_select
+      required: true
+      default: front
+      options:
+        - { value: front,         label_key: form.modelTryOn.pose.front }
+        - { value: three_quarter, label_key: form.modelTryOn.pose.three_quarter }
+        - { value: side,          label_key: form.modelTryOn.pose.side }
+        - { value: back,          label_key: form.modelTryOn.pose.back }
+        - { value: walking,       label_key: form.modelTryOn.pose.walking }
+        - { value: no_face,       label_key: form.modelTryOn.pose.no_face }

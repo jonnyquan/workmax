@@ -1,0 +1,113 @@
+# webBanner skill — fully-native (no legacy: block). Body lives in
+# skills/webBanner/SKILL.md, hand-rewritten from the legacy
+# identity_webBanner.md with five additions:
+#   - 5 IAB standard size taxonomy (728×90 Leaderboard / 300×250
+#     MREC / 160×600 Skyscraper / 336×280 Large Rectangle /
+#     300×600 Half Page) with per-size layout pattern
+#   - 3 banner style taxonomy (product-led / benefit-led /
+#     brand-led) with CTR-expectation tier
+#   - 3 hard constraints: file-size limits (Google ≤150KB, Meta
+#     ≤2MB), 0.4s CTR-optimized visual hierarchy, landing-page
+#     consistency (destination mismatch = campaign suspension)
+#   - Platform compliance section (Google Display / Meta Audience
+#     Network / DV360 / programmatic) with format + policy notes
+#   - Explicit 3-pass workflow + "no AI-rendered text" rule
+#     (banner platforms reject ads with text-spelling errors;
+#     text must be added post-gen by user)
+#
+# Distinction from sibling skills:
+#   - socialAd: feed-format, first-frame hook, scroll-stopping
+#     (Instagram / TikTok / Pinterest)
+#   - marketingPoster: print / event signage / web banner with
+#     HEAVY text overlay, 5-second-glance reader
+#   - webBanner: strict-IAB-dimension display creative, CTR-driven,
+#     0.4s read time, anti-deceptive-ad policies
+#   Distinct because the constraints don't overlap — fewer
+#   product engineers know IAB sizes and Google Ads policy than
+#   know Instagram aspect ratios.
+#
+# Stage D migration:
+#   - Pre-graduation (v1.0.0): skill.yaml carried a `legacy:` block
+#     that pulled identity from prompts/templates/identity_webBanner.md
+#     (28 lines, English bullet list).
+#   - Post-graduation (v2.0.0, this commit): SKILL.md owns the body;
+#     legacy template deleted in the same commit.
+name: webBanner
+version: 2.0.0
+description: IAB 标准网页 banner 设计师 — 5 个标准尺寸 (728×90 / 300×250 / 160×600 / 336×280 / 300×600) × 3 种风格 (product-led / benefit-led / brand-led)。叠加事实验证、资产协议、反 AI slop、Junior Designer 工作流四份横向规则。
+
+artifacts:
+  primary_type: web_banner
+  output_types: [png, jpg, html, gif, markdown]
+  preview_types: [image, html, markdown]
+  export_targets: [png, jpg, html, gif, zip]
+  critique_anchors: [hierarchy, functionality, compliance]
+
+triggers:
+  agent_mode: webBanner
+
+required_inputs:
+  - kind: banner_size
+  - kind: style_direction
+  - kind: brand_assets
+    when: brand_specified
+  - kind: landing_page_reference
+    when: campaign_drives_to_known_page
+  - kind: cta_text
+  - kind: headline_text
+
+references:
+  shared:
+    - fact-verification
+    - asset-protocol
+    - anti-ai-slop
+    - junior-designer-workflow
+  local:
+    - checklist
+
+# M1 turn-1 discovery form. Three axes from SKILL.md: banner_size
+# (5 IAB sizes — biggest determinant of layout density),
+# banner_style (3 styles — product-led / benefit-led / brand-led),
+# ad_network (Google / Meta / DV360 — drives file-size + policy
+# compliance). cta_text + headline_text + landing_page_reference
+# stay free-form.
+question_form:
+  enabled: true
+  trigger: first_turn_no_form_answered
+  skip_label_key: form.skip
+  questions:
+    - id: banner_size
+      label_key: form.webBanner.banner_size.label
+      type: single_select
+      required: true
+      default: mrec_300x250
+      options:
+        - { value: leaderboard_728x90,  label_key: form.webBanner.banner_size.leaderboard_728x90 }
+        - { value: mrec_300x250,        label_key: form.webBanner.banner_size.mrec_300x250 }
+        - { value: skyscraper_160x600, label_key: form.webBanner.banner_size.skyscraper_160x600 }
+        - { value: large_rect_336x280, label_key: form.webBanner.banner_size.large_rect_336x280 }
+        - { value: half_page_300x600,  label_key: form.webBanner.banner_size.half_page_300x600 }
+    - id: banner_style
+      label_key: form.webBanner.banner_style.label
+      type: single_select
+      required: true
+      default: product_led
+      options:
+        - { value: product_led,  label_key: form.webBanner.banner_style.product_led }
+        - { value: benefit_led,  label_key: form.webBanner.banner_style.benefit_led }
+        - { value: brand_led,    label_key: form.webBanner.banner_style.brand_led }
+    - id: ad_network
+      label_key: form.webBanner.ad_network.label
+      type: single_select
+      required: true
+      default: google_display
+      options:
+        - { value: google_display,    label_key: form.webBanner.ad_network.google_display }
+        - { value: meta_audience,     label_key: form.webBanner.ad_network.meta_audience }
+        - { value: programmatic_dv360, label_key: form.webBanner.ad_network.programmatic_dv360 }
+
+directions_fallback:
+  enabled: true
+  trigger: no_brand_no_direction_selected
+  picker_source: fallback_5
+  skip_label_key: form.skip

@@ -1,0 +1,43 @@
+CREATE TABLE IF NOT EXISTS `w_workagent_knowledge_document` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `title` varchar(255) NOT NULL COMMENT 'document title',
+  `source_type` varchar(32) NOT NULL DEFAULT 'manual' COMMENT 'manual/upload/url',
+  `source_uri` varchar(1024) NOT NULL DEFAULT '' COMMENT 'source object key or URL',
+  `mime_type` varchar(120) NOT NULL DEFAULT 'text/plain' COMMENT 'source mime type',
+  `content_hash` varchar(64) NOT NULL DEFAULT '' COMMENT 'sha256 of normalized text',
+  `content_text` longtext COMMENT 'normalized plain text for indexing',
+  `metadata_json` text COMMENT 'JSON metadata for filters/citations',
+  `status` varchar(32) NOT NULL DEFAULT 'active' COMMENT 'active/archived',
+  `index_status` varchar(32) NOT NULL DEFAULT 'pending' COMMENT 'pending/indexed/failed',
+  `chunk_count` int NOT NULL DEFAULT 0 COMMENT 'last indexed chunk count',
+  `token_count` int NOT NULL DEFAULT 0 COMMENT 'estimated source token count',
+  `indexed_at` datetime DEFAULT NULL COMMENT 'last successful index time',
+  `updated_by` bigint NOT NULL DEFAULT 0 COMMENT 'admin uid',
+  PRIMARY KEY (`id`),
+  KEY `idx_workagent_knowledge_document_source_type` (`source_type`),
+  KEY `idx_workagent_knowledge_document_content_hash` (`content_hash`),
+  KEY `idx_workagent_knowledge_document_status` (`status`),
+  KEY `idx_workagent_knowledge_document_index_status` (`index_status`),
+  KEY `idx_workagent_knowledge_document_updated_by` (`updated_by`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Work Agent reusable knowledge-base sources';
+
+CREATE TABLE IF NOT EXISTS `w_workagent_knowledge_index_job` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `document_id` bigint unsigned NOT NULL COMMENT 'w_workagent_knowledge_document.id',
+  `status` varchar(32) NOT NULL DEFAULT 'queued' COMMENT 'queued/succeeded/failed',
+  `vector_backend` varchar(64) NOT NULL DEFAULT '' COMMENT 'pgvector/qdrant/pinecone/etc',
+  `requested_by` bigint NOT NULL DEFAULT 0 COMMENT 'admin uid',
+  `started_at` datetime DEFAULT NULL COMMENT 'index start time',
+  `finished_at` datetime DEFAULT NULL COMMENT 'index finish time',
+  `chunk_count` int NOT NULL DEFAULT 0 COMMENT 'indexed chunk count',
+  `error_message` text COMMENT 'index error',
+  `metadata_json` text COMMENT 'worker metadata JSON',
+  PRIMARY KEY (`id`),
+  KEY `idx_workagent_knowledge_index_job_document_id` (`document_id`),
+  KEY `idx_workagent_knowledge_index_job_status` (`status`),
+  KEY `idx_workagent_knowledge_index_job_requested_by` (`requested_by`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Work Agent knowledge-base index jobs';

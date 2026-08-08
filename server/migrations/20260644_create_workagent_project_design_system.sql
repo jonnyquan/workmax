@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS `w_workagent_project_design_system` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `created_at` datetime(3) DEFAULT NULL,
+  `updated_at` datetime(3) DEFAULT NULL,
+  `uid` bigint NOT NULL DEFAULT 0,
+  `project_id` bigint unsigned NOT NULL DEFAULT 0,
+  `thread_id` bigint unsigned NOT NULL DEFAULT 0,
+  `artifact_id` bigint unsigned NOT NULL DEFAULT 0,
+  `candidate_id` bigint unsigned NOT NULL DEFAULT 0,
+  `name` varchar(255) NOT NULL DEFAULT '',
+  `slug` varchar(255) NOT NULL DEFAULT '',
+  `basename` varchar(320) NOT NULL DEFAULT '',
+  `title` varchar(255) NOT NULL DEFAULT '',
+  `derived_from` varchar(255) NOT NULL DEFAULT '',
+  `version` int NOT NULL DEFAULT 1,
+  `body` mediumtext,
+  `status` varchar(32) NOT NULL DEFAULT 'confirmed',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_project_design_system_candidate` (`candidate_id`),
+  KEY `idx_project_design_system_uid_project` (`uid`, `project_id`, `status`),
+  KEY `idx_project_design_system_basename` (`basename`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

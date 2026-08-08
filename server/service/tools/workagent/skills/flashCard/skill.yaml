@@ -1,0 +1,106 @@
+# flashCard skill — fully-native (no legacy: block). Body lives in
+# skills/flashCard/SKILL.md, hand-rewritten from the legacy
+# identity_flashCard.md with four additions:
+#   - 5-subject taxonomy (language / science / math / history /
+#     general) with explicit visual treatment + text-density rules
+#   - 4-age-group rules (preschool / elementary / middle / adult)
+#     affecting tone + vocabulary + visual detail caps; explicit
+#     "no kawaii for adult learning" hard ban
+#   - Explicit 3-pass workflow (outline → batch generate → deliver)
+#     with Pass-1 ack gate + per-card style-consistency self-check
+#   - VISUAL CONSISTENCY discipline — the core problem flashcard
+#     sets have ("8 random images is not a flashcard set, it's 8
+#     random images"). Locked in Pass 1: illustration style,
+#     palette (≤3 colors + 1 accent), framing, label position.
+#     Pass 2 detects drift and re-generates the drifting card
+#     individually (not "majority wins").
+#
+# Stage D migration:
+#   - Pre-graduation (v1.0.0): skill.yaml carried a `legacy:` block
+#     that pulled identity from prompts/templates/identity_flashCard.md
+#     (28 lines, English bullet list).
+#   - Post-graduation (v2.0.0, this commit): SKILL.md owns the body;
+#     legacy template deleted in the same commit.
+#
+# Why flashCard is a good third graduation (after ppt + socialAd):
+#   - Lowest production risk: same 28-line legacy size as socialAd,
+#     no Go-side post-mortem dependencies (vs ppt's
+#     derivePPTMissingFields), no recipe integration tail (vs
+#     socialAd).
+#   - The "8 cards but only generate 1" failure pattern is a real
+#     production complaint that the Pass-1 ack + batch-generate
+#     discipline directly addresses.
+name: flashCard
+version: 2.0.0
+description: 教育闪卡视觉设计师 — 5 学科 (language / science / math / history / general) × 4 年龄段 (preschool / elementary / middle / adult)。叠加事实验证、资产协议、反 AI slop、Junior Designer 工作流四份横向规则。
+
+artifacts:
+  primary_type: learning_cards
+  output_types: [pdf, png, html]
+  preview_types: [pdf, image, html]
+  export_targets: [pdf, png, zip]
+  critique_anchors: [clarity, density, craft]
+
+triggers:
+  agent_mode: flashCard
+
+required_inputs:
+  # Surfaced to the model BEFORE generation so it asks rather than
+  # generates blind — matches ppt + socialAd's pattern.
+  - kind: subject
+  - kind: age_group
+  - kind: count
+  - kind: vocabulary_or_topics
+    when: user_did_not_supply_list
+
+references:
+  shared:
+    - fact-verification
+    - asset-protocol
+    - anti-ai-slop
+    - junior-designer-workflow
+
+# M1 turn-1 discovery form. See work-agent-open-design-integration-2026-05.md v2.4 §0.5.
+question_form:
+  enabled: true
+  trigger: first_turn_no_form_answered
+  skip_label_key: form.skip
+  questions:
+    - id: subject
+      label_key: form.flashCard.subject.label
+      type: single_select
+      required: true
+      default: language
+      options:
+        - { value: language, label_key: form.flashCard.subject.language }
+        - { value: science,  label_key: form.flashCard.subject.science }
+        - { value: math,     label_key: form.flashCard.subject.math }
+        - { value: history,  label_key: form.flashCard.subject.history }
+        - { value: general,  label_key: form.flashCard.subject.general }
+    - id: age_group
+      label_key: form.flashCard.age_group.label
+      type: single_select
+      required: true
+      default: elementary
+      options:
+        - { value: preschool,  label_key: form.flashCard.age_group.preschool }
+        - { value: elementary, label_key: form.flashCard.age_group.elementary }
+        - { value: middle,     label_key: form.flashCard.age_group.middle }
+        - { value: adult,      label_key: form.flashCard.age_group.adult }
+    - id: count
+      label_key: form.flashCard.count.label
+      type: single_select
+      required: true
+      default: medium
+      options:
+        - { value: small,  label_key: form.flashCard.count.small }
+        - { value: medium, label_key: form.flashCard.count.medium }
+        - { value: large,  label_key: form.flashCard.count.large }
+
+# M2 visual directions fallback. Fires AFTER question_form completes
+# and only when no brand context is active.
+directions_fallback:
+  enabled: true
+  trigger: no_brand_no_direction_selected
+  picker_source: fallback_5
+  skip_label_key: form.skip

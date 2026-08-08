@@ -15,7 +15,6 @@
 
 # production
 /build
-/admin/build
 
 # misc
 .DS_Store
@@ -32,12 +31,33 @@ yarn-error.log*
 .env.development
 .env.production
 
+# Runtime configuration and provider switch helpers may contain real
+# credentials. Keep only sanitized *.example files under version control.
+/server/config.yaml
+/server/config-prod.yaml
+/server/config.release.yaml
+/server/config.local.yaml
+/server/config.*.local.yaml
+/switchglm.sh
+/switchkimi.sh
+/.env*
+!/.env.example
+/server/.env*
+!/server/.env.example
+
 # vercel
 .vercel
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local editor/scratch backups (the source-baseline audit denies them)
+*.bak
+*.backup
+
+# Compiled Go cmd binary (built into server/ root by `go build ./cmd/agent-worker`)
+/server/agent-worker
 
 # IDE
 .vscode/
@@ -116,9 +136,6 @@ jspm_packages/
 tmp/
 temp/
 
-# web
-web/public/uploads/
-
 # Database
 *.db
 *.sqlite
@@ -136,6 +153,25 @@ server/uploads
 server/main
 server/server_test
 server/guard
+
+# Desktop build outputs are reproducible and can exceed multiple GiB.
+/desktop/electron/bin/
+/desktop/electron/dist/
+/desktop/electron/release/
+/desktop/electron/node_modules/
+/desktop/signing/
+/desktop/electron/*.dmg
+/desktop/electron/*.zip
+/desktop/electron/*.blockmap
+*.p12
+*.pfx
+*.p8
+
+# Developer-local Go workspace. The server module must stay independently
+# buildable from its pinned public modules without a local go.work override.
+/go.work
+/go.work.sum
+/server/bin/
 
 # Compiled Go cmd binaries (built into server/ root by `go build ./cmd/...`)
 /server/backfill_image_dims
@@ -159,9 +195,6 @@ server/.gocache/
 # Playwright artifacts
 .playwright-cli
 output/
-web/playwright-report/
-web/test-results/
-web/e2e/.auth/
 
 # Claude Code local config (per-developer, not portable)
 .claude/

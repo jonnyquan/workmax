@@ -1,0 +1,42 @@
+name: Feature request
+description: Propose an improvement to WorkMax
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and design documents for this request.
+          required: true
+        - label: This request fits the Server/Desktop product boundary described in the README.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user or operator problem, not only the desired implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Explain the behavior, affected component, and intended users.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: impact
+    attributes:
+      label: Compatibility, security, and migration impact
+      description: Note API, data, privacy, packaging, or deployment implications.
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context

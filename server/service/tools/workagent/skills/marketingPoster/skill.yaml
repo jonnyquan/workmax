@@ -1,0 +1,107 @@
+# marketingPoster skill — fully-native (no legacy: block). Body lives
+# in skills/marketingPoster/SKILL.md, hand-rewritten from the legacy
+# identity_marketingPoster.md with five additions:
+#   - 4-offer taxonomy (discount / launch / event / brand_awareness)
+#     with per-offer tonality + urgency + color guidance
+#   - 4-audience profile (gen_z / millennial / professional / family)
+#     with explicit "what NOT to do" per audience — addresses the
+#     #1 marketing-poster failure mode: wrong audience styling
+#   - 3-CTA style (urgency / aspirational / informational) with copy-
+#     character budgets per style
+#   - Explicit 3-pass workflow + "5-second readability" hard
+#     constraint (poster's defining property — if user can't grasp
+#     hierarchy in 5s, generation failed)
+#   - **No-AI-text-rendering rule**: AI-generated typography fails
+#     on spelling / kerning / font substitution. SKILL.md forbids
+#     embedding text in image prompts; text is added post-gen by
+#     the user
+#
+# Distinction from socialAd (the closest sibling skill):
+#   - socialAd is feed-optimized scrolling creative (Instagram /
+#     TikTok / Pinterest — heavy emphasis on first-frame hook)
+#   - marketingPoster is print/web-banner/event-signage with
+#     HEAVY explicit text overlay zones — the "text-overlay safe
+#     zone" discipline is core
+#
+# Stage D migration:
+#   - Pre-graduation (v1.0.0): skill.yaml carried a `legacy:` block
+#     that pulled identity from prompts/templates/identity_marketingPoster.md
+#     (28 lines, English bullet list).
+#   - Post-graduation (v2.0.0, this commit): SKILL.md owns the body;
+#     legacy template deleted in the same commit.
+name: marketingPoster
+version: 2.0.0
+description: 营销 / 活动海报设计师 — 4 类 offer × 4 类受众 × 3 类 CTA。区别于 socialAd:海报是 print / web-banner / event-signage,带显式 text-overlay 安全区。叠加事实验证、资产协议、反 AI slop、Junior Designer 工作流四份横向规则。
+
+artifacts:
+  primary_type: poster
+  output_types: [png, jpg, pdf, html, markdown]
+  preview_types: [image, pdf, html, markdown]
+  export_targets: [png, pdf, html, zip]
+  critique_anchors: [hierarchy, functionality, craft]
+
+triggers:
+  agent_mode: marketingPoster
+
+required_inputs:
+  # Surfaced to the model BEFORE generation. Matches the pattern
+  # from ppt / socialAd / flashCard / logo / productShot.
+  - kind: offer_type
+  - kind: audience
+  - kind: cta_style
+  - kind: headline_text
+  - kind: deadline_or_date
+    when: offer_is_time_bound
+  - kind: brand_assets
+    when: brand_specified
+
+references:
+  shared:
+    - fact-verification
+    - asset-protocol
+    - anti-ai-slop
+    - junior-designer-workflow
+
+# M1 turn-1 discovery form. See work-agent-open-design-integration-2026-05.md v2.4 §0.5.
+question_form:
+  enabled: true
+  trigger: first_turn_no_form_answered
+  skip_label_key: form.skip
+  questions:
+    - id: offer
+      label_key: form.marketingPoster.offer.label
+      type: single_select
+      required: true
+      default: launch
+      options:
+        - { value: discount,         label_key: form.marketingPoster.offer.discount }
+        - { value: launch,           label_key: form.marketingPoster.offer.launch }
+        - { value: event,            label_key: form.marketingPoster.offer.event }
+        - { value: brand_awareness,  label_key: form.marketingPoster.offer.brand_awareness }
+    - id: audience
+      label_key: form.marketingPoster.audience.label
+      type: single_select
+      required: true
+      default: millennial
+      options:
+        - { value: gen_z,         label_key: form.marketingPoster.audience.gen_z }
+        - { value: millennial,    label_key: form.marketingPoster.audience.millennial }
+        - { value: professional,  label_key: form.marketingPoster.audience.professional }
+        - { value: family,        label_key: form.marketingPoster.audience.family }
+    - id: cta_style
+      label_key: form.marketingPoster.cta_style.label
+      type: single_select
+      required: true
+      default: aspirational
+      options:
+        - { value: urgent,         label_key: form.marketingPoster.cta_style.urgent }
+        - { value: aspirational,   label_key: form.marketingPoster.cta_style.aspirational }
+        - { value: informative,    label_key: form.marketingPoster.cta_style.informative }
+
+# M2 visual directions fallback. Fires AFTER question_form completes
+# and only when no brand context is active.
+directions_fallback:
+  enabled: true
+  trigger: no_brand_no_direction_selected
+  picker_source: fallback_5
+  skip_label_key: form.skip

@@ -1,0 +1,110 @@
+# oohBillboard skill — fully-native (no legacy: block). Body lives in
+# skills/oohBillboard/SKILL.md, hand-rewritten from the legacy
+# identity_oohBillboard.md with five additions:
+#   - 5 OOH-media taxonomy (传统 billboard / transit shelter /
+#     DOOH 楼宇 LED / transit interior / building wrap) with
+#     per-media 视距 + 停留时间
+#   - 3 OOH styles (single-image hero / product-on-color /
+#     typographic)
+#   - 3 hard constraints: 视距=文字尺寸的硬数学
+#     (text height ≥ viewing-distance / 150),
+#     印刷分辨率 / 颜色模式 + 出血规格,
+#     户外可见性 + 当地法规
+#   - 3-pass workflow with explicit 视距测试 step in Pass 1
+#     ("you have 3 seconds, use ≤7 words")
+#   - Anti-AI-slop OOH-specifics (no 细线 / no 衬线字体 /
+#     no stock 商务团队 / no 白底浅灰底)
+#
+# Distinction from sibling skills:
+#   - marketingPoster: 5-second close-range reader (商场 / 展会
+#     / 印刷 poster) - WAY more text density
+#   - webBanner: 0.4-second display CTR-driven (digital ad
+#     network, IAB sizes)
+#   - oohBillboard: 3-second far-distance high-speed traffic
+#     - far-distance legibility math is the key constraint
+#   Distinct because viewing distance + viewing time are
+#   completely different orders of magnitude.
+#
+# Stage D migration:
+#   - Pre-graduation (v1.0.0): skill.yaml carried a `legacy:` block
+#     that pulled identity from prompts/templates/identity_oohBillboard.md
+#     (28 lines, English bullet list).
+#   - Post-graduation (v2.0.0, this commit): SKILL.md owns the body;
+#     legacy template deleted in the same commit.
+name: oohBillboard
+version: 2.0.0
+description: 户外大牌 / 路牌 / 候车亭 / DOOH 设计师 — 5 类 OOH 媒体 × 3 种风格,视距=文字尺寸硬数学 + 印刷分辨率 + 户外法规三大硬约束。叠加事实验证、资产协议、反 AI slop、Junior Designer 工作流四份横向规则。
+
+artifacts:
+  primary_type: ooh_creative
+  output_types: [png, jpg, pdf, markdown]
+  preview_types: [image, pdf, markdown]
+  export_targets: [png, pdf, zip]
+  critique_anchors: [hierarchy, restraint, functionality]
+
+triggers:
+  agent_mode: oohBillboard
+
+required_inputs:
+  - kind: ooh_media_type
+  - kind: viewing_distance_estimate
+  - kind: target_location
+  - kind: brand_assets
+    when: brand_specified
+  - kind: tagline_text
+  - kind: print_specs
+    when: production_quality_requested
+
+references:
+  shared:
+    - fact-verification
+    - asset-protocol
+    - anti-ai-slop
+    - junior-designer-workflow
+
+# M1 turn-1 discovery form. Three axes: ooh_media_type (5 media
+# types — drives viewing-distance + dwell-time math), ooh_style
+# (3 styles — single-image hero / product-on-color / typographic),
+# and viewing_distance (drives the text-height ≥ distance/150 cm
+# hard constraint). tagline_text + brand_assets stay free-form.
+question_form:
+  enabled: true
+  trigger: first_turn_no_form_answered
+  skip_label_key: form.skip
+  questions:
+    - id: ooh_media_type
+      label_key: form.oohBillboard.ooh_media_type.label
+      type: single_select
+      required: true
+      default: traditional_billboard
+      options:
+        - { value: traditional_billboard, label_key: form.oohBillboard.ooh_media_type.traditional_billboard }
+        - { value: transit_shelter,       label_key: form.oohBillboard.ooh_media_type.transit_shelter }
+        - { value: digital_ooh,           label_key: form.oohBillboard.ooh_media_type.digital_ooh }
+        - { value: transit_interior,      label_key: form.oohBillboard.ooh_media_type.transit_interior }
+        - { value: building_wrap,         label_key: form.oohBillboard.ooh_media_type.building_wrap }
+    - id: ooh_style
+      label_key: form.oohBillboard.ooh_style.label
+      type: single_select
+      required: true
+      default: single_image_hero
+      options:
+        - { value: single_image_hero,     label_key: form.oohBillboard.ooh_style.single_image_hero }
+        - { value: product_on_color,      label_key: form.oohBillboard.ooh_style.product_on_color }
+        - { value: typographic,           label_key: form.oohBillboard.ooh_style.typographic }
+    - id: viewing_distance
+      label_key: form.oohBillboard.viewing_distance.label
+      type: single_select
+      required: true
+      default: medium_100m
+      options:
+        - { value: close_5m,    label_key: form.oohBillboard.viewing_distance.close_5m }
+        - { value: medium_100m, label_key: form.oohBillboard.viewing_distance.medium_100m }
+        - { value: far_300m,    label_key: form.oohBillboard.viewing_distance.far_300m }
+        - { value: extreme_500m, label_key: form.oohBillboard.viewing_distance.extreme_500m }
+
+directions_fallback:
+  enabled: true
+  trigger: no_brand_no_direction_selected
+  picker_source: fallback_5
+  skip_label_key: form.skip

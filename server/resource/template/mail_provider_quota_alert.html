@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Provider Quota Alert</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f6f9fc;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 0;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #ef4444 0%, #f97316 100%);
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0 0 8px 0;
+            font-size: 22px;
+        }
+        .header p {
+            margin: 0;
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        .content {
+            padding: 28px 25px;
+        }
+        .reason-box {
+            text-align: center;
+            padding: 18px;
+            background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+            border-radius: 8px;
+            margin-bottom: 20px;
+            color: #991b1b;
+            font-weight: 600;
+            font-size: 16px;
+        }
+        .info-card {
+            background: #f9fafb;
+            border-radius: 8px;
+            padding: 18px 20px;
+            margin: 16px 0;
+        }
+        .info-row {
+            display: flex;
+            padding: 10px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .info-row:last-child {
+            border-bottom: none;
+        }
+        .info-label {
+            font-weight: 600;
+            color: #ef4444;
+            width: 130px;
+            flex-shrink: 0;
+        }
+        .info-value {
+            color: #374151;
+            word-break: break-word;
+        }
+        .upstream-error-box {
+            background: #fff;
+            border: 1px solid #fecaca;
+            border-left: 4px solid #ef4444;
+            padding: 16px;
+            margin: 16px 0;
+            border-radius: 0 6px 6px 0;
+        }
+        .upstream-error-box h3 {
+            margin: 0 0 10px 0;
+            color: #991b1b;
+            font-size: 14px;
+        }
+        .upstream-error-box .error-text {
+            color: #4b5563;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 12px;
+        }
+        .hint-box {
+            background: #fffbeb;
+            border: 1px solid #fcd34d;
+            border-radius: 6px;
+            padding: 14px 16px;
+            margin: 16px 0;
+            color: #92400e;
+            font-size: 13px;
+        }
+        .footer {
+            background: #f9fafb;
+            padding: 18px;
+            text-align: center;
+            font-size: 12px;
+            color: #6b7280;
+            border-top: 1px solid #e5e7eb;
+        }
+        .footer p {
+            margin: 4px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚠️ Provider Quota Issue</h1>
+            <p>WorkMax Server Operator Notification</p>
+        </div>
+
+        <div class="content">
+            <div class="reason-box">{{reasonDisplay}}</div>
+
+            <div class="info-card">
+                <div class="info-row">
+                    <span class="info-label">Provider</span>
+                    <span class="info-value">{{providerName}}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Type / Model</span>
+                    <span class="info-value">{{providerType}} · {{providerModel}}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Media Type</span>
+                    <span class="info-value">{{mediaType}}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Reason Code</span>
+                    <span class="info-value"><code>{{reasonCode}}</code></span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Daily Usage</span>
+                    <span class="info-value">{{dailyUsage}}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Monthly Usage</span>
+                    <span class="info-value">{{monthlyUsage}}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Last Used</span>
+                    <span class="info-value">{{lastUsedAt}}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Detected At</span>
+                    <span class="info-value">{{timestamp}}</span>
+                </div>
+            </div>
+
+            {{upstreamErrorBlock}}
+
+            <div class="hint-box">
+                💡 Use protected Server operator tooling to top up the upstream account, raise its quota, or temporarily disable this provider.
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>This is an automated notification from WorkMax.</p>
+            <p>Throttled to one email per provider + reason per 24 hours.</p>
+        </div>
+    </div>
+</body>
+</html>

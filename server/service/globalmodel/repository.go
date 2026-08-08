@@ -1,0 +1,107 @@
+package globalmodel
+
+import (
+	"strings"
+
+	"server/globals"
+	"server/model"
+
+	"gorm.io/gorm"
+)
+
+// Repository owns the platform model catalog. It intentionally does not make
+// provider routing decisions; w_generator_provider remains the routing source.
+type Repository struct {
+	db *gorm.DB
+}
+
+func NewRepository(db *gorm.DB) *Repository {
+	return &Repository{db: db}
+}
+
+func Default() *Repository {
+	return NewRepository(globals.GraDBs["system"])
+}
+
+type UpsertInput struct {
+	ModelID       string
+	MediaType     string
+	ProviderType  string
+	DisplayName   string
+	Status        *int8
+	PricingStatus string
+	SortOrder     int
+	Capabilities  model.JSONMap
+	Metadata      model.JSONMap
+}
+
+func (r *Repository) Upsert(in UpsertInput) (*model.GlobalModel, error) {
+	row := model.GlobalModel{
+		ModelID:       strings.TrimSpace(in.ModelID),
+		MediaType:     strings.TrimSpace(in.MediaType),
+		ProviderType:  strings.TrimSpace(in.ProviderType),
+		DisplayName:   strings.TrimSpace(in.DisplayName),
+		Status:        normalizeStatus(in.Status),
+		PricingStatus: strings.TrimSpace(in.PricingStatus),
+		SortOrder:     in.SortOrder,
+		Capabilities:  normalizeJSONMap(in.Capabilities),
+		Metadata:      normalizeJSONMap(in.Metadata),
+	}
+	if row.ModelID == "" || row.MediaType == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	err := r.db.
+		Where("model_id = ? AND media_type = ?", row.ModelID, row.MediaType).
+		Assign(map[string]interface{}{
+			"provider_type":  row.ProviderType,
+			"display_name":   row.DisplayName,
+			"status":         row.Status,
+			"pricing_status": row.PricingStatus,
+			"sort_order":     row.SortOrder,
+			"capabilities":   row.Capabilities,
+			"metadata":       row.Metadata,
+		}).
+		FirstOrCreate(&row).Error
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (r *Repository) LoadEnabledByModelID(modelID, mediaType string) (*model.GlobalModel, error) {
+	var row model.GlobalModel
+	err := r.db.
+		Where("model_id = ? AND media_type = ? AND status = ? AND deleted_at IS NULL",
+			strings.TrimSpace(modelID),
+			strings.TrimSpace(mediaType),
+			model.GlobalModelStatusEnabled,
+		).
+		First(&row).Error
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (r *Repository) ListEnabled(mediaType string) ([]model.GlobalModel, error) {
+	var rows []model.GlobalModel
+	err := r.db.
+		Where("media_type = ? AND status = ? AND deleted_at IS NULL", strings.TrimSpace(mediaType), model.GlobalModelStatusEnabled).
+		Order("sort_order DESC, id ASC").
+		Find(&rows).Error
+	return rows, err
+}
+
+func normalizeStatus(status *int8) int8 {
+	if status != nil && *status == model.GlobalModelStatusDisabled {
+		return model.GlobalModelStatusDisabled
+	}
+	return model.GlobalModelStatusEnabled
+}
+
+func normalizeJSONMap(v model.JSONMap) model.JSONMap {
+	if v == nil {
+		return model.JSONMap{}
+	}
+	return v
+}

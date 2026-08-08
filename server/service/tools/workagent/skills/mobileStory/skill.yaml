@@ -1,0 +1,109 @@
+# mobileStory skill — fully-native (no legacy: block). Body lives in
+# skills/mobileStory/SKILL.md, hand-rewritten from the legacy
+# identity_mobileStory.md with five additions:
+#   - 5-platform taxonomy (Instagram Stories / Reels Cover /
+#     TikTok Cover / YouTube Shorts thumb / Pinterest&Snapchat)
+#     with per-platform UI safe zone heights
+#   - 3 story types (template / single-frame / multi-frame
+#     narrative)
+#   - 3 hard constraints: UI safe zone protection (顶/底 ~10-25%
+#     永远被平台 UI 遮挡), 9:16 strict aspect, no AI-rendered
+#     text (story 平台原生 text widget 是核心 UX)
+#   - Platform compliance per-platform (Instagram / TikTok /
+#     YouTube Shorts / Snapchat / Pinterest)
+#   - Explicit 3-pass workflow + "no horizontal-mindset" rule
+#
+# Distinction from sibling skills:
+#   - socialAd: feed-format (1:1 / 4:5 / 1.91:1), scroll-stopping
+#     first frame
+#   - webBanner: strict-IAB display rectangles (728×90 等), CTR-
+#     driven 0.4s read
+#   - mobileStory: 9:16 full-screen vertical, safe-zone-aware,
+#     swipe-through narrative
+#   Distinct because aspect + UI overlay are completely
+#   different — a feed-format image dies on Stories and vice
+#   versa.
+#
+# Stage D migration:
+#   - Pre-graduation (v1.0.0): skill.yaml carried a `legacy:` block
+#     that pulled identity from prompts/templates/identity_mobileStory.md
+#     (24 lines, English bullet list).
+#   - Post-graduation (v2.0.0, this commit): SKILL.md owns the body;
+#     legacy template deleted in the same commit.
+name: mobileStory
+version: 2.0.0
+description: 9:16 竖版 story / Reels cover / Shorts 缩略图设计师 — 5 个平台 × 3 种类型 (template / single-frame / multi-frame),含 UI safe zone 硬约束。叠加事实验证、资产协议、反 AI slop、Junior Designer 工作流四份横向规则。
+
+artifacts:
+  primary_type: vertical_story
+  output_types: [png, jpg, mp4, html, markdown]
+  preview_types: [image, video, html, markdown]
+  export_targets: [png, jpg, mp4, html, zip]
+  critique_anchors: [pacing, hierarchy, craft]
+
+triggers:
+  agent_mode: mobileStory
+
+required_inputs:
+  - kind: target_platform
+  - kind: story_type
+  - kind: brand_assets
+    when: brand_specified
+  - kind: headline_text
+    when: text_overlay_requested
+  - kind: frame_count
+    when: multi_frame_narrative
+
+references:
+  shared:
+    - fact-verification
+    - asset-protocol
+    - anti-ai-slop
+    - junior-designer-workflow
+  local:
+    - checklist
+
+# M1 turn-1 discovery form. Three axes: target_platform (drives
+# UI safe-zone math — each platform has different overlay heights),
+# story_type (template / single-frame / multi-frame), and
+# text_strategy (frames whether/where text will overlay).
+question_form:
+  enabled: true
+  trigger: first_turn_no_form_answered
+  skip_label_key: form.skip
+  questions:
+    - id: target_platform
+      label_key: form.mobileStory.target_platform.label
+      type: single_select
+      required: true
+      default: instagram_stories
+      options:
+        - { value: instagram_stories,    label_key: form.mobileStory.target_platform.instagram_stories }
+        - { value: reels_cover,          label_key: form.mobileStory.target_platform.reels_cover }
+        - { value: tiktok_cover,         label_key: form.mobileStory.target_platform.tiktok_cover }
+        - { value: youtube_shorts,       label_key: form.mobileStory.target_platform.youtube_shorts }
+        - { value: pinterest_snapchat,   label_key: form.mobileStory.target_platform.pinterest_snapchat }
+    - id: story_type
+      label_key: form.mobileStory.story_type.label
+      type: single_select
+      required: true
+      default: single_frame
+      options:
+        - { value: template,        label_key: form.mobileStory.story_type.template }
+        - { value: single_frame,    label_key: form.mobileStory.story_type.single_frame }
+        - { value: multi_frame,     label_key: form.mobileStory.story_type.multi_frame }
+    - id: text_strategy
+      label_key: form.mobileStory.text_strategy.label
+      type: single_select
+      required: true
+      default: platform_widget
+      options:
+        - { value: platform_widget, label_key: form.mobileStory.text_strategy.platform_widget }
+        - { value: ai_baked,        label_key: form.mobileStory.text_strategy.ai_baked }
+        - { value: no_text,         label_key: form.mobileStory.text_strategy.no_text }
+
+directions_fallback:
+  enabled: true
+  trigger: no_brand_no_direction_selected
+  picker_source: fallback_5
+  skip_label_key: form.skip

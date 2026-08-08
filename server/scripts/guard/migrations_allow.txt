@@ -1,0 +1,47 @@
+# Migrations allow-list for check-migrations guard.
+#
+# Entries here are EXCLUDED from the "table missing from
+# testSchemaDDL" drift report. One entry per line; lines starting
+# with `#` are comments.
+#
+# Two legitimate reasons to allow-list a table:
+#
+#   1) The migration was superseded by a refactor. Early short-
+#      drama migrations created w_short_drama_project / -episode /
+#      -script / -storyboard which were later renamed to the
+#      generic w_project / -episode / etc. by 20260504's refactor.
+#      The original CREATE statements still exist in the migration
+#      stream (we don't rewrite history) but those table names
+#      never ship to production.
+#
+#   2) The table is not currently exercised by any integration test.
+#      testSchemaDDL is a minimal subset — we add to it only when
+#      an integration test needs to seed / query the table.
+#      Explicitly allow-listing says "yes, we know it's missing;
+#      no integration test covers it yet." New entries here should
+#      be reviewed when the table gains integration coverage.
+#
+# Format:
+#   table/column        → the table AND a specific added column
+#   table               → the table itself (created but not seeded)
+
+# --- Superseded by 20260504_refactor_project_tables_to_generic.sql
+# These tables were renamed to w_project / w_episode / w_script /
+# w_storyboard; their original CREATEs are historical only.
+w_short_drama_project
+w_short_drama_episode
+w_short_drama_script
+w_short_drama_storyboard
+
+# --- Not yet exercised by integration tests
+# Each of these will need a testSchemaDDL entry before a test can
+# seed them. Remove from this list when that happens.
+w_character_reference
+w_character_relationship
+w_notification
+w_canvas_shot
+w_credit_reservation_allocation
+w_panel_shot
+w_project_template
+w_team
+w_team_member

@@ -1,0 +1,7 @@
+-- No-op.
+--
+-- This migration originally added w_workagent_project_design_system.version,
+-- but the table-creation migration now includes that column directly because
+-- the 20260636+ migration range has not been applied anywhere yet. Keeping this
+-- file as a no-op preserves the migration sequence without causing a duplicate
+-- column failure on fresh databases.

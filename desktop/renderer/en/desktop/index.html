@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src http://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WorkMax Desktop</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">v</span>
+          <div>
+            <h1>WorkMax Desktop</h1>
+            <p id="runtime-label">Bundled renderer</p>
+          </div>
+        </div>
+        <div id="status-card" class="status-card">Starting sidecar bridge...</div>
+        <div class="sidebar-actions">
+          <button id="refresh-button" type="button">Refresh</button>
+          <button id="models-button" type="button">Models</button>
+          <button id="login-button" type="button" hidden>Sign in</button>
+        </div>
+        <form id="model-settings-form" class="sidebar-form model-settings-form" hidden novalidate>
+          <div class="sidebar-form-heading">
+            <strong id="model-settings-heading">Model route</strong>
+            <span>Use a local model endpoint or official hosted quota after sign-in.</span>
+          </div>
+          <label class="sidebar-field" for="model-preferred-route">
+            <span>Route</span>
+            <select id="model-preferred-route" name="preferred_route">
+              <option value="official">Official (workmax.app quota)</option>
+              <option value="local">Local / self-hosted</option>
+            </select>
+          </label>
+          <div id="model-local-fields" class="model-local-fields" hidden>
+            <label class="sidebar-field" for="model-protocol">
+              <span>Protocol</span>
+              <select id="model-protocol" name="protocol">
+                <option value="openai_compatible">OpenAI-compatible</option>
+                <option value="anthropic_compatible">Anthropic-compatible</option>
+              </select>
+            </label>
+            <label class="sidebar-field" for="model-base-url">
+              <span>Base URL</span>
+              <input
+                id="model-base-url"
+                name="base_url"
+                type="url"
+                autocomplete="off"
+                maxlength="512"
+                spellcheck="false"
+                placeholder="http://127.0.0.1:11434/v1"
+              />
+            </label>
+            <label class="sidebar-field" for="model-id">
+              <span>Model ID</span>
+              <input
+                id="model-id"
+                name="model_id"
+                type="text"
+                autocomplete="off"
+                maxlength="128"
+                spellcheck="false"
+                placeholder="llama3.2"
+              />
+            </label>
+            <label class="sidebar-field" for="model-api-key">
+              <span>API key (optional)</span>
+              <input
+                id="model-api-key"
+                name="api_key"
+                type="password"
+                autocomplete="off"
+                maxlength="4096"
+                placeholder="Leave blank to keep existing"
+              />
+            </label>
+            <label class="sidebar-check" for="model-clear-api-key">
+              <input id="model-clear-api-key" name="clear_api_key" type="checkbox" />
+              <span>Clear stored API key</span>
+            </label>
+            <p id="model-key-status" class="model-key-status" role="status"></p>
+          </div>
+          <p id="model-settings-error" class="form-error" role="alert" hidden></p>
+          <div class="sidebar-form-actions">
+            <button id="model-settings-cancel-button" type="button">Close</button>
+            <button id="model-settings-submit-button" class="primary" type="submit">Save</button>
+          </div>
+        </form>
+        <form id="login-form" class="login-form" hidden novalidate>
+          <div class="login-form-heading">
+            <strong>Sign in to WorkMax</strong>
+            <span>Your credentials are sent directly through the Desktop app.</span>
+          </div>
+          <label class="login-field" for="login-email">
+            <span>Email</span>
+            <input
+              id="login-email"
+              name="email"
+              type="email"
+              inputmode="email"
+              autocomplete="username"
+              maxlength="320"
+              spellcheck="false"
+              required
+            />
+          </label>
+          <label class="login-field" for="login-password">
+            <span>Password</span>
+            <input
+              id="login-password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              maxlength="1024"
+              required
+            />
+          </label>
+          <div class="login-form-actions">
+            <button id="login-cancel-button" type="button">Cancel</button>
+            <button id="login-submit-button" class="primary" type="submit">Continue</button>
+          </div>
+        </form>
+        <div class="thread-toolbar">
+          <strong>Threads</strong>
+          <button id="new-thread-button" type="button" disabled>New</button>
+        </div>
+        <form
+          id="new-thread-form"
+          class="sidebar-form"
+          aria-labelledby="new-thread-heading"
+          aria-describedby="new-thread-error"
+          hidden
+          novalidate
+        >
+          <div class="sidebar-form-heading">
+            <strong id="new-thread-heading">New presentation thread</strong>
+            <span>Name the workspace before starting the first prompt.</span>
+          </div>
+          <label class="sidebar-field" for="new-thread-name">
+            <span>Name</span>
+            <input
+              id="new-thread-name"
+              name="name"
+              type="text"
+              autocomplete="off"
+              maxlength="200"
+              value="Untitled presentation"
+              required
+            />
+          </label>
+          <label class="sidebar-field" for="new-thread-mode">
+            <span>Skill</span>
+            <select id="new-thread-mode" name="agentMode" disabled>
+              <option value="">Loading...</option>
+            </select>
+          </label>
+          <p id="new-thread-error" class="form-error" role="alert" hidden></p>
+          <div class="sidebar-form-actions">
+            <button id="new-thread-cancel-button" type="button">Cancel</button>
+            <button id="new-thread-submit-button" class="primary" type="submit" disabled>Create</button>
+          </div>
+        </form>
+        <ol id="thread-list" class="thread-list" aria-label="Cached threads"></ol>
+        <footer class="sidebar-footer">
+          <a
+            id="source-code-link"
+            href="https://github.com/jonnyquan/workmax"
+            target="_blank"
+            rel="noreferrer"
+          >Source code · AGPL-3.0</a>
+        </footer>
+      </aside>
+      <section class="content" aria-live="polite">
+        <div id="empty-state" class="empty-state">
+          <p class="eyebrow">PPT Agent</p>
+          <h2 id="empty-title">Continue from local history</h2>
+          <p id="empty-description">Select a synced thread to read its cached messages and continue the conversation.</p>
+          <button id="empty-new-thread-button" class="primary empty-action" type="button" disabled>New thread</button>
+        </div>
+        <div id="thread-panel" class="thread-panel" hidden>
+          <header>
+            <div>
+              <p id="thread-meta"></p>
+              <h2 id="thread-title"></h2>
+            </div>
+            <span id="turn-state" class="turn-state">Ready</span>
+          </header>
+          <div id="message-viewport" class="message-viewport">
+            <div id="message-list" class="message-list"></div>
+          </div>
+          <section
+            id="turn-recovery-card"
+            class="turn-recovery-card"
+            aria-labelledby="turn-recovery-heading"
+            aria-describedby="turn-recovery-description turn-recovery-feedback"
+            aria-live="polite"
+            hidden
+          >
+            <div class="turn-recovery-copy">
+              <strong id="turn-recovery-heading">Interrupted response</strong>
+              <span id="turn-recovery-description">Retry this interrupted response using the same request.</span>
+              <span id="turn-recovery-prompt" class="turn-recovery-prompt"></span>
+              <span id="turn-recovery-feedback" class="turn-recovery-feedback" role="status"></span>
+            </div>
+            <div class="turn-recovery-actions">
+              <button id="turn-recovery-dismiss-button" type="button">Dismiss</button>
+              <button id="turn-recovery-resume-button" class="primary" type="button">Resume</button>
+            </div>
+          </section>
+          <form id="chat-form" class="composer" novalidate>
+            <div class="composer-toolbar">
+              <label for="agent-mode">Skill</label>
+              <select id="agent-mode" aria-label="Agent skill" disabled>
+                <option value="">Loading...</option>
+              </select>
+              <span id="composer-status">Select a synced thread to continue.</span>
+            </div>
+            <label class="composer-input" for="chat-input">
+              <span class="sr-only">Message WorkMax Agent</span>
+              <textarea
+                id="chat-input"
+                rows="3"
+                maxlength="65536"
+                placeholder="Describe the presentation you want to create or refine..."
+                disabled
+              ></textarea>
+            </label>
+            <div id="attachment-chips" class="attachment-chips" hidden></div>
+            <div class="composer-actions">
+              <input id="file-input" type="file" multiple hidden />
+              <button id="attach-button" type="button" aria-label="Attach files">＋</button>
+              <span>⌘↵ to send</span>
+              <button id="stop-button" type="button" hidden>Stop</button>
+              <button id="send-button" class="primary" type="submit" disabled>Send</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </main>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

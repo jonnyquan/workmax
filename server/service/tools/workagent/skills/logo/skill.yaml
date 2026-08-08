@@ -1,0 +1,127 @@
+# logo skill — fully-native (no legacy: block). Body lives in
+# skills/logo/SKILL.md, hand-rewritten from the legacy
+# identity_logo.md with four additions:
+#   - 5 logo-form taxonomy (Wordmark / Iconic Symbol / Mascot /
+#     Abstract Geometric / Combination Mark) with explicit
+#     industry-fit + when-NOT-to-use guidance
+#   - 5 logo-design hard constraints: Scalability (16×16 px
+#     survival), Single-color survival, Negative-space discipline,
+#     Type ≠ decoration, Industry visual-cliché avoidance
+#   - Explicit 3-pass workflow (brief → concept → mono+color
+#     variants) with Pass-1 ack gate + "no batch 6 directions"
+#     discipline
+#   - Anti-AI-slop specific to logo context (no mesh gradients,
+#     no AI-painted "logo concept" with brush strokes, no swoosh
+#     decorations, no emoji prefixes, no kitchen-sink layouts)
+#
+# Stage D migration:
+#   - Pre-graduation (v1.0.0): skill.yaml carried a `legacy:` block
+#     that pulled identity from prompts/templates/identity_logo.md
+#     (28 lines, English bullet list).
+#   - Post-graduation (v2.0.0, this commit): SKILL.md owns the body;
+#     legacy template deleted in the same commit.
+#
+# Why logo is a good fourth graduation (after ppt + socialAd +
+# flashCard):
+#   - The "5 forms" taxonomy is genuinely informative (most users
+#     don't know wordmark vs combination mark) and the legacy
+#     template didn't surface it.
+#   - The "no batch 6 directions" anti-pattern is a real production
+#     complaint — users ask for "give me 6 options" and the agent
+#     produces 6 random unfocused concepts. Pass-1 ack gate +
+#     explicit "logo is a commitment, not a mood board" framing
+#     directly addresses it.
+#   - Industry visual-cliché list is concrete enough to ship
+#     immediate quality wins.
+name: logo
+version: 2.0.0
+description: 品牌标志 / Logo 设计师 — 5 种 logo 形态 (Wordmark / Iconic Symbol / Mascot / Abstract Geometric / Combination Mark)，含 5 个硬约束 (scalability / single-color survival / negative-space / typography discipline / industry cliché avoidance)。叠加事实验证、资产协议、反 AI slop、Junior Designer 工作流四份横向规则。
+
+artifacts:
+  primary_type: brand_mark
+  output_types: [svg, png, pdf, markdown]
+  preview_types: [image, pdf, markdown]
+  export_targets: [svg, png, pdf, zip]
+  critique_anchors: [craft, functionality, originality]
+
+triggers:
+  agent_mode: logo
+
+required_inputs:
+  # Surfaced to the model BEFORE generation so it asks rather than
+  # generates blind — matches ppt + socialAd + flashCard's pattern.
+  - kind: brand_name
+  - kind: industry
+  - kind: tone
+  - kind: target_audience
+  - kind: primary_color
+    when: brand_color_not_supplied
+  # 2026-05-12: renamed from `existing_brand_assets` to `brand_assets`
+  # for consistency across the 14 user-facing skills (every other
+  # skill uses `brand_assets`). The conditional gate
+  # `rebrand_or_brand_extension` preserves the original semantic
+  # — only ask when this is a rebrand / extension, not a fresh
+  # logo brief.
+  - kind: brand_assets
+    when: rebrand_or_brand_extension
+
+references:
+  shared:
+    - fact-verification
+    - asset-protocol
+    - anti-ai-slop
+    - junior-designer-workflow
+
+# M1 turn-1 discovery form. Three axes per SKILL.md taxonomy:
+# industry (drives the visual-cliché avoidance constraint), logo_form
+# (5-form taxonomy), and tone. brand_name and existing_brand_assets
+# are intentionally NOT form questions — they need free text /
+# file upload, which falls outside the structured single_select
+# form (handled via the SDK turn instead).
+question_form:
+  enabled: true
+  trigger: first_turn_no_form_answered
+  skip_label_key: form.skip
+  questions:
+    - id: industry
+      label_key: form.logo.industry.label
+      type: single_select
+      required: true
+      default: tech
+      options:
+        - { value: tech,        label_key: form.logo.industry.tech }
+        - { value: consumer,    label_key: form.logo.industry.consumer }
+        - { value: finance,     label_key: form.logo.industry.finance }
+        - { value: healthcare,  label_key: form.logo.industry.healthcare }
+        - { value: other,       label_key: form.logo.industry.other }
+    - id: logo_form
+      label_key: form.logo.logo_form.label
+      type: single_select
+      required: true
+      default: wordmark
+      options:
+        - { value: wordmark,         label_key: form.logo.logo_form.wordmark }
+        - { value: iconic_symbol,    label_key: form.logo.logo_form.iconic_symbol }
+        - { value: mascot,           label_key: form.logo.logo_form.mascot }
+        - { value: abstract,         label_key: form.logo.logo_form.abstract }
+        - { value: combination_mark, label_key: form.logo.logo_form.combination_mark }
+    - id: tone
+      label_key: form.logo.tone.label
+      type: single_select
+      required: true
+      default: modern_minimal
+      options:
+        - { value: modern_minimal,    label_key: form.logo.tone.modern_minimal }
+        - { value: bold_confident,    label_key: form.logo.tone.bold_confident }
+        - { value: friendly_approachable, label_key: form.logo.tone.friendly_approachable }
+        - { value: premium_serious,   label_key: form.logo.tone.premium_serious }
+
+# M2 visual directions fallback. Design doc §0.5 prescribes "弹（极简）"
+# for logo — show the picker but keep it minimal. Same picker_source
+# as other skills; the "极简" cue is captured in SKILL.md hard
+# constraints (no mesh gradients, no kitchen-sink layouts).
+directions_fallback:
+  enabled: true
+  trigger: no_brand_no_direction_selected
+  picker_source: fallback_5
+  skip_label_key: form.skip

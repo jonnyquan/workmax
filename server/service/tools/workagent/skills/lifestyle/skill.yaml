@@ -1,0 +1,113 @@
+# lifestyle skill — fully-native (no legacy: block). Body lives in
+# skills/lifestyle/SKILL.md, hand-rewritten from the legacy
+# identity_lifestyle.md with five additions:
+#   - 5-scene taxonomy (home / work / outdoor / social /
+#     wellness) with per-scene lighting + prop density
+#   - 3 shooting styles (authentic candid / editorial polished
+#     / directorial cinematic)
+#   - 3 hard constraints: AI-face risk (uncanny valley +
+#     diversity bias + celebrity-look-alike), product/brand
+#     asset realness, lifestyle ≠ posed-perfect
+#   - Explicit 3-pass workflow with diversity + portrait-rights
+#     gate in Pass 1
+#   - Anti-AI-slop lifestyle-specifics (no symmetric center
+#     composition / no stock-photo handshakes / no over-filter /
+#     no AI text on background props / no AI-generated hands)
+#
+# Distinction from sibling skills:
+#   - productShot: clean studio / e-commerce, product IS the
+#     subject (高对比 white-bg / packshot)
+#   - marketingPoster: text-heavy commercial KV, 5-second
+#     close-range reader
+#   - lifestyle: scene-driven storytelling, brand/product is
+#     PART of the world, narrative-first
+#   Distinct because the photographic intent (sell vs evoke
+#   mood) and visual grammar differ fundamentally.
+#
+# Stage D migration:
+#   - Pre-graduation (v1.0.0): skill.yaml carried a `legacy:` block
+#     that pulled identity from prompts/templates/identity_lifestyle.md
+#     (28 lines, English bullet list).
+#   - Post-graduation (v2.0.0, this commit): SKILL.md owns the body;
+#     legacy template deleted in the same commit.
+name: lifestyle
+version: 2.0.0
+description: 生活方式摄影师 — 5 类场景 (home / work / outdoor / social / wellness) × 3 种风格 (authentic / editorial / cinematic),含 AI 人脸 + 肖像权 + 产品资产真实性三大硬约束。叠加事实验证、资产协议、反 AI slop、Junior Designer 工作流四份横向规则。
+
+artifacts:
+  primary_type: lifestyle_image
+  output_types: [png, jpg, markdown]
+  preview_types: [image, markdown]
+  export_targets: [png, jpg, zip]
+  critique_anchors: [craft, originality, brand_fit]
+
+triggers:
+  agent_mode: lifestyle
+
+required_inputs:
+  - kind: scene_type
+  - kind: shooting_style
+  - kind: brand_assets
+    when: brand_specified
+  - kind: product_reference_image
+    when: product_in_scene
+  - kind: people_specification
+    when: scene_includes_people
+  - kind: mood_direction
+
+references:
+  shared:
+    - fact-verification
+    - asset-protocol
+    - anti-ai-slop
+    - junior-designer-workflow
+  local:
+    - checklist
+
+# M1 turn-1 discovery form. Three axes from SKILL.md taxonomy:
+# scene_type (5-scene matrix), shooting_style (3 styles), and
+# mood (warm/aspirational/calm/energetic — drives the lighting +
+# color decisions in Pass 2). product_reference_image and
+# people_specification stay free-form (file uploads / structured
+# diversity matrix don't fit single_select).
+question_form:
+  enabled: true
+  trigger: first_turn_no_form_answered
+  skip_label_key: form.skip
+  questions:
+    - id: scene_type
+      label_key: form.lifestyle.scene_type.label
+      type: single_select
+      required: true
+      default: home
+      options:
+        - { value: home,     label_key: form.lifestyle.scene_type.home }
+        - { value: work,     label_key: form.lifestyle.scene_type.work }
+        - { value: outdoor,  label_key: form.lifestyle.scene_type.outdoor }
+        - { value: social,   label_key: form.lifestyle.scene_type.social }
+        - { value: wellness, label_key: form.lifestyle.scene_type.wellness }
+    - id: shooting_style
+      label_key: form.lifestyle.shooting_style.label
+      type: single_select
+      required: true
+      default: authentic
+      options:
+        - { value: authentic,    label_key: form.lifestyle.shooting_style.authentic }
+        - { value: editorial,    label_key: form.lifestyle.shooting_style.editorial }
+        - { value: cinematic,    label_key: form.lifestyle.shooting_style.cinematic }
+    - id: mood
+      label_key: form.lifestyle.mood.label
+      type: single_select
+      required: true
+      default: warm
+      options:
+        - { value: warm,         label_key: form.lifestyle.mood.warm }
+        - { value: aspirational, label_key: form.lifestyle.mood.aspirational }
+        - { value: calm,         label_key: form.lifestyle.mood.calm }
+        - { value: energetic,    label_key: form.lifestyle.mood.energetic }
+
+directions_fallback:
+  enabled: true
+  trigger: no_brand_no_direction_selected
+  picker_source: fallback_5
+  skip_label_key: form.skip

@@ -1,0 +1,108 @@
+# packaging skill — fully-native (no legacy: block). Body lives in
+# skills/packaging/SKILL.md, hand-rewritten from the legacy
+# identity_packaging.md with five additions:
+#   - 5-type taxonomy (box / bottle / pouch / tube / luxury
+#     case) with per-type material + 工艺关注
+#   - 3 packaging styles (minimalist premium / vibrant brand-
+#     led / artisanal sustainable) with brand-fit mapping
+#   - 3 hard constraints: AI mockup ≠ production dieline,
+#     文字/logo 不在 AI prompt 里, 材料 / 工艺可行性
+#   - Explicit 3-pass workflow with material + 工艺 + structure
+#     ack in Pass 1
+#   - Anti-AI-slop packaging-specifics (no AI real text, no
+#     全身烫金, no 不可能镂空, no 不存在的开合方式)
+#
+# Distinction from sibling skills:
+#   - productShot: 最终产品摄影,产品 IS 主体,clean white-bg
+#     for e-commerce listing
+#   - logo: 品牌识别资产 (mark / wordmark / 应用),vector +
+#     identity-system focused
+#   - packaging: 3D 包装结构 + 材料 + 应用品牌的 concept
+#     mockup (非生产文件)
+#   Distinct because output medium (e-commerce vs identity
+#   system vs 3D mockup) and downstream production differs.
+#
+# Stage D migration:
+#   - Pre-graduation (v1.0.0): skill.yaml carried a `legacy:` block
+#     that pulled identity from prompts/templates/identity_packaging.md
+#     (28 lines, English bullet list).
+#   - Post-graduation (v2.0.0, this commit): SKILL.md owns the body;
+#     legacy template deleted in the same commit.
+name: packaging
+version: 2.0.0
+description: 产品包装设计师 — 5 类 packaging (box / bottle / pouch / tube / luxury case) × 3 种风格 (minimalist / vibrant / artisanal),concept-only mockup,需 caveat "非生产文件"。叠加事实验证、资产协议、反 AI slop、Junior Designer 工作流四份横向规则。
+
+artifacts:
+  primary_type: packaging_visual
+  output_types: [png, jpg, pdf, markdown]
+  preview_types: [image, pdf, markdown]
+  export_targets: [png, pdf, zip]
+  critique_anchors: [craft, functionality, brand_fit]
+
+triggers:
+  agent_mode: packaging
+
+required_inputs:
+  - kind: packaging_type
+  - kind: packaging_style
+  - kind: primary_material
+  - kind: brand_assets
+    when: brand_specified
+  - kind: production_context
+    when: production_quality_requested
+  - kind: shelf_location_context
+
+references:
+  shared:
+    - fact-verification
+    - asset-protocol
+    - anti-ai-slop
+    - junior-designer-workflow
+  local:
+    - checklist
+
+# M1 turn-1 discovery form. Three axes from SKILL.md taxonomy:
+# packaging_type (5-type matrix), packaging_style (3 styles), and
+# primary_material (dominant material drives 工艺 + 印刷 caveats).
+question_form:
+  enabled: true
+  trigger: first_turn_no_form_answered
+  skip_label_key: form.skip
+  questions:
+    - id: packaging_type
+      label_key: form.packaging.packaging_type.label
+      type: single_select
+      required: true
+      default: box
+      options:
+        - { value: box,           label_key: form.packaging.packaging_type.box }
+        - { value: bottle,        label_key: form.packaging.packaging_type.bottle }
+        - { value: pouch,         label_key: form.packaging.packaging_type.pouch }
+        - { value: tube,          label_key: form.packaging.packaging_type.tube }
+        - { value: luxury_case,   label_key: form.packaging.packaging_type.luxury_case }
+    - id: packaging_style
+      label_key: form.packaging.packaging_style.label
+      type: single_select
+      required: true
+      default: minimalist
+      options:
+        - { value: minimalist,     label_key: form.packaging.packaging_style.minimalist }
+        - { value: vibrant,        label_key: form.packaging.packaging_style.vibrant }
+        - { value: artisanal,      label_key: form.packaging.packaging_style.artisanal }
+    - id: primary_material
+      label_key: form.packaging.primary_material.label
+      type: single_select
+      required: true
+      default: paperboard
+      options:
+        - { value: paperboard,  label_key: form.packaging.primary_material.paperboard }
+        - { value: glass,       label_key: form.packaging.primary_material.glass }
+        - { value: plastic,     label_key: form.packaging.primary_material.plastic }
+        - { value: composite,   label_key: form.packaging.primary_material.composite }
+        - { value: premium,     label_key: form.packaging.primary_material.premium }
+
+directions_fallback:
+  enabled: true
+  trigger: no_brand_no_direction_selected
+  picker_source: fallback_5
+  skip_label_key: form.skip

@@ -1,0 +1,119 @@
+# pictureBook skill — fully-native (no legacy: block). Body lives in
+# skills/pictureBook/SKILL.md, hand-rewritten from the legacy
+# identity_pictureBook.md with five additions:
+#   - 5 scene-type taxonomy (opening / action / emotional /
+#     dialogue / resolution) with per-type composition focus
+#   - 3 style families (watercolor whimsical / digital flat /
+#     soft 3D pixar-lite) with target-age mapping
+#   - 3 hard constraints: cross-scene character consistency
+#     (verbatim spec replay every prompt — pictureBook is
+#     multi-scene-by-design so drift pressure is HIGH),
+#     age-appropriate enforcement (3-5 / 5-7 / 7-10 brackets,
+#     no scary/violence/cultural-stereotype), text-position
+#     reservation + no AI-rendered text
+#   - 5-minute extended Pass 1 with character spec + scene
+#     type + age + text-position + style ack
+#   - Anti-AI-slop pictureBook-specifics (no AI text, no
+#     extra fingers, no over-dark/scary, no weapons, no
+#     stereotypes, no photo-style lens flare, no cross-scene
+#     character drift)
+#   - 上游 skill 接口: character (spec sheet) →
+#     pictureBook (scene 1) → pictureBook (scene 2) → ...
+#
+# Distinction from sibling skills:
+#   - character: SINGLE asset creation (hero / turnaround /
+#     expression), output is reusable spec
+#   - lifestyle: real-people photography, no narrative
+#   - pictureBook: NARRATIVE SCENES, consumes character spec,
+#     multi-frame storybook with text-overlay reservation
+#   Distinct because output is a SERIES of narrative-scenes
+#   with the cross-scene-consistency-pressure unique to
+#   storybook production.
+#
+# Stage D migration:
+#   - Pre-graduation (v1.0.0): skill.yaml carried a `legacy:` block
+#     that pulled identity from prompts/templates/identity_pictureBook.md
+#     (28 lines, English bullet list).
+#   - Post-graduation (v2.0.0, this commit): SKILL.md owns the body;
+#     legacy template deleted in the same commit.
+name: pictureBook
+version: 2.0.0
+description: 儿童绘本插画师 — 5 类场景 (opening / action / emotional / dialogue / resolution) × 3 种风格 (watercolor / digital flat / soft 3D),含跨场景角色一致性 + age-appropriate + 文字位留白三大硬约束。上游消费 character skill 的 spec sheet。叠加事实验证、资产协议、反 AI slop、Junior Designer 工作流四份横向规则。
+
+artifacts:
+  primary_type: image_series
+  output_types: [png, jpg, pdf, markdown]
+  preview_types: [image, pdf, markdown]
+  export_targets: [pdf, png, zip]
+  critique_anchors: [craft, originality, consistency]
+
+triggers:
+  agent_mode: pictureBook
+
+required_inputs:
+  - kind: book_slug
+  - kind: scene_type
+  - kind: story_paragraph
+  - kind: character_spec
+  - kind: style_family
+  - kind: target_age
+  - kind: text_position
+  - kind: environment_anchors
+
+references:
+  shared:
+    - fact-verification
+    - asset-protocol
+    - anti-ai-slop
+    - junior-designer-workflow
+
+# M1 turn-1 discovery form. Three highest-leverage axes per SKILL.md
+# taxonomy: target_age (drives age-appropriate enforcement — the
+# hardest constraint pictureBook has), scene_type (the 5-scene matrix
+# from SKILL.md), and style_family (the 3 style families).
+# character_spec is intentionally NOT a form question — it should
+# come from a prior character skill spec sheet (see SKILL.md §上游
+# skill 接口) rather than be answered ad-hoc here.
+question_form:
+  enabled: true
+  trigger: first_turn_no_form_answered
+  skip_label_key: form.skip
+  questions:
+    - id: target_age
+      label_key: form.pictureBook.target_age.label
+      type: single_select
+      required: true
+      default: age_5_7
+      options:
+        - { value: age_3_5,  label_key: form.pictureBook.target_age.age_3_5 }
+        - { value: age_5_7,  label_key: form.pictureBook.target_age.age_5_7 }
+        - { value: age_7_10, label_key: form.pictureBook.target_age.age_7_10 }
+    - id: scene_type
+      label_key: form.pictureBook.scene_type.label
+      type: single_select
+      required: true
+      default: action
+      options:
+        - { value: opening,    label_key: form.pictureBook.scene_type.opening }
+        - { value: action,     label_key: form.pictureBook.scene_type.action }
+        - { value: emotional,  label_key: form.pictureBook.scene_type.emotional }
+        - { value: dialogue,   label_key: form.pictureBook.scene_type.dialogue }
+        - { value: resolution, label_key: form.pictureBook.scene_type.resolution }
+    - id: style_family
+      label_key: form.pictureBook.style_family.label
+      type: single_select
+      required: true
+      default: watercolor
+      options:
+        - { value: watercolor,  label_key: form.pictureBook.style_family.watercolor }
+        - { value: digital_flat, label_key: form.pictureBook.style_family.digital_flat }
+        - { value: soft_3d,     label_key: form.pictureBook.style_family.soft_3d }
+
+# M2 visual directions fallback. Fires AFTER question_form completes
+# and only when no brand context / no character spec is active.
+# Design doc §0.5 says pictureBook should "弹" (yes for fallback).
+directions_fallback:
+  enabled: true
+  trigger: no_brand_no_direction_selected
+  picker_source: fallback_5
+  skip_label_key: form.skip

@@ -1,0 +1,44 @@
+{
+  "name": "@workmax/desktop-electron",
+  "private": true,
+  "version": "0.1.0-p1-ea",
+  "license": "AGPL-3.0-only",
+  "description": "WorkMax Desktop — Electron shell",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jonnyquan/workmax.git",
+    "directory": "desktop/electron"
+  },
+  "bugs": {
+    "url": "https://github.com/jonnyquan/workmax/issues"
+  },
+  "homepage": "https://github.com/jonnyquan/workmax#readme",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -p . --watch",
+    "start": "electron .",
+    "dev": "npm run build && npm run start",
+    "lint:types": "tsc -p . --noEmit",
+    "check:boundaries": "node ../scripts/check-desktop-boundaries.mjs",
+    "test": "npm run build && node --test dist/*.test.js",
+    "dist:mac": "../scripts/build-mac.sh",
+    "dist:mac:arm64": "../scripts/build-mac.sh arm64",
+    "dist:mac:x64": "../scripts/build-mac.sh x64",
+    "dist:mac:public": "../scripts/build-mac.sh --public-release",
+    "dist:mac:public:arm64": "../scripts/build-mac.sh --public-release arm64",
+    "dist:mac:public:x64": "../scripts/build-mac.sh --public-release x64",
+    "notarize:mac": "../scripts/notarize-mac.sh",
+    "notarize:mac:arm64": "../scripts/notarize-mac.sh arm64",
+    "notarize:mac:x64": "../scripts/notarize-mac.sh x64"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "electron": "^40.0.0",
+    "electron-builder": "^25.0.0",
+    "typescript": "^5.8.3"
+  }
+}

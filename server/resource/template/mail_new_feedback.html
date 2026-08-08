@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New User Feedback</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f6f9fc;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 0;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%);
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0 0 8px 0;
+            font-size: 24px;
+        }
+        .header p {
+            margin: 0;
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        .content {
+            padding: 30px 25px;
+        }
+        .rating-box {
+            text-align: center;
+            padding: 20px;
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .rating-box .stars {
+            font-size: 28px;
+            margin-bottom: 5px;
+        }
+        .rating-box .rating-text {
+            color: #92400e;
+            font-weight: bold;
+        }
+        .info-card {
+            background: #f9fafb;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .info-row {
+            display: flex;
+            padding: 12px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .info-row:last-child {
+            border-bottom: none;
+        }
+        .info-label {
+            font-weight: 600;
+            color: #6366F1;
+            width: 100px;
+            flex-shrink: 0;
+        }
+        .info-value {
+            color: #374151;
+        }
+        .type-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .type-feature_request { background: #dbeafe; color: #1e40af; }
+        .type-bug_report { background: #fee2e2; color: #991b1b; }
+        .type-general { background: #e0e7ff; color: #3730a3; }
+        .type-support { background: #d1fae5; color: #065f46; }
+        .feedback-content-box {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-left: 4px solid #6366F1;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 0 8px 8px 0;
+        }
+        .feedback-content-box h3 {
+            margin: 0 0 15px 0;
+            color: #374151;
+            font-size: 16px;
+        }
+        .feedback-content-box .content-text {
+            color: #4b5563;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .footer {
+            background: #f9fafb;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #6b7280;
+            border-top: 1px solid #e5e7eb;
+        }
+        .footer p {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📬 New User Feedback</h1>
+            <p>WorkMax Server Operator Notification</p>
+        </div>
+        
+        <div class="content">
+            <div class="rating-box">
+                <div class="stars">{{ratingStars}}</div>
+                <div class="rating-text">Rating: {{rating}}/5</div>
+            </div>
+            
+            <div class="info-card">
+                <div class="info-row">
+                    <span class="info-label">Type</span>
+                    <span class="info-value">
+                        <span class="type-badge type-{{feedbackType}}">{{feedbackTypeDisplay}}</span>
+                    </span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">User</span>
+                    <span class="info-value">{{userName}}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Email</span>
+                    <span class="info-value">{{userEmail}}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Time</span>
+                    <span class="info-value">{{timestamp}}</span>
+                </div>
+            </div>
+            
+            <div class="feedback-content-box">
+                <h3>Feedback Content</h3>
+                <div class="content-text">{{content}}</div>
+            </div>
+            
+            <div style="text-align: center; color: #6b7280; font-size: 13px;">
+                Review and triage this event through protected Server operator tooling.
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>This is an automated notification from WorkMax.</p>
+            <p>© 2026 WorkMax - All rights reserved</p>
+        </div>
+    </div>
+</body>
+</html>

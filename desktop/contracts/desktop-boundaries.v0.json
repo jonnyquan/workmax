@@ -1,0 +1,401 @@
+{
+  "schemaVersion": 0,
+  "status": "current-observed",
+  "description": "Current Server/Desktop boundary, including idempotent typed thread creation, the Agent preview, and explicit deferred v1 gaps.",
+  "repositorySurfaces": {
+    "clients": ["desktop"],
+    "services": ["server"],
+    "forbiddenTopLevel": ["web", "admin"]
+  },
+  "renderer": {
+    "source": "desktop/renderer/en/desktop",
+    "currentCapabilities": [
+      "login-transaction-password-sign-in",
+      "cached-thread-list",
+      "cached-message-history",
+      "idempotent-synced-thread-create",
+      "existing-synced-thread-ppt-agent-preview",
+      "agent-turn-stream-and-cancel",
+      "explicit-idempotent-turn-recovery",
+      "session-changed-recovery",
+      "local-official-model-route-settings-api",
+      "typed-model-route-settings-bridge"
+    ],
+    "legacyHostedFallback": false,
+    "runtimePolicy": "packaged-bundled-only-development-explicit",
+    "target": "packaged-bundled-only-with-public-signing-gate"
+  },
+  "typedBridge": {
+    "version": "1.0.0-alpha.7",
+    "global": "desktopBridge",
+    "compatibilityGlobal": "workmaxLocal",
+    "legacyFetchPreserved": true,
+    "routeMethods": [
+      {"bridgeMethod": "auth.status", "routeId": "auth.status"},
+      {"bridgeMethod": "auth.userInfo", "routeId": "auth.userinfo"},
+      {"bridgeMethod": "auth.logout", "routeId": "auth.logout"},
+      {"bridgeMethod": "history.listThreads", "routeId": "agent.threads"},
+      {"bridgeMethod": "history.listMessages", "routeId": "agent.thread-messages"},
+      {"bridgeMethod": "agent.listSkills", "routeId": "agent.skills.catalog"},
+      {"bridgeMethod": "agent.createThread", "routeId": "agent.thread-put"},
+      {"bridgeMethod": "agent.uploadThreadFile", "routeId": "agent.thread-file-upload"},
+      {"bridgeMethod": "agent.listRecoverableTurns", "routeId": "agent.turns-recoverable"},
+      {"bridgeMethod": "agent.startTurn", "routeId": "agent.chat"},
+      {"bridgeMethod": "agent.resumeTurn", "routeId": "agent.turn-replay"},
+      {"bridgeMethod": "agent.cancelTurn", "routeId": "agent.turn-cancel"},
+      {"bridgeMethod": "system.health", "routeId": "health.get"},
+      {"bridgeMethod": "system.diagnostics", "routeId": "system.diagnostics"},
+      {"bridgeMethod": "system.serverVersion", "routeId": "system.server-version"},
+      {"bridgeMethod": "system.triggerSync", "routeId": "system.trigger-sync"},
+      {"bridgeMethod": "system.writeLog", "routeId": "system.log"},
+      {"bridgeMethod": "settings.getModelRoute", "routeId": "settings.model-route.get"},
+      {"bridgeMethod": "settings.putModelRoute", "routeId": "settings.model-route.put"}
+    ],
+    "localMethods": [
+      {
+        "bridgeMethod": "agent.cancelTurn",
+        "kind": "preload-active-turn-cancel-and-sidecar-recovery-cancel"
+      }
+    ],
+    "privilegedRoutes": [
+      {
+        "bridgeMethod": "auth.beginLogin",
+        "routeId": "auth.login-transaction.begin",
+        "ipcId": "auth.begin-login-transaction",
+        "rendererVisibility": "status-only",
+        "rendererInput": {"kind": "none", "fields": []}
+      },
+      {
+        "bridgeMethod": "auth.loginStatus",
+        "routeId": "auth.login-transaction.status",
+        "ipcId": "auth.login-transaction-status",
+        "rendererVisibility": "status-only",
+        "rendererInput": {"kind": "none", "fields": []}
+      },
+      {
+        "bridgeMethod": "auth.submitLoginPassword",
+        "routeId": "auth.login-transaction.password",
+        "ipcId": "auth.submit-login-password",
+        "rendererVisibility": "status-only",
+        "rendererInput": {"kind": "exact-object", "fields": ["email", "password"]}
+      },
+      {
+        "bridgeMethod": "auth.cancelLogin",
+        "routeId": "auth.login-transaction.cancel",
+        "ipcId": "auth.cancel-login-transaction",
+        "rendererVisibility": "status-only",
+        "rendererInput": {"kind": "none", "fields": []}
+      }
+    ],
+    "ipcMethods": [
+      {"bridgeMethod": "auth.beginLogin", "ipcId": "auth.begin-login-transaction"},
+      {"bridgeMethod": "auth.loginStatus", "ipcId": "auth.login-transaction-status"},
+      {"bridgeMethod": "auth.submitLoginPassword", "ipcId": "auth.submit-login-password"},
+      {"bridgeMethod": "auth.cancelLogin", "ipcId": "auth.cancel-login-transaction"},
+      {"bridgeMethod": "system.revealDataDir", "ipcId": "system.reveal-data-dir"}
+    ],
+    "deferredRoutes": [
+      {"routeId": "auth.start", "reason": "legacy-login-start-not-renderer-accessible"},
+      {"routeId": "system.network-state", "reason": "typed-sse-contract-unavailable"}
+    ],
+    "unsupportedNamespaces": [
+      {"namespace": "artifact", "reason": "artifact-routes-unavailable"}
+    ]
+  },
+  "ipc": [
+    {
+      "id": "auth.begin-login-transaction",
+      "command": "auth-begin-login-transaction",
+      "status": "current"
+    },
+    {
+      "id": "auth.login-transaction-status",
+      "command": "auth-login-transaction-status",
+      "status": "current"
+    },
+    {
+      "id": "auth.submit-login-password",
+      "command": "auth-submit-login-password",
+      "status": "current"
+    },
+    {
+      "id": "auth.cancel-login-transaction",
+      "command": "auth-cancel-login-transaction",
+      "status": "current"
+    },
+    {
+      "id": "system.reveal-data-dir",
+      "command": "reveal-data-dir",
+      "status": "current"
+    }
+  ],
+  "loopbackRoutes": [
+    {
+      "id": "health.get",
+      "method": "GET",
+      "path": "/health",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0}
+    },
+    {
+      "id": "auth.status",
+      "method": "GET",
+      "path": "/auth/status",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0}
+    },
+    {
+      "id": "auth.userinfo",
+      "method": "GET",
+      "path": "/auth/userinfo",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0}
+    },
+    {
+      "id": "auth.start",
+      "method": "POST",
+      "path": "/auth/start",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "optional",
+        "contentTypes": ["application/x-www-form-urlencoded", "application/json"],
+        "maxBodyBytes": 4096,
+        "bodyTooLargeError": "request body too large"
+      }
+    },
+    {
+      "id": "auth.login-transaction.begin",
+      "method": "POST",
+      "path": "/auth/login-transaction",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0}
+    },
+    {
+      "id": "auth.login-transaction.status",
+      "method": "GET",
+      "path": "/auth/login-transaction",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0}
+    },
+    {
+      "id": "auth.login-transaction.password",
+      "method": "POST",
+      "path": "/auth/login-transaction/password",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "required", "contentTypes": ["application/json"], "maxBodyBytes": 4096, "bodyTooLargeError": "request body too large"}
+    },
+    {
+      "id": "auth.login-transaction.cancel",
+      "method": "DELETE",
+      "path": "/auth/login-transaction",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0}
+    },
+    {
+      "id": "auth.logout",
+      "method": "POST",
+      "path": "/auth/logout",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "optional", "contentTypes": ["application/json"], "maxBodyBytes": 4096, "bodyTooLargeError": "request body too large"}
+    },
+    {
+      "id": "agent.chat",
+      "method": "POST",
+      "path": "/agent/chat",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "required", "contentTypes": ["application/json"], "maxBodyBytes": 1048576, "bodyTooLargeError": "chat request body too large"},
+      "status": "current"
+    },
+    {
+      "id": "agent.turns-recoverable",
+      "method": "GET",
+      "path": "/agent/turns/recoverable",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0},
+      "status": "current"
+    },
+    {
+      "id": "agent.turn-replay",
+      "method": "POST",
+      "path": "/agent/turns/:uuid/replay",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0},
+      "status": "current"
+    },
+    {
+      "id": "agent.turn-cancel",
+      "method": "POST",
+      "path": "/agent/turns/:uuid/cancel",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0},
+      "status": "current"
+    },
+    {
+      "id": "agent.thread-put",
+      "method": "PUT",
+      "path": "/agent/threads/:uuid",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "required", "contentTypes": ["application/json"], "maxBodyBytes": 4096, "bodyTooLargeError": "thread request body too large"},
+      "status": "current"
+    },
+    {
+      "id": "agent.thread-file-upload",
+      "method": "POST",
+      "path": "/agent/threads/:uuid/files",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "required", "contentTypes": ["multipart/form-data"], "maxBodyBytes": 52428800, "bodyTooLargeError": "request body too large"},
+      "status": "current"
+    },
+    {
+      "id": "agent.skills.catalog",
+      "method": "GET",
+      "path": "/agent/skills/catalog",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0}
+    },
+    {
+      "id": "agent.threads",
+      "method": "GET",
+      "path": "/agent/threads",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0}
+    },
+    {
+      "id": "agent.thread-messages",
+      "method": "GET",
+      "path": "/agent/threads/:uuid/messages",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0}
+    },
+    {
+      "id": "system.network-state",
+      "method": "GET",
+      "path": "/system/network-state",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0}
+    },
+    {
+      "id": "system.log",
+      "method": "POST",
+      "path": "/system/log",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "optional", "contentTypes": ["application/json"], "maxBodyBytes": 65536, "bodyTooLargeError": "renderer log body too large"}
+    },
+    {
+      "id": "system.diagnostics",
+      "method": "GET",
+      "path": "/system/diagnostics",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0}
+    },
+    {
+      "id": "system.server-version",
+      "method": "GET",
+      "path": "/system/server-version",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0}
+    },
+    {
+      "id": "system.trigger-sync",
+      "method": "POST",
+      "path": "/system/trigger-sync",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "optional", "contentTypes": ["application/json"], "maxBodyBytes": 4096, "bodyTooLargeError": "request body too large"}
+    },
+    {
+      "id": "settings.model-route.get",
+      "method": "GET",
+      "path": "/settings/model-route",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "forbidden", "contentTypes": [], "maxBodyBytes": 0}
+    },
+    {
+      "id": "settings.model-route.put",
+      "method": "PUT",
+      "path": "/settings/model-route",
+      "credential": "local-token",
+      "requestPolicy": {"origin": "absent", "body": "required", "contentTypes": ["application/json"], "maxBodyBytes": 8192, "bodyTooLargeError": "model settings body too large"}
+    }
+  ],
+  "cloudRoutes": [
+    {"id": "desktop.oauth.authorize", "method": "GET", "path": "/api/desktop/oauth/authorize", "surface": "desktop-resource", "inventorySource": "sidecar-cloud-proxy"},
+    {"id": "desktop.oauth.token", "method": "POST", "path": "/api/desktop/oauth/token", "surface": "desktop-resource", "inventorySource": "sidecar-cloud-proxy"},
+    {"id": "desktop.oauth.revoke", "method": "POST", "path": "/api/desktop/oauth/revoke", "surface": "desktop-resource", "inventorySource": "sidecar-cloud-proxy"},
+    {"id": "desktop.oauth.userinfo", "method": "GET", "path": "/api/desktop/oauth/userinfo", "surface": "desktop-resource", "inventorySource": "sidecar-cloud-proxy"},
+    {"id": "desktop.sync.threads", "method": "GET", "path": "/api/desktop/sync/threads", "surface": "desktop-resource", "inventorySource": "sidecar-cloud-proxy"},
+    {"id": "desktop.sync.messages", "method": "GET", "path": "/api/desktop/sync/messages", "surface": "desktop-resource", "inventorySource": "sidecar-cloud-proxy"},
+    {"id": "agent.skills", "method": "GET", "path": "/api/work-agent/skills", "surface": "legacy-agent", "status": "legacy", "inventorySource": "sidecar-cloud-proxy"},
+    {"id": "agent.chat", "method": "POST", "path": "/api/work-agent/chat/agent", "surface": "legacy-agent", "status": "legacy", "inventorySource": "sidecar-cloud-proxy"},
+    {"id": "desktop.agent.thread-put", "method": "PUT", "path": "/api/desktop/agent/threads/:uuid", "surface": "desktop-resource", "status": "current", "inventorySource": "sidecar-cloud-proxy"},
+    {"id": "desktop.version", "method": "GET", "path": "/api/desktop/version", "surface": "desktop-resource", "inventorySource": "sidecar-cloud-proxy"},
+    {
+      "id": "desktop.identity.login-transaction.create",
+      "method": "POST",
+      "path": "/api/v1/desktop/identity/login-transactions",
+      "surface": "desktop-resource",
+      "status": "server-contract",
+      "inventorySource": "server-desktop-login-api",
+      "handler": "Create",
+      "caller": "sidecar",
+      "rendererAccess": "forbidden",
+      "credentialPolicy": "desktop-login-bootstrap",
+      "credential": "none",
+      "requestSecrets": ["oauth_state"],
+      "responseSecrets": ["transaction_secret"]
+    },
+    {
+      "id": "desktop.identity.login-transaction.status",
+      "method": "GET",
+      "path": "/api/v1/desktop/identity/login-transactions/:id",
+      "surface": "desktop-resource",
+      "status": "server-contract",
+      "inventorySource": "server-desktop-login-api",
+      "handler": "Status",
+      "caller": "sidecar",
+      "rendererAccess": "forbidden",
+      "credentialPolicy": "desktop-login-transaction",
+      "credential": "DesktopLogin transaction_secret",
+      "requestSecrets": ["transaction_secret"],
+      "responseSecrets": []
+    },
+    {
+      "id": "desktop.identity.login-transaction.password",
+      "method": "POST",
+      "path": "/api/v1/desktop/identity/login-transactions/:id/password",
+      "surface": "desktop-resource",
+      "status": "server-contract",
+      "inventorySource": "server-desktop-login-api",
+      "handler": "CompletePassword",
+      "caller": "sidecar",
+      "rendererAccess": "forbidden",
+      "credentialPolicy": "desktop-login-transaction",
+      "credential": "DesktopLogin transaction_secret",
+      "requestSecrets": ["transaction_secret", "password"],
+      "responseSecrets": ["exchange_token"]
+    },
+    {
+      "id": "desktop.identity.login-transaction.exchange",
+      "method": "POST",
+      "path": "/api/v1/desktop/identity/login-transactions/:id/exchange",
+      "surface": "desktop-resource",
+      "status": "server-contract",
+      "inventorySource": "server-desktop-login-api",
+      "handler": "Exchange",
+      "caller": "sidecar",
+      "rendererAccess": "forbidden",
+      "credentialPolicy": "desktop-login-transaction",
+      "credential": "DesktopExchange exchange_token",
+      "requestSecrets": ["exchange_token"],
+      "responseSecrets": ["authorization_code", "oauth_state", "redirect_location"]
+    }
+  ],
+  "targetGaps": [
+    "durable-turn-attach-replay",
+    "artifact-question-form-workbench",
+    "writer-workbook-media-surfaces",
+    "signed-update-manifest",
+    "sandboxed-renderer",
+    "local-model-inference-execution"
+  ]
+}

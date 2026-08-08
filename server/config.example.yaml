@@ -1,0 +1,253 @@
+# WorkMax Go Server development configuration.
+#
+# Copy this file to config.local.yaml, replace every CHANGE_ME value, and run:
+#   BODO_CONFIG=config.local.yaml go run .
+#
+# config.local.yaml is ignored. Never put live credentials in this template.
+
+system:
+  addr: ":8888"
+  env: development
+  router-prefix: ""
+  # Legacy key retained while auth/email callers migrate. In a Desktop-only
+  # deployment it must be the Go Server origin, never a separate client.
+  frontend_url: "http://127.0.0.1:8888"
+  backend_url: "http://127.0.0.1:8888"
+  admin_email: "admin@example.invalid"
+  server_run_path: "."
+  cron:
+    enable: false
+    email_task: false
+    blog_auto_generation: false
+    tag_stats: false
+    generation_object_cleanup: false
+    credit_reservation_sweeper: false
+    commerce_event_reconciler: false
+  smtp:
+    host: ""
+    port: 587
+    username: ""
+    password: ""
+    from: ""
+    ssl: false
+
+mysql_system:
+  path: "127.0.0.1"
+  port: "3306"
+  config: "charset=utf8mb4&parseTime=True&loc=Local"
+  db-name: "workmax"
+  username: "workmax"
+  password: "CHANGE_ME_LOCAL_DATABASE_PASSWORD"
+  prefix: ""
+  singular: true
+  engine: "InnoDB"
+  max-idle-conns: 10
+  max-open-conns: 50
+  log-mode: "info"
+  log-zap: false
+
+redis:
+  host: "127.0.0.1"
+  port: "6379"
+  password: ""
+  db: 0
+
+zap:
+  level: "debug"
+  prefix: "[workmax]"
+  format: "console"
+  director: "logs"
+  encode-level: "LowercaseColorLevelEncoder"
+  stacktrace-key: "stacktrace"
+  max-age: 7
+  show-line: true
+  log-in-console: true
+
+jwt:
+  signing-key: "CHANGE_ME_LOCAL_JWT_SIGNING_KEY"
+  expires-time: "7d"
+  buffer-time: "1d"
+  issuer: "workmax-local"
+
+credits:
+  signup_bonus: 0
+  invite: 0
+  reward_expire_days: 30
+  checkin:
+    min_per_day: 0
+    max_per_day: 0
+    streak_days: 7
+    streak_bonus: 0
+
+google:
+  client_id: ""
+  client_secret: ""
+  redirect_url: "http://127.0.0.1:8888/api/auth/google/callback"
+
+stripe:
+  mode: "test"
+  # Stripe remains disabled until the Server-owned Desktop billing return
+  # route is implemented and its Desktop resume flow is acceptance-tested.
+  domain: "http://127.0.0.1:8888"
+  test_domain: "http://127.0.0.1:8888"
+  callback_path: "/api/stripe/callback"
+  return_path: "/api/desktop/billing/return"
+  public_key: ""
+  private_key: ""
+  endpoint_secret: ""
+  plans: {}
+  credit_packs: {}
+
+aihub:
+  text:
+    enabled: false
+    endpoint: ""
+    api_key: ""
+    model: ""
+  image_analysis:
+    enabled: false
+    endpoint: ""
+    api_key: ""
+    model: ""
+  tts:
+    enabled: false
+    endpoint: ""
+    api_key: ""
+    model: ""
+  bgm:
+    enabled: false
+    default_path: ""
+    default_gain: 0.15
+  export_color:
+    default_preset: ""
+  local_vector:
+    dimension: 1536
+    memory_limit_mb: 256
+    cache_enabled: true
+    persistence_path: "tmp/vector"
+  rag:
+    enabled: false
+    batch_size: 16
+    similarity_threshold: 0.75
+    max_results: 8
+    cache_ttl: 24
+
+claude_agent:
+  enabled: false
+  timeout: 1800
+  max_turns: 20
+  max_output_tokens: 64000
+  max_thinking_tokens: 31999
+  max_budget_usd: 0
+  workspace_root: "tmp/workspaces"
+  anthropic_log: "warn"
+  setting_sources:
+    - "user"
+  sandbox:
+    enabled: true
+    auto_allow_bash: false
+    excluded_commands: []
+    allow_unsandboxed: false
+    allow_local_binding: false
+    allow_all_unix_sockets: false
+    allow_unix_sockets: []
+    enable_weaker_nested_sandbox: false
+
+# Target Agent platform rollout. No current Router or Worker consumes this
+# block; defaults remain closed until production dependencies are composed.
+agent_platform_rollout:
+  credential:
+    desktop_resource: "off"
+    agent_resource: "off"
+  durable_turn:
+    legacy_shadow: "off"
+    public_api: "off"
+    canary_percent: 0
+    worker: "off"
+    allow_new_starts: false
+  desktop:
+    agent_transport: "legacy"
+  readiness:
+    token_rollover_complete: false
+    active_device_sessions: false
+    sql_store: false
+    atomic_live_event_stream: false
+    worker_lease_fencing: false
+    transactional_outbox: false
+    exactly_once_settlement: false
+
+generator:
+  rate_limit:
+    per_minute: 30
+    per_user_concurrent: 2
+    global_concurrent: 20
+    active_task_limit: 100
+  task_queue:
+    workers: 2
+    max_queue_size: 100
+    task_timeout: 600
+    max_retries: 2
+    recover_threshold: 30
+    recover_limit: 100
+    expire_hours: 24
+  file_upload:
+    max_reference_image_size: 10485760
+    max_remote_asset_size: 20971520
+    remote_asset_timeout_seconds: 15
+    allowed_remote_asset_hosts: []
+  models:
+    local-example:
+      credit_cost: 1
+  storage:
+    type: "local"
+    local:
+      path: "uploads"
+      url_prefix: "/uploads"
+    r2:
+      endpoint: ""
+      region: "auto"
+      bucket: ""
+      access_key_id: ""
+      secret_access_key: ""
+      cdn_url: ""
+      public_url: ""
+      path_prefix: ""
+      force_path_style: false
+      use_presigned_url: false
+      presign_ttl_seconds: 900
+      multipart_threshold_mb: 16
+      multipart_part_size_mb: 8
+
+statics:
+  cdn_base_url: ""
+  r2:
+    endpoint: ""
+    region: "auto"
+    bucket: ""
+    access_key_id: ""
+    secret_access_key: ""
+    public_url: ""
+    force_path_style: false
+    multipart_threshold_mb: 16
+    multipart_part_size_mb: 8
+
+canvas:
+  prompt_guard:
+    max_prompt_len: 0
+    max_negative_prompt_len: 0
+    sensitive_words: []
+    blocked_patterns: []
+  rate_limit:
+    chat:
+      per_minute: 30
+      per_user_concurrent: 3
+    agent:
+      per_minute: 20
+      per_user_concurrent: 2
+    quote:
+      per_minute: 120
+      per_user_concurrent: 6
+    generation:
+      per_minute: 60
+      per_user_concurrent: 5
+    global_concurrent: 200

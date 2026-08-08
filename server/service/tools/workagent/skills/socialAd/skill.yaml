@@ -1,0 +1,116 @@
+# socialAd skill — fully-native (no legacy: block). Body lives in
+# skills/socialAd/SKILL.md, hand-rewritten from the legacy
+# identity_socialAd.md with three additions:
+#   - 5-platform taxonomy (Instagram Feed / Reels / TikTok /
+#     Pinterest / LinkedIn / Facebook) with explicit aspect-ratio
+#     and copy-density per platform
+#   - Explicit 3-pass workflow (concept → generate → deliver) with
+#     Pass-1 ack gate, matching ppt's Junior Designer discipline
+#   - Anti-AI-slop specific to social-ad context (mesh gradients,
+#     emoji-decorated headlines, 6-card feature grids, stock-photo
+#     compositions)
+#
+# Stage D migration:
+#   - Pre-graduation (v1.0.0): skill.yaml carried a `legacy:` block
+#     that pulled identity from prompts/templates/identity_socialAd.md
+#     (28 lines, English bullet list).
+#   - Post-graduation (v2.0.0, this commit): SKILL.md owns the body;
+#     legacy template deleted in the same commit.
+#
+# Why socialAd is a good second graduation (after ppt):
+#   - The legacy template was the thinnest of any visual mode
+#     (28 lines) — high ratio of authoring effort to existing
+#     content displaced.
+#   - SKILL.md now owns the video-variant constraints (5s / 3-5
+#     cuts / sound-off / CTA-last-second) that the retired
+#     service/recipe layer used to inject as a <recipe-context>
+#     block. See SKILL.md §"视频变体" — Recipe was removed because
+#     skill.yaml + SKILL.md already cover all the "thread-scoped
+#     vertical preset" surface area Recipe was designed for.
+name: socialAd
+version: 2.0.0
+description: 社交广告创意设计师 — Instagram / TikTok / Pinterest / LinkedIn / Facebook 五个平台的单帧广告创意。叠加事实验证、资产协议、反 AI slop、Junior Designer 工作流四份横向规则。
+
+artifacts:
+  primary_type: social_ad
+  output_types: [png, jpg, mp4, markdown]
+  preview_types: [image, video, markdown]
+  export_targets: [png, jpg, mp4, zip]
+  critique_anchors: [hierarchy, originality, functionality]
+
+triggers:
+  agent_mode: socialAd
+
+required_inputs:
+  # Surfaced to the model BEFORE generation so it asks rather than
+  # generates blind — matches ppt's pattern. derivePPTMissingFields
+  # has no socialAd equivalent yet; if a Go-side post-mortem
+  # validator lands later, list the fields here in lockstep.
+  # 2026-05-12: `platform` renamed → `target_platform` for
+  # consistency with productShot + mobileStory (the three skills
+  # that take a platform input now share one kind name).
+  - kind: target_platform
+  - kind: aspect_ratio
+    when: platform_implies_multiple_ratios
+  - kind: concept_or_product
+  - kind: brand_assets
+    when: brand_specified
+  - kind: cta_text
+
+references:
+  shared:
+    - fact-verification
+    - asset-protocol
+    - anti-ai-slop
+    - junior-designer-workflow
+  local:
+    - checklist
+
+# M1 turn-1 discovery form. Three axes: platform drives aspect-
+# ratio + safe-zone, ad_objective drives the first-frame hook
+# strategy, cta_style frames the CTA copy guidance.
+# concept_or_product + cta_text stay free-form (SDK turn handles
+# them better than single_select).
+question_form:
+  enabled: true
+  trigger: first_turn_no_form_answered
+  skip_label_key: form.skip
+  questions:
+    - id: platform
+      label_key: form.socialAd.platform.label
+      type: single_select
+      required: true
+      default: instagram
+      options:
+        - { value: instagram,   label_key: form.socialAd.platform.instagram }
+        - { value: tiktok,      label_key: form.socialAd.platform.tiktok }
+        - { value: pinterest,   label_key: form.socialAd.platform.pinterest }
+        - { value: meta_mixed,  label_key: form.socialAd.platform.meta_mixed }
+        - { value: x_twitter,   label_key: form.socialAd.platform.x_twitter }
+    - id: ad_objective
+      label_key: form.socialAd.ad_objective.label
+      type: single_select
+      required: true
+      default: awareness
+      options:
+        - { value: awareness,   label_key: form.socialAd.ad_objective.awareness }
+        - { value: traffic,     label_key: form.socialAd.ad_objective.traffic }
+        - { value: conversion,  label_key: form.socialAd.ad_objective.conversion }
+        - { value: engagement,  label_key: form.socialAd.ad_objective.engagement }
+    - id: cta_style
+      label_key: form.socialAd.cta_style.label
+      type: single_select
+      required: true
+      default: shop_now
+      options:
+        - { value: shop_now,     label_key: form.socialAd.cta_style.shop_now }
+        - { value: learn_more,   label_key: form.socialAd.cta_style.learn_more }
+        - { value: sign_up,      label_key: form.socialAd.cta_style.sign_up }
+        - { value: download,     label_key: form.socialAd.cta_style.download }
+        - { value: book_now,     label_key: form.socialAd.cta_style.book_now }
+
+directions_fallback:
+  enabled: true
+  trigger: no_brand_no_direction_selected
+  picker_source: fallback_5
+  skip_label_key: form.skip
