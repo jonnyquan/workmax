@@ -1459,6 +1459,97 @@ async function testThreadDeleteIsTwoStepAndLocalOnly() {
   );
 }
 
+// The default thread name is minted before the conversation exists, so it is
+// wrong more often than right — and grouping and search key off the title.
+// This drives the rename flow end to end and pins its local-only scope.
+async function testThreadRenameFlow() {
+  const renames = [];
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({
+          items: [
+            { ...thread("00000000-0000-4000-8000-00000000e001", "Untitled presentation"), cloud_sync_state: "local" },
+            { ...thread("00000000-0000-4000-8000-00000000e002", "Cloud deck"), cloud_sync_state: "synced" },
+          ],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      async renameThread(uuid, name) {
+        renames.push({ uuid, name });
+        return typedSuccess({
+          renamed: true,
+          thread: {
+            uuid, name, agent_mode: "ppt", message_count: 1,
+            updated_at: "2026-08-09T00:00:00Z", cloud_sync_state: "local",
+          },
+        });
+      },
+      startTurn() { return { turnID: "t" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  const buttons = walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"));
+
+  // The synced thread first: reading its title must not offer a rename the
+  // sidecar would refuse.
+  buttons[1].click();
+  await settle();
+  assert.equal(
+    document.byId.get("rename-thread-button").hidden,
+    true,
+    "a synced thread's name belongs to the cloud copy; renaming it locally would be undone by sync",
+  );
+
+  buttons[0].click();
+  await settle();
+  assert.equal(document.byId.get("rename-thread-button").hidden, false);
+
+  document.byId.get("rename-thread-button").click();
+  await settle();
+  assert.equal(document.byId.get("rename-thread-form").hidden, false);
+  assert.equal(
+    document.byId.get("rename-thread-input").value,
+    "Untitled presentation",
+    "the form must start from the current name, not empty",
+  );
+
+  document.byId.get("rename-thread-input").value = "Q3 board review";
+  document.byId.get("rename-thread-form").submit();
+  await settle();
+
+  assert.deepEqual(Array.from(renames), [
+    { uuid: "00000000-0000-4000-8000-00000000e001", name: "Q3 board review" },
+  ]);
+  assert.equal(document.byId.get("thread-title").textContent, "Q3 board review");
+  assert.match(
+    document.byId.get("thread-list").textContent,
+    /Q3 board review/,
+    "the sidebar entry must repaint from the server's answer",
+  );
+  assert.equal(document.byId.get("rename-thread-form").hidden, true, "the form closes after saving");
+
+  // Cancel path: open again, change nothing on the wire.
+  document.byId.get("rename-thread-button").click();
+  document.byId.get("rename-thread-input").value = "discarded edit";
+  document.byId.get("rename-thread-cancel").click();
+  await settle();
+  assert.equal(renames.length, 1, "cancel must not send anything");
+  assert.equal(document.byId.get("thread-title").textContent, "Q3 board review");
+}
+
 // An answer the user cannot get out of the window is a screenshot. These are
 // the affordances that make the chat column usable as a work surface rather
 // than a transcript viewer.
@@ -3978,6 +4069,7 @@ await testThreadSearchIsHiddenWithNothingToFilter();
 await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
 await testThreadDeleteIsTwoStepAndLocalOnly();
+await testThreadRenameFlow();
 await testMessageActionsCopyAndReuse();
 await testMessageActionsAbsentWithoutAClipboard();
 await testStreamedAnswerGainsActionsWhenReconcileFails();

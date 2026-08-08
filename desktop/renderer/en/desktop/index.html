@@ -198,7 +198,22 @@
           <header>
             <div>
               <p id="thread-meta"></p>
-              <h2 id="thread-title"></h2>
+              <div class="thread-title-row">
+                <h2 id="thread-title"></h2>
+                <button id="rename-thread-button" type="button" hidden>Rename</button>
+              </div>
+              <form id="rename-thread-form" class="rename-thread-form" hidden>
+                <input
+                  id="rename-thread-input"
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  maxlength="200"
+                  aria-label="Conversation name"
+                />
+                <button id="rename-thread-save" class="primary" type="submit">Save</button>
+                <button id="rename-thread-cancel" type="button">Cancel</button>
+              </form>
             </div>
             <span id="turn-state" class="turn-state">Ready</span>
           </header>

@@ -17,6 +17,7 @@ const ROUTES = {
     agentListModes: defineTypedRoute("agent.listModes", "agent.skills.modes", "GET", "/agent/skills/modes", "none", null),
     agentCreateThread: defineTypedRoute("agent.createThread", "agent.thread-put", "PUT", "/agent/threads/:uuid", "json", "application/json"),
     agentDeleteThread: defineTypedRoute("agent.deleteThread", "agent.thread-delete", "DELETE", "/agent/threads/:uuid", "none", null),
+    agentRenameThread: defineTypedRoute("agent.renameThread", "agent.thread-rename", "PATCH", "/agent/threads/:uuid", "json", "application/json"),
     agentStartTurn: defineTypedRoute("agent.startTurn", "agent.chat", "POST", "/agent/chat", "json", "application/json"),
     agentListRecoverableTurns: defineTypedRoute("agent.listRecoverableTurns", "agent.turns-recoverable", "GET", "/agent/turns/recoverable", "none", null),
     agentResumeTurn: defineTypedRoute("agent.resumeTurn", "agent.turn-replay", "POST", "/agent/turns/:uuid/replay", "none", null),
@@ -64,6 +65,11 @@ function createDesktopBridge(deps) {
         agent: {
             listSkills: () => execute(deps, ROUTES.agentListSkills),
             listModes: () => execute(deps, ROUTES.agentListModes),
+            renameThread: async (threadUUID, name) => {
+                const uuid = validateCanonicalV4UUID(threadUUID, "renameThread threadUUID");
+                const path = ROUTES.agentRenameThread.path.replace(":uuid", encodeURIComponent(uuid));
+                return execute(deps, ROUTES.agentRenameThread, path, JSON.stringify({ name }));
+            },
             deleteThread: async (threadUUID) => {
                 const uuid = validateCanonicalV4UUID(threadUUID, "deleteThread threadUUID");
                 const path = ROUTES.agentDeleteThread.path.replace(":uuid", encodeURIComponent(uuid));

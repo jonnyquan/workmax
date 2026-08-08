@@ -278,3 +278,116 @@ func TestDeleteThread_ScopedToTheCaller(t *testing.T) {
 		t.Errorf("the other identity's thread must survive, rows = %d", n)
 	}
 }
+
+// --- Rename ----------------------------------------------------------------
+// Shares the delete fixture: same identity resolution, same local-only scope,
+// same migrated schema.
+
+func doRename(t *testing.T, base, uuid, body string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPatch, base+"/agent/threads/"+uuid, strings.NewReader(body))
+	req.Header.Set("X-Local-Token", "tok")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func TestRenameThread_UpdatesNameAndBumpsUpdatedAt(t *testing.T) {
+	base, db, _, _ := newDeleteFixture(t)
+	seedLocalThreadForDelete(t, db, localSingleUserUID, deleteTestThreadUUID)
+	// Age the row so the updated_at bump is observable.
+	if err := db.Exec(
+		`UPDATE w_workagent_thread SET updated_at = '2026-01-01T00:00:00Z' WHERE uuid = ?`,
+		deleteTestThreadUUID,
+	).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	resp := doRename(t, base, deleteTestThreadUUID, `{"name":"Q3 板书"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	var body renameAgentThreadResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Renamed || body.Thread.Name != "Q3 板书" {
+		t.Errorf("response = %+v", body)
+	}
+
+	var name, updated string
+	if err := db.Raw(`SELECT name, updated_at FROM w_workagent_thread WHERE uuid = ?`, deleteTestThreadUUID).
+		Row().Scan(&name, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if name != "Q3 板书" {
+		t.Errorf("stored name = %q", name)
+	}
+	if strings.HasPrefix(updated, "2026-01-01") {
+		t.Error("updated_at did not move; the list orders by it and the renamed thread would not surface")
+	}
+}
+
+// The same honesty rule as deletion: a synced thread's name belongs to the
+// cloud copy, and the sync worker would overwrite a local rename.
+func TestRenameThread_RefusesSyncedThreads(t *testing.T) {
+	base, db, _, _ := newDeleteFixture(t)
+	if err := db.Exec(
+		`INSERT INTO w_workagent_thread (uid, uuid, name, cloud_sync_state) VALUES (?, ?, 'Cloud name', 'synced')`,
+		localSingleUserUID, deleteTestThreadUUID,
+	).Error; err != nil {
+		t.Fatal(err)
+	}
+	resp := doRename(t, base, deleteTestThreadUUID, `{"name":"local edit"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	var name string
+	_ = db.Raw(`SELECT name FROM w_workagent_thread WHERE uuid = ?`, deleteTestThreadUUID).Row().Scan(&name)
+	if name != "Cloud name" {
+		t.Errorf("name changed to %q despite the refusal", name)
+	}
+}
+
+func TestRenameThread_RejectsMalformedNames(t *testing.T) {
+	base, db, _, _ := newDeleteFixture(t)
+	seedLocalThreadForDelete(t, db, localSingleUserUID, deleteTestThreadUUID)
+
+	for label, body := range map[string]string{
+		"empty":         `{"name":"   "}`,
+		"too long":      `{"name":"` + strings.Repeat("x", 201) + `"}`,
+		"unknown field": `{"name":"ok","uid":1}`,
+		"not json":      `name=ok`,
+	} {
+		resp := doRename(t, base, deleteTestThreadUUID, body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", label, resp.StatusCode)
+		}
+	}
+	var name string
+	_ = db.Raw(`SELECT name FROM w_workagent_thread WHERE uuid = ?`, deleteTestThreadUUID).Row().Scan(&name)
+	if name != "Doomed" {
+		t.Errorf("a refused rename must leave the name alone, got %q", name)
+	}
+}
+
+func TestRenameThread_ScopedToTheCaller(t *testing.T) {
+	base, db, _, _ := newDeleteFixture(t)
+	if err := db.Exec(
+		`INSERT INTO w_workagent_thread (uid, uuid, name, cloud_sync_state) VALUES (?, ?, 'Not yours', 'local')`,
+		localSingleUserUID+1, deleteTestThreadUUID,
+	).Error; err != nil {
+		t.Fatal(err)
+	}
+	resp := doRename(t, base, deleteTestThreadUUID, `{"name":"mine now"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}

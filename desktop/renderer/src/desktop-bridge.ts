@@ -290,6 +290,13 @@ export type AgentCreateThreadResult =
  * What a local thread deletion removed. Counts rather than a bare boolean so
  * a support transcript can tell a clean delete from one that left residue.
  */
+/** The row as the sidecar sees it after a rename — painted, not trusted from
+ * the renderer's optimistic copy. */
+export interface AgentThreadRenameResult {
+  renamed: boolean;
+  thread: LocalThread;
+}
+
 export interface AgentThreadDeleteResult {
   deleted: boolean;
   messages: number;
@@ -437,6 +444,10 @@ export interface DesktopBridge {
     deleteThread: (
       threadUUID: string
     ) => Promise<DesktopBridgeResult<AgentThreadDeleteResult>>;
+    renameThread: (
+      threadUUID: string,
+      name: string
+    ) => Promise<DesktopBridgeResult<AgentThreadRenameResult>>;
     createThread: (
       input: AgentCreateThreadInput
     ) => Promise<DesktopBridgeResult<AgentCreateThreadResult>>;
@@ -531,7 +542,7 @@ type TypedRequestBody = "none" | "json" | "multipart";
 interface TypedRouteSpec {
   bridgeMethod: string;
   routeID: string;
-  method: "GET" | "POST" | "PUT" | "DELETE";
+  method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
   path: string;
   body: TypedRequestBody;
   contentType: "application/json" | null;
@@ -540,7 +551,7 @@ interface TypedRouteSpec {
 function defineTypedRoute(
   bridgeMethod: string,
   routeID: string,
-  method: "GET" | "POST" | "PUT" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH",
   path: string,
   body: TypedRequestBody,
   contentType: "application/json" | null
@@ -602,6 +613,14 @@ const ROUTES = {
     "/agent/threads/:uuid",
     "none",
     null
+  ),
+  agentRenameThread: defineTypedRoute(
+    "agent.renameThread",
+    "agent.thread-rename",
+    "PATCH",
+    "/agent/threads/:uuid",
+    "json",
+    "application/json"
   ),
   agentStartTurn: defineTypedRoute(
     "agent.startTurn",
@@ -741,6 +760,19 @@ export function createDesktopBridge(
       listSkills: () =>
         execute<AgentSkillCatalog>(deps, ROUTES.agentListSkills),
       listModes: () => execute<AgentModes>(deps, ROUTES.agentListModes),
+      renameThread: async (threadUUID, name) => {
+        const uuid = validateCanonicalV4UUID(threadUUID, "renameThread threadUUID");
+        const path = ROUTES.agentRenameThread.path.replace(
+          ":uuid",
+          encodeURIComponent(uuid)
+        );
+        return execute<AgentThreadRenameResult>(
+          deps,
+          ROUTES.agentRenameThread,
+          path,
+          JSON.stringify({ name })
+        );
+      },
       deleteThread: async (threadUUID) => {
         const uuid = validateCanonicalV4UUID(threadUUID, "deleteThread threadUUID");
         const path = ROUTES.agentDeleteThread.path.replace(

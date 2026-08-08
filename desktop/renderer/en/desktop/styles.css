@@ -565,6 +565,45 @@ textarea:focus-visible {
   border-bottom: 1px solid hsl(var(--border));
 }
 
+/* Title with its rename control beside it; the inline form swaps in for the
+   title, not on top of it. */
+.thread-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#rename-thread-button {
+  height: auto;
+  padding: 2px 8px;
+  background: hsl(var(--card));
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.rename-thread-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.rename-thread-form[hidden] {
+  display: none;
+}
+
+.rename-thread-form input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 14px;
+}
+
 .turn-state {
   flex: none;
   margin-top: 2px;

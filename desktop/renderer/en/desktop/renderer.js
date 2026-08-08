@@ -1860,6 +1860,82 @@ function updateSelectedThreadHeading() {
   if (!thread) return;
   threadTitle.textContent = thread.name || "Untitled thread";
   threadMeta.textContent = `${thread.agent_mode || "agent"} · ${thread.message_count || 0} messages · ${formatDate(thread.updated_at)}`;
+  // Rename lives where the title is read, and only where the sidecar would
+  // accept it: a synced thread's name belongs to the cloud copy, which the
+  // sync worker would restore over any local edit.
+  const renameButton = document.querySelector("#rename-thread-button");
+  if (renameButton) {
+    renameButton.hidden =
+      thread.cloud_sync_state !== "local" || !renameThreadBridgeAvailable();
+  }
+  closeRenameForm();
+}
+
+function renameThreadBridgeAvailable() {
+  return typeof window.desktopBridge?.agent?.renameThread === "function";
+}
+
+function closeRenameForm() {
+  const form = document.querySelector("#rename-thread-form");
+  const titleRow = document.querySelector("#thread-title");
+  if (form) form.hidden = true;
+  if (titleRow) titleRow.hidden = false;
+}
+
+function openRenameForm() {
+  const thread = state.threads.find(
+    (candidate) => candidate.uuid === state.selectedThreadUUID
+  );
+  if (!thread) return;
+  const form = document.querySelector("#rename-thread-form");
+  const input = document.querySelector("#rename-thread-input");
+  if (!form || !input) return;
+  input.value = thread.name || "";
+  form.hidden = false;
+  threadTitle.hidden = true;
+  input.focus();
+  if (typeof input.select === "function") input.select();
+}
+
+async function submitRename() {
+  const threadUUID = state.selectedThreadUUID;
+  const input = document.querySelector("#rename-thread-input");
+  const agent = window.desktopBridge?.agent;
+  if (!threadUUID || !input || !agent) return;
+  const name = input.value.trim();
+  if (name === "" || utf8ByteLength(name) > MAX_THREAD_NAME_BYTES) {
+    setStatus("Enter a name up to 200 characters.", "error");
+    return;
+  }
+  let result;
+  try {
+    result = parseDesktopBridgeResult(
+      await agent.renameThread(threadUUID, name),
+      "agent rename result"
+    );
+  } catch {
+    setStatus("Could not rename the conversation.", "error");
+    return;
+  }
+  if (!result.ok) {
+    setStatus("Could not rename the conversation.", "error");
+    return;
+  }
+  // The selection may have moved while the request was in flight; the rename
+  // still happened, but this response must not repaint someone else's title.
+  const entry = state.threads.find((t) => t.uuid === threadUUID);
+  const serverThread = isRecord(result.data) ? result.data.thread : null;
+  if (entry && isRecord(serverThread) && typeof serverThread.name === "string") {
+    entry.name = serverThread.name;
+    if (typeof serverThread.updated_at === "string") {
+      entry.updated_at = serverThread.updated_at;
+    }
+  }
+  renderThreads();
+  if (state.selectedThreadUUID === threadUUID) {
+    updateSelectedThreadHeading();
+  }
+  setStatus("Conversation renamed.");
 }
 
 function chooseModeForThread(thread) {
@@ -4237,6 +4313,28 @@ renderTaskContext();
 
 // Filtering is local and instant: the thread list is already in memory, so
 // there is nothing to debounce and no request to make.
+const renameThreadButton = document.querySelector("#rename-thread-button");
+if (renameThreadButton) {
+  renameThreadButton.addEventListener("click", () => {
+    openRenameForm();
+  });
+}
+const renameThreadForm = document.querySelector("#rename-thread-form");
+if (renameThreadForm) {
+  renameThreadForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submitRename().finally(() => {
+      closeRenameForm();
+    });
+  });
+}
+const renameThreadCancel = document.querySelector("#rename-thread-cancel");
+if (renameThreadCancel) {
+  renameThreadCancel.addEventListener("click", () => {
+    closeRenameForm();
+  });
+}
+
 const threadSearchInput = document.querySelector("#thread-search");
 if (threadSearchInput) {
   threadSearchInput.addEventListener("input", () => {

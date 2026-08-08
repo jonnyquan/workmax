@@ -75,6 +75,10 @@
         "routeId": "agent.thread-delete"
       },
       {
+        "bridgeMethod": "agent.renameThread",
+        "routeId": "agent.thread-rename"
+      },
+      {
         "bridgeMethod": "agent.uploadThreadFile",
         "routeId": "agent.thread-file-upload"
       },
@@ -417,6 +421,21 @@
         "body": "forbidden",
         "contentTypes": [],
         "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "agent.thread-rename",
+      "method": "PATCH",
+      "path": "/agent/threads/:uuid",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 4096,
+        "bodyTooLargeError": "request body too large"
       }
     },
     {

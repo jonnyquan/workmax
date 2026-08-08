@@ -99,6 +99,7 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	newCurrentSidecarRoutePolicy("agent.turn-cancel", http.MethodPost, "/agent/turns/:uuid/cancel", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-put", http.MethodPut, "/agent/threads/:uuid", SidecarBodyRequired, maxAgentThreadPutBodyBytes, "application/json"),
 	newCurrentSidecarRoutePolicy("agent.thread-delete", http.MethodDelete, "/agent/threads/:uuid", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("agent.thread-rename", http.MethodPatch, "/agent/threads/:uuid", SidecarBodyRequired, maxAgentThreadRenameBodyBytes, "application/json"),
 	newCurrentSidecarRoutePolicy("agent.skills.catalog", http.MethodGet, "/agent/skills/catalog", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.skills.modes", http.MethodGet, "/agent/skills/modes", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.threads", http.MethodGet, "/agent/threads", SidecarBodyForbidden, 0),
@@ -289,6 +290,8 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handlePutAgentThread, true
 	case "agent.thread-delete":
 		return s.handleDeleteAgentThread, true
+	case "agent.thread-rename":
+		return s.handleRenameAgentThread, true
 	case "agent.thread-file-list":
 		return s.handleListThreadFiles, true
 	case "agent.thread-file-upload":
