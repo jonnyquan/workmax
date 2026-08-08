@@ -784,3 +784,42 @@ func TestEnsureAgentTurnIntent_EmptyLeaseLocalUID(t *testing.T) {
 		t.Fatalf("intent uid = %d, want %d", intent.UID, localSingleUserUID)
 	}
 }
+
+// L2 dispatch: the protocol the user chose in model settings picks the local
+// engine. anthropic_compatible with a wired CLI goes to the tool loop;
+// everything else — including anthropic_compatible with no CLI — stays on L1
+// pure chat rather than failing.
+func TestLocalTurnRunner_DispatchesByProtocol(t *testing.T) {
+	db := openServerTestDB(t)
+	l1 := &fakeLocalRunner{}
+	l2 := &fakeLocalRunner{}
+
+	// ensureLocalModelSettingsDB creates the table and seeds openai; overwrite
+	// with the anthropic profile for the dispatch-to-L2 case.
+	anthropic := ensureLocalModelSettingsDB(t, db)
+	if _, err := anthropic.Put(LocalModelSettingsPut{
+		PreferredRoute: ModelRouteLocal,
+		Local: &LocalModelProfilePut{
+			Protocol: LocalProtocolAnthropicCompatible,
+			BaseURL:  "http://127.0.0.1:1", ModelID: "m",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{cfg: ServerConfig{ModelSettings: anthropic, LocalInference: l1, LocalAgent: l2}}
+	if got := srv.localTurnRunner(); got != TurnRunner(l2) {
+		t.Error("anthropic_compatible with a CLI must dispatch to the tool loop")
+	}
+
+	srv = &Server{cfg: ServerConfig{ModelSettings: anthropic, LocalInference: l1, LocalAgent: nil}}
+	if got := srv.localTurnRunner(); got != TurnRunner(l1) {
+		t.Error("no CLI wired: anthropic_compatible must fall back to L1, not fail")
+	}
+
+	openai := ensureLocalModelSettingsDB(t, openServerTestDB(t))
+	srv = &Server{cfg: ServerConfig{ModelSettings: openai, LocalInference: l1, LocalAgent: l2}}
+	if got := srv.localTurnRunner(); got != TurnRunner(l1) {
+		t.Error("openai_compatible must stay on L1 even when a tool loop is wired")
+	}
+}

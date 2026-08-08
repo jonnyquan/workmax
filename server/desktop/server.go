@@ -118,6 +118,11 @@ type ServerConfig struct {
 	// (shouldUseLocalRoute returns false); production Main wires the engine.
 	LocalInference TurnRunner
 
+	// LocalAgent runs L2 tool-loop turns (Claude Agent SDK + claude CLI) for
+	// anthropic_compatible local models. Nil → those turns fall back to
+	// LocalInference pure chat. Dispatch: Server.localTurnRunner.
+	LocalAgent TurnRunner
+
 	// LocalFiles persists file attachments uploaded via
 	// POST /agent/threads/:uuid/files to local disk + w_workagent_thread_file,
 	// for use as model context in local turns (L3b). Nil → upload route returns 503.

@@ -4,6 +4,8 @@ go 1.25.0
 
 require server v0.0.0
 
+require github.com/jonnyquan/claude-agent-sdk-go v0.0.0-20260725181726-31b018f42ae4 // indirect
+
 require (
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/bytedance/sonic v1.13.2 // indirect

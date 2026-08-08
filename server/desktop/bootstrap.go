@@ -36,6 +36,7 @@ import (
 
 	"server/desktop/buildinfo"
 	cloudproxy "server/desktop/cloud_proxy"
+	localagent "server/desktop/local_agent"
 	localinference "server/desktop/local_inference"
 	localrender "server/desktop/local_render"
 	desktopsync "server/desktop/sync"
@@ -357,6 +358,27 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 		knowledge.Hooks,
 	)
 
+	// Local agent engine (L2): the tool loop, for anthropic_compatible local
+	// models. Gated on a claude CLI being named explicitly — L2d grows the
+	// packaged download; until then the operator points at a binary. No CLI
+	// simply means anthropic_compatible turns run as L1 pure chat.
+	var localAgent TurnRunner
+	if cliPath := os.Getenv("WORKMAX_CLAUDE_CLI_PATH"); cliPath != "" {
+		if info, statErr := os.Stat(cliPath); statErr != nil || info.IsDir() {
+			log.Printf("local agent: WORKMAX_CLAUDE_CLI_PATH=%q is not a usable binary (%v); tool loop disabled", cliPath, statErr)
+		} else {
+			localAgent = localagent.NewEngine(
+				&LocalModelProfileReader{Store: modelSettings},
+				dbRes.DB,
+				localFiles,
+				knowledge.Hooks,
+				cliPath,
+				filepath.Join(dbRes.DataDir, "agent_workspace"),
+			)
+			log.Printf("local agent: tool loop available (cli=%s)", cliPath)
+		}
+	}
+
 	// 4. Build & bind the HTTP server.
 	srv, err := NewServer(ServerConfig{
 		SidecarVersion:   version,
@@ -377,6 +399,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 		IntegrityCheck:   dbRes.IntegrityCheck,
 		ModelSettings:    modelSettings,
 		LocalInference:   localInference,
+		LocalAgent:       localAgent,
 		LocalFiles:       localFiles,
 		KnowledgeIndex:   knowledge.Index,
 	})

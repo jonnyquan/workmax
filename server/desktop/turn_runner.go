@@ -21,6 +21,22 @@ type TurnRunner interface {
 // 且 LocalInference/ModelSettings 均已接线时为 true。本地 profile 是否填妥
 // （base_url/model_id）不在此判断——由 Engine.Chat 显式报 proxy_error
 // （遵循 OSS-4：禁止静默跨路由回退，route=local 但未配置时宁可报错也不走云端）。
+// localTurnRunner picks which local engine serves this turn. The protocol is
+// the fork the user already chose in their model settings: the tool loop
+// speaks only the Anthropic wire protocol (kill-checked), so
+// anthropic_compatible goes to L2 when a CLI is wired, and everything else —
+// including anthropic_compatible with no CLI — runs as L1 pure chat rather
+// than failing.
+func (s *Server) localTurnRunner() TurnRunner {
+	if s.cfg.LocalAgent != nil && s.cfg.ModelSettings != nil {
+		if dto, err := s.cfg.ModelSettings.Get(); err == nil &&
+			dto.Local.Protocol == LocalProtocolAnthropicCompatible {
+			return s.cfg.LocalAgent
+		}
+	}
+	return s.cfg.LocalInference
+}
+
 func (s *Server) shouldUseLocalRoute() bool {
 	if s.cfg.LocalInference == nil || s.cfg.ModelSettings == nil {
 		return false

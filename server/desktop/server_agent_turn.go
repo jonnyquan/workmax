@@ -265,7 +265,7 @@ func (s *Server) streamLegacyAgentTurn(c *gin.Context, input legacyAgentTurnStre
 	}
 	var chatErr error
 	if useLocal {
-		chatErr = s.cfg.LocalInference.Chat(c.Request.Context(), chatReq, destination)
+		chatErr = s.localTurnRunner().Chat(c.Request.Context(), chatReq, destination)
 	} else {
 		chatReq.ExpectedLease = input.Lease
 		chatReq.Body = payload

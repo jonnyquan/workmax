@@ -335,7 +335,7 @@ func TestEngine_AnnouncesRetrievedSources(t *testing.T) {
 // credit a document the model never saw.
 func TestPrependKnowledgeContextReportsOnlyWhatFitted(t *testing.T) {
 	big := strings.Repeat("x", maxRetrievalContextChars)
-	text, used := prependKnowledgeContext("question", []RetrievedSource{
+	text, used := PrependKnowledgeContext("question", []RetrievedSource{
 		{Kind: "file", Label: "kept.md", Text: big},
 		{Kind: "file", Label: "dropped.md", Text: "this one is over budget"},
 	})
@@ -350,7 +350,7 @@ func TestPrependKnowledgeContextReportsOnlyWhatFitted(t *testing.T) {
 // Every candidate blank or over budget means no context was added. Returning
 // the preamble with an empty list would tell the model it had sources.
 func TestPrependKnowledgeContextLeavesPromptAloneWhenNothingFits(t *testing.T) {
-	text, used := prependKnowledgeContext("question", []RetrievedSource{
+	text, used := PrependKnowledgeContext("question", []RetrievedSource{
 		{Kind: "file", Label: "blank.md", Text: "   "},
 	})
 	if used != nil {
@@ -957,7 +957,7 @@ func TestLoadThreadHistory_BudgetDropsOldestFirst(t *testing.T) {
 	seedHistoryRow(t, db, 1, "middle question", big, "key-mid")
 	seedHistoryRow(t, db, 1, "newest question", "newest answer", "key-new")
 
-	history, err := loadThreadHistory(db, engineTestUID, 1, "none")
+	history, err := LoadThreadHistory(db, engineTestUID, 1, "none")
 	if err != nil {
 		t.Fatal(err)
 	}

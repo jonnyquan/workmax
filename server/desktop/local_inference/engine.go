@@ -223,18 +223,18 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 			log.Printf("knowledge: retrieve for turn %s: %v", req.TurnUUID, rerr)
 		} else if len(found) > 0 {
 			var used []RetrievedSource
-			userText, used = prependKnowledgeContext(req.UserText, found)
+			userText, used = PrependKnowledgeContext(req.UserText, found)
 			// Announced before the first token, and built from `used` rather
 			// than `found`: the char budget below drops the tail, and a panel
 			// listing sources the model never saw would be a confident lie.
-			emitRetrievalEvent(dst, used)
+			EmitRetrievalEvent(dst, used)
 		}
 	}
 	// Without this the local route was stateless: every turn sent only the
 	// current prompt, so "expand on the second point" reached a model that had
 	// never seen any points. Failure degrades to an empty history — a turn
 	// that forgets is better than a turn that errors.
-	history, herr := loadThreadHistory(e.db, req.UID, req.ThreadID, requestID)
+	history, herr := LoadThreadHistory(e.db, req.UID, req.ThreadID, requestID)
 	if herr != nil {
 		log.Printf("local inference: history for thread %d: %v", req.ThreadID, herr)
 		history = nil
@@ -304,11 +304,11 @@ const (
 	knowledgeContextPreamble = "以下是知识库中可能相关的内容，回答时可参考：\n"
 )
 
-// prependKnowledgeContext packs retrieved sources (best first) under a char
+// PrependKnowledgeContext packs retrieved sources (best first) under a char
 // budget and prepends them to the user text as model context. It returns the
 // sources that actually made it in, so the caller can report exactly what the
 // model was given rather than what the search returned.
-func prependKnowledgeContext(userText string, sources []RetrievedSource) (string, []RetrievedSource) {
+func PrependKnowledgeContext(userText string, sources []RetrievedSource) (string, []RetrievedSource) {
 	var b strings.Builder
 	b.WriteString(knowledgeContextPreamble)
 	used := 0
@@ -344,14 +344,14 @@ func prependKnowledgeContext(userText string, sources []RetrievedSource) (string
 // passage, not the whole document echoed down an SSE frame.
 const retrievalSnippetChars = 240
 
-// emitRetrievalEvent tells the renderer what grounded the answer, before the
+// EmitRetrievalEvent tells the renderer what grounded the answer, before the
 // answer starts arriving.
 //
 // It is a non-terminal event on the same stream the text arrives on, so it
 // cannot race the turn it describes. A renderer that does not know the event
 // name surfaces it as "unknown" and carries on — the shim's unknown-event path
 // exists for exactly this kind of addition.
-func emitRetrievalEvent(dst cloudproxy.SSEWriter, sources []RetrievedSource) {
+func EmitRetrievalEvent(dst cloudproxy.SSEWriter, sources []RetrievedSource) {
 	if len(sources) == 0 {
 		return
 	}
@@ -394,7 +394,7 @@ func truncateRunes(s string, max int) string {
 	return string(runes[:max]) + "…"
 }
 
-// loadThreadHistory returns the thread's prior completed exchanges as
+// LoadThreadHistory returns the thread's prior completed exchanges as
 // alternating user/assistant messages, oldest first, within the history caps.
 //
 // Only rows where both halves exist are used. An interrupted answer would put
@@ -403,7 +403,7 @@ func truncateRunes(s string, max int) string {
 // value on any protocol. The current turn's own row is excluded by its
 // idempotency key: on a replay it already exists, and a model that receives
 // the question twice tends to answer it twice.
-func loadThreadHistory(db *gorm.DB, uid uint64, threadID uint64, excludeRequestID string) ([]Message, error) {
+func LoadThreadHistory(db *gorm.DB, uid uint64, threadID uint64, excludeRequestID string) ([]Message, error) {
 	if db == nil || threadID == 0 {
 		return nil, nil
 	}
