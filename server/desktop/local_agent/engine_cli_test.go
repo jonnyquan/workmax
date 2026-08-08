@@ -261,3 +261,103 @@ func TestIntegration_EmptyAPIKeyStillRuns(t *testing.T) {
 		t.Fatalf("tool loop did not run: %v", err)
 	}
 }
+
+// escapeFake scripts a model that first tries to write OUTSIDE the workspace,
+// then — told off by the security hook — writes inside it. The interesting
+// assertions are on the filesystem: the escape file must not exist.
+type escapeFake struct {
+	workspace  string
+	escapePath string
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *escapeFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	f.calls++
+	call := f.calls
+	f.mu.Unlock()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	sseWrite(w, "message_start", map[string]any{"type": "message_start", "message": map[string]any{
+		"id": "msg_esc", "type": "message", "role": "assistant", "model": "fake",
+		"content": []any{}, "stop_reason": nil,
+		"usage": map[string]any{"input_tokens": 1, "output_tokens": 1}}})
+	switch call {
+	case 1:
+		writeToolUse(w, f.escapePath, "should never land")
+	case 2:
+		writeToolUse(w, filepath.Join(f.workspace, "inside.txt"), "landed where allowed")
+	default:
+		sseWrite(w, "content_block_start", map[string]any{"type": "content_block_start", "index": 0,
+			"content_block": map[string]any{"type": "text", "text": ""}})
+		sseWrite(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": 0,
+			"delta": map[string]any{"type": "text_delta", "text": "ESCAPE-HANDLED"}})
+		sseWrite(w, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+		sseWrite(w, "message_delta", map[string]any{"type": "message_delta",
+			"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil},
+			"usage": map[string]any{"output_tokens": 2}})
+	}
+	if call <= 2 {
+		sseWrite(w, "message_delta", map[string]any{"type": "message_delta",
+			"delta": map[string]any{"stop_reason": "tool_use", "stop_sequence": nil},
+			"usage": map[string]any{"output_tokens": 5}})
+	}
+	sseWrite(w, "message_stop", map[string]any{"type": "message_stop"})
+}
+
+func writeToolUse(w http.ResponseWriter, path, content string) {
+	input, _ := json.Marshal(map[string]string{"file_path": path, "content": content})
+	sseWrite(w, "content_block_start", map[string]any{"type": "content_block_start", "index": 0,
+		"content_block": map[string]any{"type": "tool_use", "id": "toolu_esc", "name": "Write", "input": map[string]any{}}})
+	sseWrite(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": 0,
+		"delta": map[string]any{"type": "input_json_delta", "partial_json": string(input)}})
+	sseWrite(w, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+}
+
+// The boundary, exercised through the whole stack: SDK → CLI → PreToolUse
+// hook → deny → the model corrects course. The escape file must never touch
+// the disk, the denial must be narrated on the stream, and the turn must
+// still complete — a blocked tool is a corrected step, not a dead turn.
+func TestIntegration_WorkspaceEscapeIsDeniedAndNarrated(t *testing.T) {
+	db := openTestDB(t)
+	seedThreadRow(t, db)
+
+	escapePath := filepath.Join(t.TempDir(), "escape-proof.txt")
+	fake := &escapeFake{escapePath: escapePath}
+	upstream := httptest.NewServer(fake)
+	t.Cleanup(upstream.Close)
+
+	engine, workspace := newCLIEngine(t, db, upstream.URL)
+	fake.workspace = workspace
+
+	dst := &memSSEWriter{}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if err := engine.Chat(ctx, chatReq(), dst); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	if _, err := os.Stat(escapePath); !os.IsNotExist(err) {
+		t.Fatalf("the escape file reached the disk: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "inside.txt")); err != nil {
+		t.Errorf("the corrected in-workspace write must succeed: %v", err)
+	}
+
+	frames, _ := dst.snapshot()
+	sawDenied := false
+	for _, f := range frames {
+		if f.Type == "tool_denied" {
+			sawDenied = true
+			if !strings.Contains(f.Data, "Write") {
+				t.Errorf("denial payload must name the tool: %s", f.Data)
+			}
+		}
+	}
+	if !sawDenied {
+		t.Error("the denial must be narrated on the stream")
+	}
+}

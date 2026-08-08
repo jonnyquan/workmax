@@ -161,7 +161,16 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 		})
 	}
 
-	iter, qerr := e.query(ctx, prompt, e.buildQueryOptions(baseURL, apiKey, modelID, workspace)...)
+	// A denied tool is narrated on the same stream as everything else, so the
+	// user sees what the agent tried rather than an answer that silently lost
+	// a step. Name and reason only — the blocked input can hold anything.
+	onDeny := func(tool, reason string) {
+		_ = dst.WriteEvent(cloudproxy.SSEEvent{
+			Type: "tool_denied",
+			Data: mustJSON(map[string]string{"name": tool, "reason": reason}),
+		})
+	}
+	iter, qerr := e.query(ctx, prompt, e.buildQueryOptions(baseURL, apiKey, modelID, workspace, onDeny)...)
 	if qerr != nil {
 		if errors.Is(qerr, context.Canceled) || errors.Is(qerr, context.DeadlineExceeded) {
 			return qerr
@@ -252,16 +261,56 @@ const retrievalTopK = 4
 // configured base URL.
 const placeholderAPIKey = "workmax-local-no-key"
 
+// securityHook gates every tool call against the workspace path policy
+// before the CLI executes it. Denials are reported to the renderer through
+// onDeny — a blocked tool is part of the turn's story, not a secret.
+//
+// Deliberate deviation from the cloud hook it descends from: an unparseable
+// payload DENIES. The cloud fails open to keep a multi-tenant conversation
+// moving; this loop runs with bypassPermissions on the user's own machine,
+// and a validator that has gone blind must stop the tool, not wave it
+// through. If an SDK shape change trips this, turns fail visibly and the
+// fix is one struct away — the quiet alternative is unvalidated file access.
+func securityHook(guard *pathValidator, onDeny func(tool, reason string)) claudesdk.HookCallback {
+	return func(input claudesdk.HookInput, _ *string, _ claudesdk.HookContext) (claudesdk.HookJSONOutput, error) {
+		inputMap, ok := input.(map[string]any)
+		if !ok {
+			log.Printf("local agent security: unexpected hook input type %T; denying", input)
+			return claudesdk.NewPreToolUseOutput(claudesdk.PermissionDecisionDeny,
+				"security hook could not read the tool call", nil), nil
+		}
+		toolName, _ := inputMap["tool_name"].(string)
+		toolInput := map[string]any{}
+		if cast, ok := inputMap["tool_input"].(map[string]any); ok && cast != nil {
+			toolInput = cast
+		}
+		if err := guard.validateToolCall(toolName, toolInput); err != nil {
+			log.Printf("local agent security: BLOCKED %s: %v", toolName, err)
+			if onDeny != nil {
+				onDeny(toolName, err.Error())
+			}
+			return claudesdk.NewPreToolUseOutput(claudesdk.PermissionDecisionDeny,
+				fmt.Sprintf("Security violation: %v", err), nil), nil
+		}
+		return claudesdk.NewPreToolUseOutput(claudesdk.PermissionDecisionAllow, "", nil), nil
+	}
+}
+
 // buildQueryOptions reproduces the kill-checked isolation recipe exactly.
 //
 // HOME points into the workspace root, not the user's: the CLI must not read
 // ~/.claude — the user's hooks, settings, and login state belong to their
 // interactive sessions, not to a turn running on their configured endpoint.
-func (e *Engine) buildQueryOptions(baseURL, apiKey, modelID, workspace string) []claudesdk.Option {
+func (e *Engine) buildQueryOptions(baseURL, apiKey, modelID, workspace string, onDeny func(tool, reason string)) []claudesdk.Option {
 	if apiKey == "" {
 		apiKey = placeholderAPIKey
 	}
+	matchAll := "*"
 	return []claudesdk.Option{
+		claudesdk.WithHook(claudesdk.HookEventPreToolUse, claudesdk.HookMatcher{
+			Matcher: &matchAll,
+			Hooks:   []claudesdk.HookCallback{securityHook(newPathValidator(workspace), onDeny)},
+		}),
 		claudesdk.WithCLIPath(e.cliPath),
 		claudesdk.WithCwd(workspace),
 		claudesdk.WithModel(modelID),
