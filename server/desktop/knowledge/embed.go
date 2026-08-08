@@ -237,9 +237,23 @@ func libOnnxName() string {
 //	<res>/knowledge/model.onnx
 //	<res>/knowledge/tokenizer.json
 //
-// This lets the packaged sidecar point at the Electron extraResources folder
-// via a single env var, while dev/tests can override any field individually.
+// This lets the packaged sidecar point at its bundled resources folder via a
+// single env var, while dev/tests can override any field individually.
 func ResolveResources() (Resources, error) {
+	return ResolveResourcesIn("")
+}
+
+// ResolveResourcesIn is ResolveResources with an explicit default resources
+// directory, for callers that know where their assets are without being told
+// through the environment — notably the in-process Wails boot, which derives
+// the path from the executable location (Contents/Resources on macOS) because
+// there is no child process to hand an env var to.
+//
+// Precedence, most specific first: the individual *_PATH env vars, then
+// WORKMAX_RESOURCES_DIR, then dir, then "resources" relative to the working
+// directory. The env vars stay ahead of dir so a developer can still point a
+// packaged build at a local checkout of the assets.
+func ResolveResourcesIn(dir string) (Resources, error) {
 	var res Resources
 
 	if v := os.Getenv("ONNXRUNTIME_LIB_PATH"); v != "" {
@@ -254,6 +268,9 @@ func ResolveResources() (Resources, error) {
 
 	// Fill anything still unset from the resources dir.
 	resDir := os.Getenv("WORKMAX_RESOURCES_DIR")
+	if resDir == "" {
+		resDir = dir
+	}
 	if resDir == "" {
 		resDir = "resources"
 	}

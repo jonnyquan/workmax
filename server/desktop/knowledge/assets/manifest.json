@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "_comment": [
+    "Every asset is pinned by sha256; a download that does not match is discarded.",
+    "onnxruntime is the official Microsoft release and needs no mirror.",
+    "The embedding model and tokenizer are NOT yet pinned: the file L3c was",
+    "validated against is a local SentenceTransformer export (pytorch 2.0.1,",
+    "'sentence_embedding' output) with no matching public URL. See",
+    "ProjectDocs/wails-migration-evaluation-2026-08.md - RAG asset hosting."
+  ],
+  "platforms": {}
+}
