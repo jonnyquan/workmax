@@ -29,6 +29,10 @@ const state = {
   pendingFiles: [],
   threadQuery: "",
   uploadGeneration: 0,
+  // A starter card's prompt, held while the new-thread form it opened is
+  // completed. Consumed exactly once, into the composer of the thread it
+  // created; cancelling the form drops it.
+  starterPrompt: null,
   // True when a turn sent right now would run on the locally configured model.
   // That is the one condition under which the sidecar serves an unauthenticated
   // turn (localSingleUserUID, L3d/D2), so it is what decides whether this app
@@ -1797,8 +1801,17 @@ function renderMessage(role, text, streamingState = "complete") {
   label.className = "message-role";
   // The wrapper class stays the raw role (tests and CSS key off it); the
   // visible text speaks the product's voice. "ASSISTANT" is a protocol word,
-  // not a name.
-  label.textContent = role === "assistant" ? "WorkMax" : role === "user" ? "You" : role;
+  // not a name. The assistant also gets the brand mark — the same "v" the
+  // sidebar wears — so its answers are visually signed.
+  if (role === "assistant") {
+    const avatar = document.createElement("span");
+    avatar.className = "message-avatar";
+    avatar.textContent = "v";
+    label.appendChild(avatar);
+    label.appendChild(document.createTextNode("WorkMax"));
+  } else {
+    label.textContent = role === "user" ? "You" : role;
+  }
   const bubble = document.createElement("div");
   bubble.className = "bubble";
   // Only the assistant's text is Markdown. What the user typed is shown back
@@ -2176,6 +2189,45 @@ function canOpenNewThread() {
   );
 }
 
+// What a first-time user can actually do here. Three honest starters — each
+// is a prompt the local PPT agent can genuinely act on, not aspirational
+// marketing copy. Clicking one opens the same new-thread flow the button
+// does, and plants the prompt in the composer once the thread exists.
+const STARTER_PROMPTS = [
+  {
+    title: "Quarterly business review",
+    prompt: "Turn my Q3 numbers into an 8-slide business review. Ask me for the figures you need first.",
+  },
+  {
+    title: "Product launch deck",
+    prompt: "Outline a product launch deck, then draft speaker notes for each slide.",
+  },
+  {
+    title: "Brief from documents",
+    prompt: "Summarize the documents I attach into a one-page executive brief.",
+  },
+];
+
+function buildStarterCards() {
+  const container = document.querySelector("#starter-prompts");
+  if (!container) return;
+  for (const starter of STARTER_PROMPTS) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "starter-card";
+    const title = document.createElement("strong");
+    title.textContent = starter.title;
+    const preview = document.createElement("span");
+    preview.textContent = starter.prompt;
+    card.append(title, preview);
+    card.addEventListener("click", () => {
+      state.starterPrompt = starter.prompt;
+      openNewThreadForm();
+    });
+    container.appendChild(card);
+  }
+}
+
 function renderEmptyState() {
   const authenticated = canUseAgent();
   if (!authenticated) {
@@ -2201,6 +2253,11 @@ function renderEmptyState() {
     emptyDescription.textContent = "Select a synced thread to read its cached messages and continue the conversation.";
   }
   emptyNewThreadButton.hidden = !authenticated || !state.createAvailable;
+  const starters = document.querySelector("#starter-prompts");
+  if (starters) {
+    // Same conditions as the button they are a richer version of.
+    starters.hidden = emptyNewThreadButton.hidden;
+  }
 }
 
 function setCreateFeedback(message, kind = "error") {
@@ -2351,6 +2408,8 @@ function openNewThreadForm() {
 }
 
 function cancelNewThreadDraft(restoreFocus = true) {
+  // The starter's prompt belonged to the thread that was not created.
+  state.starterPrompt = null;
   const wasAttempted = state.createDraft?.attempted === true;
   state.createGeneration += 1;
   state.createFormOpen = false;
@@ -2480,7 +2539,14 @@ async function submitNewThread(event) {
     setCreateFeedback("");
     renderThreads();
     selectThread(data.thread);
+    if (state.starterPrompt) {
+      // The card's promise lands here: the thread exists, the words are in
+      // the box, and sending is still the user's decision.
+      chatInput.value = state.starterPrompt;
+      state.starterPrompt = null;
+    }
     chatInput.focus();
+    updateComposerState();
     setStatus(data.created ? "Thread created. Ready for the first prompt." : "Thread recovered. Ready for the first prompt.");
   } catch (error) {
     if (error instanceof SessionChangedError) {
@@ -2872,6 +2938,10 @@ function appendOptimisticTurn(userText) {
   }
   const userNode = renderMessage("user", userText);
   const assistantNode = renderMessage("assistant", "");
+  // Waiting for the first token had no face: the bubble sat empty. The
+  // pending class puts a typing indicator there until text or a terminal
+  // event arrives.
+  assistantNode.classList.add("pending");
   messageList.append(userNode, assistantNode);
   scrollMessagesToEnd();
   return { userNode, assistantNode, assistantBubble: assistantNode.children[1] };
@@ -3307,6 +3377,12 @@ function recoveredTurnErrorMessage(result) {
     : "The recovered response failed.";
 }
 
+// The typing indicator ends the moment there is anything better to show —
+// the first token, or any terminal outcome.
+function clearPendingIndicator(activeTurn) {
+  activeTurn.assistantBubble?.parentNode?.classList?.remove("pending");
+}
+
 function handleParsedTurnEvent(activeTurn, event) {
   if (!isCurrentTurn(activeTurn)) return;
   if (event.turnID !== activeTurn.turnID) {
@@ -3323,6 +3399,7 @@ function handleParsedTurnEvent(activeTurn, event) {
       }
       activeTurn.assistantText += event.delta;
       activeTurn.assistantTextBytes += deltaBytes;
+      clearPendingIndicator(activeTurn);
       activeTurn.assistantBubble.textContent = activeTurn.assistantText;
       scrollMessagesToEnd();
       return;
@@ -3404,6 +3481,7 @@ function handleParsedTurnEvent(activeTurn, event) {
 
 function finishActiveTurn(activeTurn, label, canceled) {
   if (!isCurrentTurn(activeTurn)) return;
+  clearPendingIndicator(activeTurn);
   state.activeTurn = null;
   if (!activeTurn.assistantText) {
     activeTurn.assistantBubble.textContent = canceled
@@ -3433,6 +3511,7 @@ function finishActiveTurn(activeTurn, label, canceled) {
 
 function finishActiveTurnWithError(activeTurn, message) {
   if (!isCurrentTurn(activeTurn)) return;
+  clearPendingIndicator(activeTurn);
   state.activeTurn = null;
   if (activeTurn.recoveryTurn) state.resumingTurn = false;
   const safeMessage = sanitizeErrorMessage(message || "The Agent turn failed.");
@@ -4009,6 +4088,8 @@ loginCancelButton.addEventListener("click", () => {
   void cancelLogin();
 });
 newThreadButton.addEventListener("click", () => {
+  // A plain "New" is not a starter flow; a stale stash would surprise.
+  state.starterPrompt = null;
   openNewThreadForm();
 });
 emptyNewThreadButton.addEventListener("click", () => {
@@ -4369,6 +4450,8 @@ async function loadThreadSources(threadUUID) {
   }
   renderTaskContext();
 }
+
+buildStarterCards();
 
 // Paint the panel once on load. Without this it keeps whatever static markup
 // index.html shipped with — which looks like a rendered panel that is simply

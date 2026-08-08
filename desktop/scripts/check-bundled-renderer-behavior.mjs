@@ -1459,6 +1459,135 @@ async function testThreadDeleteIsTwoStepAndLocalOnly() {
   );
 }
 
+// A first-time user faces an empty screen and a text box. The starter cards
+// are the bridge: one click opens the create flow, and once the thread exists
+// the card's prompt is waiting in the composer — sending stays the user's
+// decision.
+async function testStarterPromptLandsInTheComposer() {
+  const createCalls = [];
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") return response({ items: [] });
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      async createThread(input) {
+        createCalls.push(input.threadUUID);
+        return typedSuccess(
+          { state: "ready", created: true, thread: createdThread(input.threadUUID, input.name, input.agentMode) },
+          201
+        );
+      },
+      startTurn() { throw new Error("a starter card must not auto-send"); },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  const cards = Array.from(document.byId.get("starter-prompts").children).filter(
+    (n) => n.classList?.contains("starter-card"),
+  );
+  assert.equal(cards.length, 3, "the empty state must offer its three starters");
+  assert.equal(
+    document.byId.get("starter-prompts").hidden,
+    false,
+    "with the agent available the starters must be visible",
+  );
+
+  cards[1].click();
+  await settle();
+  assert.equal(
+    document.byId.get("new-thread-form").hidden,
+    false,
+    "a starter opens the same create flow the button does",
+  );
+
+  document.byId.get("new-thread-form").submit();
+  await settle();
+  assert.equal(createCalls.length, 1, "the thread must be created");
+  assert.match(
+    document.byId.get("chat-input").value,
+    /product launch deck/i,
+    "the card's prompt must be waiting in the composer of the thread it created",
+  );
+
+  // The stash is single-use. The composer keeps its draft across selection
+  // on purpose (a misclick must not eat typed words), so prove the stash is
+  // spent by erasing the box and showing the next create does NOT refill it.
+  document.byId.get("chat-input").value = "";
+  document.byId.get("chat-input").dispatch("input");
+  document.byId.get("new-thread-button").click();
+  await settle();
+  document.byId.get("new-thread-form").submit();
+  await settle();
+  assert.equal(createCalls.length, 2);
+  assert.equal(
+    document.byId.get("chat-input").value,
+    "",
+    "the starter's prompt is consumed by the thread it created; a plain New must not resurrect it",
+  );
+}
+
+// And a starter abandoned at the form must not haunt the next create.
+async function testCancelledStarterDropsItsPrompt() {
+  const { document } = await runRenderer(...(() => {
+    const bridge = {
+      async fetch(pathname) {
+        if (pathname === "/auth/status") {
+          return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
+        }
+        if (pathname === "/agent/threads?include_paused=false") return response({ items: [] });
+        if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+        throw new Error(`unexpected fetch path ${pathname}`);
+      },
+    };
+    const desktopBridge = {
+      agent: {
+        async uploadThreadFile() { throw new Error("not exercised"); },
+        async listSkills() { return typedSuccess(pptCatalog()); },
+        async createThread(input) {
+          return typedSuccess(
+            { state: "ready", created: true, thread: createdThread(input.threadUUID, input.name, input.agentMode) },
+            201
+          );
+        },
+        startTurn() { throw new Error("not exercised"); },
+        async cancelTurn(turnID) { return { turnID, canceled: true }; },
+      },
+    };
+    return [[bridge, desktopBridge]][0];
+  })());
+
+  const cards = Array.from(document.byId.get("starter-prompts").children).filter(
+    (n) => n.classList?.contains("starter-card"),
+  );
+  cards[0].click();
+  await settle();
+  document.byId.get("new-thread-cancel-button").click();
+  await settle();
+
+  // Via the empty-state button, deliberately: the sidebar's New clears the
+  // stash itself, so only this path would expose a stash that survived the
+  // cancel.
+  document.byId.get("empty-new-thread-button").click();
+  await settle();
+  document.byId.get("new-thread-form").submit();
+  await settle();
+  assert.equal(
+    document.byId.get("chat-input").value,
+    "",
+    "cancelling the starter's form must drop its prompt",
+  );
+}
+
 // "Selected for the next request": a persisted file can be re-attached to a
 // new turn by checking it in the Sources panel. Until this existed, files from
 // earlier sessions were display-only — the panel showed them, but only a fresh
@@ -2589,6 +2718,14 @@ async function testAgentTurnStreamsAndReconciles() {
   assert.match(document.byId.get("message-list").textContent, /Refine the deck/);
   assert.equal(document.byId.get("stop-button").hidden, false);
 
+  // Before the first token, the empty assistant bubble must wear the typing
+  // indicator — a silent wait reads as broken.
+  const pendingNow = walk(
+    document.byId.get("message-list"),
+    (n) => n.classList?.contains("assistant") && n.classList?.contains("pending"),
+  );
+  assert.equal(pendingNow.length, 1, "the streamed answer must show a typing indicator while empty");
+
   streamCallback({
     type: "unknown",
     turnID: "turn-agent",
@@ -2602,6 +2739,14 @@ async function testAgentTurnStreamsAndReconciles() {
   assert.equal(vm.runInContext("state.activeTurn.pendingEvents.length", context), 0);
 
   streamCallback({ type: "text_delta", turnID: "turn-agent", delta: "Live " });
+  assert.equal(
+    walk(
+      document.byId.get("message-list"),
+      (n) => n.classList?.contains("assistant") && n.classList?.contains("pending"),
+    ).length,
+    0,
+    "the first token must retire the typing indicator",
+  );
   streamCallback({ type: "text_delta", turnID: "turn-agent", delta: "answer" });
   assert.match(document.byId.get("message-list").textContent, /Live answer/);
   assert.equal(document.byId.get("turn-state").textContent, "Working");
@@ -4176,6 +4321,8 @@ await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
 await testThreadDeleteIsTwoStepAndLocalOnly();
 await testThreadRenameFlow();
+await testStarterPromptLandsInTheComposer();
+await testCancelledStarterDropsItsPrompt();
 await testSelectedSourcesRideTheNextTurn();
 await testMessageActionsCopyAndReuse();
 await testMessageActionsAbsentWithoutAClipboard();

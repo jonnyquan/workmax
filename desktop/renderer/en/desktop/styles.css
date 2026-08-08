@@ -589,6 +589,59 @@ textarea:focus-visible {
   max-width: 520px;
 }
 
+.starter-prompts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  width: min(720px, 100%);
+  margin-top: 22px;
+}
+
+.starter-prompts[hidden] {
+  display: none;
+}
+
+.starter-card {
+  display: grid;
+  gap: 6px;
+  height: auto;
+  padding: 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--card));
+  text-align: left;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 80ms ease;
+}
+
+.starter-card:hover {
+  border-color: hsl(var(--primary) / 0.45);
+  background: hsl(var(--card));
+  box-shadow: 0 4px 14px rgb(0 0 0 / 6%);
+}
+
+.starter-card strong {
+  font-size: 13px;
+  font-weight: 650;
+  color: hsl(var(--foreground));
+}
+
+.starter-card span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 1320px) {
+  .starter-prompts {
+    grid-template-columns: 1fr;
+    width: min(440px, 100%);
+  }
+}
+
 .empty-action {
   min-width: 112px;
   margin-top: 18px;
@@ -785,11 +838,29 @@ textarea:focus-visible {
 }
 
 .message-role {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: hsl(var(--muted-foreground));
   font-size: 10px;
   font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+/* The assistant signs its answers with the same mark the sidebar wears. */
+.message-avatar {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .message.user .message-role {
@@ -902,16 +973,27 @@ textarea:focus-visible {
   color: hsl(var(--primary-foreground));
 }
 
+/* Waiting for the first token. The three dots occupy the empty bubble so the
+   pause reads as "thinking", not "broken". Cleared by the first delta or any
+   terminal event. */
+.message.pending .bubble {
+  min-width: 64px;
+}
+
 .message.pending .bubble::after {
   content: "";
   display: inline-block;
-  width: 7px;
-  height: 14px;
-  margin-left: 4px;
-  border-radius: 1px;
-  background: hsl(var(--muted-foreground));
-  vertical-align: -2px;
-  animation: cursor-blink 1s steps(2, start) infinite;
+  width: 32px;
+  height: 8px;
+  background-image: radial-gradient(circle 3px, hsl(var(--muted-foreground)) 100%, transparent 0);
+  background-size: 12px 8px;
+  background-repeat: repeat-x;
+  animation: typing-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes typing-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
 }
 
 /* Per-message actions. The row keeps its height at rest (no layout jump) but
