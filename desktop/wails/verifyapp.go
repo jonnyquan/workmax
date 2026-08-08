@@ -109,6 +109,19 @@ func watchBoot(next http.Handler, capability string, watcher *bootWatcher) http.
 	})
 }
 
+// External-link interception is NOT checked here.
+//
+// It was attempted, and the attempt is worth recording: ExecJS queues its
+// script until the Wails runtime reports itself loaded, and on a loopback
+// origin the runtime never does — the same root cause that disables bindings
+// (§0.5.11). Proxying /wails/* from this origin did not revive it either. So
+// the host cannot drive the page at all, which is a third consequence of the
+// same-origin shape.
+//
+// The check therefore lives in the behaviour suite, which runs the shim
+// against a stub DOM and can dispatch a click directly. That is a better home
+// anyway: it runs in CI, where a webview cannot.
+
 // reportAppBoot turns the recorded traffic into a verdict.
 func reportAppBoot(watcher *bootWatcher, waited time.Duration) int {
 	seen := watcher.all()

@@ -427,7 +427,11 @@ func runVerifyApp(boot *desktop.Boot, wait time.Duration) {
 		finishKillCheck(boot, 2)
 	}
 	watcher := &bootWatcher{}
-	handler := watchBoot(UIHandler(os.DirFS(rendererDir), capability, boot.Port(), boot.LocalToken), capability, watcher)
+	// External links are refused here rather than opened: this harness must not
+	// launch a browser. The interception itself is checked in the behaviour
+	// suite, which can drive a click — see check-bundled-renderer-behavior.mjs.
+	refuse := func(string) error { return fmt.Errorf("verify-app does not open external links") }
+	handler := watchBoot(UIHandlerWithOpener(os.DirFS(rendererDir), capability, boot.Port(), boot.LocalToken, refuse), capability, watcher)
 	uiOrigin, stopUI, err := serveLoopback(handler)
 	if err != nil {
 		log.Printf("verify-app: ui listener: %v", err)

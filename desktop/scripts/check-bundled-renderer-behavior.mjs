@@ -1102,6 +1102,90 @@ async function testCachedStreamingStatesRenderPartialAndRejectUnknown() {
 // reason worth having: the tray was cleared before startTurn read it, so
 // fileIDs was always empty and every upload was silently dropped — the chips
 // appeared, the upload succeeded, and the model never saw the file.
+// The shim's external-link interception, which has no other home.
+//
+// It cannot be checked in a real webview: ExecJS queues until the Wails
+// runtime reports itself loaded, and on a loopback origin it never does. So
+// the shim is loaded here against a minimal DOM and a click is dispatched
+// directly — which is also the better place for it, because this runs in CI.
+//
+// What must hold: the default action is prevented (otherwise the webview
+// navigates and the app is replaced by a remote page, with no way back on a
+// shell that has no cancellable navigation hook), and the URL is handed to Go
+// rather than opened here.
+async function testShimInterceptsExternalLinks() {
+  const shimPath = path.join(rendererDir, "shim.js");
+  const shimSource = fs.readFileSync(shimPath, "utf8");
+
+  const listeners = [];
+  const fetches = [];
+  let prevented = false;
+
+  const anchor = {
+    tagName: "A",
+    attrs: new Map(),
+    getAttribute(name) { return this.attrs.get(name) ?? null; },
+    closest(sel) { return sel === "a[href]" && this.attrs.has("href") ? this : null; },
+  };
+
+  const context = {
+    console,
+    URL,
+    Headers,
+    TextEncoder,
+    crypto: { randomUUID: () => "00000000-0000-4000-8000-000000000001" },
+    fetch: async (url, init) => {
+      fetches.push({ url: String(url), init });
+      return { ok: true, status: 200, statusText: "OK", url: String(url), headers: new Map(),
+               text: async () => "{}", body: null };
+    },
+    setTimeout, clearTimeout,
+    location: { origin: "http://127.0.0.1:5000" },
+    document: {
+      baseURI: "http://127.0.0.1:5000/CAPABILITY/",
+      documentElement: { dataset: {} },
+      addEventListener(type, handler, capture) { listeners.push({ type, handler, capture }); },
+    },
+  };
+  context.window = context;
+  // The shim stands down if a bridge is already installed, and needs the
+  // generated library present; a stub is enough for the click path.
+  context.window.__workmaxDesktopBridge = { createDesktopBridge: () => ({}) };
+  vm.createContext(context);
+  vm.runInContext(shimSource, context, { filename: shimPath });
+
+  const click = listeners.find((l) => l.type === "click");
+  assert.ok(click, "shim.js must register a click listener");
+  assert.equal(click.capture, true,
+    "the listener must be in the capture phase, or a handler that stops propagation skips it");
+
+  // An external link: prevented and handed to Go.
+  anchor.attrs.set("href", "https://github.com/jonnyquan/workmax");
+  click.handler({ target: anchor, preventDefault() { prevented = true; } });
+  await settle();
+  assert.equal(prevented, true, "an external link must not be allowed to navigate the window");
+  assert.equal(fetches.length, 1, "the URL must be handed to Go exactly once");
+  assert.match(fetches[0].url, /\/CAPABILITY\/open-external$/,
+    "posted to the capability-scoped open-external endpoint");
+  assert.equal(JSON.parse(fetches[0].init.body).url, "https://github.com/jonnyquan/workmax");
+
+  // A same-origin link is left alone: intercepting it would break in-app
+  // navigation for no benefit.
+  fetches.length = 0;
+  prevented = false;
+  anchor.attrs.set("href", "./index.html");
+  click.handler({ target: anchor, preventDefault() { prevented = true; } });
+  await settle();
+  assert.equal(prevented, false, "a same-origin link must be left to the page");
+  assert.equal(fetches.length, 0, "a same-origin link must not be sent to the system browser");
+
+  // An in-page anchor likewise.
+  anchor.attrs.set("href", "#section");
+  click.handler({ target: anchor, preventDefault() { prevented = true; } });
+  await settle();
+  assert.equal(prevented, false, "a fragment link must be left to the page");
+}
+
 async function testStagedAttachmentsAreSentWithTheTurn() {
   let sentFileIDs = null;
   const bridge = {
@@ -2917,6 +3001,7 @@ await testRejectsMalformedMessageTimestamps();
 await testRejectsMalformedLoginTransactionResult();
 await testRedactsErrorStatusMessages();
 await testCachedStreamingStatesRenderPartialAndRejectUnknown();
+await testShimInterceptsExternalLinks();
 await testStagedAttachmentsAreSentWithTheTurn();
 await testSynchronousTurnCallbacksAreBufferedUntilOpenResult();
 await testAgentTurnStreamsAndReconciles();
