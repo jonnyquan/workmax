@@ -1795,7 +1795,10 @@ function renderMessage(role, text, streamingState = "complete") {
   );
   const label = document.createElement("div");
   label.className = "message-role";
-  label.textContent = role;
+  // The wrapper class stays the raw role (tests and CSS key off it); the
+  // visible text speaks the product's voice. "ASSISTANT" is a protocol word,
+  // not a name.
+  label.textContent = role === "assistant" ? "WorkMax" : role === "user" ? "You" : role;
   const bubble = document.createElement("div");
   bubble.className = "bubble";
   // Only the assistant's text is Markdown. What the user typed is shown back

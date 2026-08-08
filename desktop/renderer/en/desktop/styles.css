@@ -80,6 +80,30 @@
   box-sizing: border-box;
 }
 
+/* Native scrollbars read as a web page inside a frame; thin quiet ones read
+   as an application surface. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: hsl(var(--border));
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+}
+
+::selection {
+  background: hsl(var(--primary) / 0.2);
+}
+
 body {
   margin: 0;
   min-width: 780px;
@@ -199,27 +223,30 @@ textarea:focus-visible {
 
 .brand {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
-  padding: 18px 18px 14px;
-  border-bottom: 1px solid hsl(var(--border));
+  padding: 16px 16px 12px;
 }
 
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border-radius: 8px;
-  background: hsl(var(--foreground));
-  color: hsl(var(--background));
+  /* The mark carries the brand colour; the near-black square read as a
+     placeholder logo. */
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
   font-weight: 800;
 }
 
 .brand h1 {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
+  font-weight: 650;
   line-height: 1.2;
+  letter-spacing: -0.01em;
 }
 
 .brand p,
@@ -234,12 +261,12 @@ textarea:focus-visible {
 }
 
 .status-card {
-  min-height: 54px;
-  margin: 14px;
-  padding: 12px;
-  border: 1px solid hsl(var(--secondary));
+  margin: 0 14px 12px;
+  padding: 8px 10px;
+  border: 1px solid hsl(var(--border) / 0.6);
   border-radius: 8px;
   background: hsl(var(--card));
+  font-size: 11px;
 }
 
 .status-card.error {
@@ -252,6 +279,11 @@ textarea:focus-visible {
   grid-template-columns: 1fr 1fr;
   gap: 8px;
   padding: 0 14px 14px;
+}
+
+/* The primary action reads as the row's conclusion, not a leftover cell. */
+.sidebar-actions .primary {
+  grid-column: 1 / -1;
 }
 
 .login-form {
@@ -448,8 +480,10 @@ textarea:focus-visible {
   margin: 0;
 }
 
-/* Delete lives on the row, small and quiet, and only on local-only threads.
-   Armed state turns destructive-red so the second click knows what it is. */
+/* Delete lives on the row, only on local-only threads. Hidden until the row
+   is hovered or the control is focused — a destructive control on every row
+   at rest reads as clutter and invites misclicks. Clicks and keyboard focus
+   work regardless: opacity hides, it does not disable. */
 .thread-delete {
   position: absolute;
   top: 8px;
@@ -462,6 +496,14 @@ textarea:focus-visible {
   color: hsl(var(--muted-foreground));
   font-size: 11px;
   line-height: 1.4;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.thread-item:hover .thread-delete,
+.thread-delete:focus-visible,
+.thread-delete.armed {
+  opacity: 1;
 }
 
 .thread-delete.armed {
@@ -474,16 +516,23 @@ textarea:focus-visible {
   display: block;
   width: 100%;
   height: auto;
-  padding: 10px;
+  padding: 9px 10px;
   border: 0;
+  border-radius: 8px;
   border-radius: 8px;
   background: transparent;
   text-align: left;
 }
 
-.thread-button:hover,
+.thread-button:hover {
+  background: hsl(var(--muted) / 0.6);
+}
+
+/* The open conversation gets the card surface and a brand accent — the same
+   "this is the one in front" language the center column speaks. */
 .thread-button.active {
-  background: hsl(var(--muted));
+  background: hsl(var(--card));
+  box-shadow: inset 2px 0 0 hsl(var(--primary)), 0 1px 2px rgb(0 0 0 / 4%);
 }
 
 .thread-button strong {
@@ -523,6 +572,19 @@ textarea:focus-visible {
   text-align: center;
 }
 
+.empty-state h2 {
+  margin: 0 0 10px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+.empty-state > p:not(.eyebrow) {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .empty-state > p:not(.eyebrow) {
   max-width: 520px;
 }
@@ -541,9 +603,14 @@ textarea:focus-visible {
 }
 
 .eyebrow {
-  margin: 0 0 10px !important;
-  color: hsl(var(--foreground)) !important;
-  font-weight: 700;
+  margin: 0 0 12px !important;
+  padding: 4px 12px;
+  border: 1px solid hsl(var(--primary) / 0.25);
+  border-radius: 999px;
+  background: hsl(var(--primary) / 0.08);
+  color: hsl(var(--primary)) !important;
+  font-size: 11px !important;
+  font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -561,8 +628,16 @@ textarea:focus-visible {
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
-  padding: 24px 32px 18px;
-  border-bottom: 1px solid hsl(var(--border));
+  padding: 20px 32px 16px;
+  border-bottom: 1px solid hsl(var(--border) / 0.7);
+  background: hsl(var(--card) / 0.5);
+}
+
+.thread-panel header h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 /* Title with its rename control beside it; the inline form swaps in for the
@@ -607,9 +682,10 @@ textarea:focus-visible {
 .turn-state {
   flex: none;
   margin-top: 2px;
-  padding: 5px 8px;
+  padding: 4px 10px;
   border: 1px solid hsl(var(--border));
   border-radius: 999px;
+  background: hsl(var(--card));
   color: hsl(var(--muted-foreground));
   font-size: 11px;
   font-weight: 650;
@@ -710,23 +786,28 @@ textarea:focus-visible {
 
 .message-role {
   color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.message.user .message-role {
+  text-align: right;
 }
 
 .bubble {
   width: fit-content;
   max-width: min(720px, 100%);
-  padding: 12px 14px;
-  border: 1px solid hsl(var(--secondary));
-  border-radius: 8px;
+  padding: 12px 15px;
+  border: 1px solid hsl(var(--border) / 0.7);
+  border-radius: 12px;
   background: hsl(var(--card));
   color: hsl(var(--foreground));
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.6;
   white-space: pre-wrap;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 3%);
 }
 
 /* Rendered Markdown ------------------------------------------------------- */
@@ -814,7 +895,10 @@ textarea:focus-visible {
 
 .message.user .bubble {
   margin-left: auto;
-  background: hsl(var(--foreground));
+  border-color: hsl(var(--primary));
+  /* Brand ink, not near-black: the user's words carry the product colour,
+     the model's answer stays on paper. */
+  background: hsl(var(--primary));
   color: hsl(var(--primary-foreground));
 }
 
@@ -830,12 +914,19 @@ textarea:focus-visible {
   animation: cursor-blink 1s steps(2, start) infinite;
 }
 
-/* Per-message actions. Always present rather than revealed on hover: a
-   control nobody can see is a control nobody uses, and the row is quiet
-   enough to sit under every message without competing with the answer. */
+/* Per-message actions. The row keeps its height at rest (no layout jump) but
+   fades until the message is hovered or a button is focused — present enough
+   to be discovered, quiet enough not to compete with the answer. */
 .message-actions {
   display: flex;
   gap: 6px;
+  opacity: 0.35;
+  transition: opacity 120ms ease;
+}
+
+.message:hover .message-actions,
+.message-actions:focus-within {
+  opacity: 1;
 }
 
 .message.user .message-actions {
@@ -894,10 +985,18 @@ textarea:focus-visible {
   width: min(900px, calc(100% - 64px));
   margin: 0 auto 24px;
   padding: 12px;
-  border: 1px solid hsl(var(--secondary));
-  border-radius: 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
   background: hsl(var(--card));
-  box-shadow: 0 14px 40px rgb(0 0 0 / 24%);
+  /* A soft lift, not a floating panel: the 24%-black drop shadow read as a
+     modal on the light theme. */
+  box-shadow: 0 2px 6px rgb(0 0 0 / 5%), 0 8px 24px rgb(0 0 0 / 6%);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.composer:focus-within {
+  border-color: hsl(var(--ring) / 0.6);
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12), 0 8px 24px rgb(0 0 0 / 6%);
 }
 
 .composer-toolbar,
