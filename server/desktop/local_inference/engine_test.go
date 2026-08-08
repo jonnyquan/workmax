@@ -89,7 +89,158 @@ const (
 func newTestEngine(t *testing.T, profile ProfileReader) (*Engine, *gorm.DB, *memSSEWriter) {
 	t.Helper()
 	db := openLocalTestDB(t)
-	return NewEngine(profile, db, nil), db, &memSSEWriter{}
+	return NewEngine(profile, db, nil, nil), db, &memSSEWriter{}
+}
+
+// recordingIndexer is a fake KnowledgeHooks capturing IndexTurn calls so the
+// L3c-4 hook can be asserted, and returning canned Retrieve results for the
+// L3c-5 injection test. No cgo knowledge package needed.
+type recordingIndexer struct {
+	mu       sync.Mutex
+	calls    []indexTurnCall
+	retrieve []string
+}
+
+type indexTurnCall struct {
+	turnUUID, userText, assistantText string
+}
+
+func (r *recordingIndexer) IndexTurn(_ context.Context, turnUUID, userText, assistantText string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, indexTurnCall{turnUUID, userText, assistantText})
+	return nil
+}
+
+func (r *recordingIndexer) Retrieve(_ context.Context, _ string, _ int) ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.retrieve))
+	copy(out, r.retrieve)
+	return out, nil
+}
+
+func (r *recordingIndexer) snapshot() []indexTurnCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]indexTurnCall, len(r.calls))
+	copy(out, r.calls)
+	return out
+}
+
+func (r *recordingIndexer) waitForCall(t *testing.T, timeout time.Duration) []indexTurnCall {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if got := r.snapshot(); len(got) > 0 {
+			return got
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("IndexTurn was not called within %v", timeout)
+	return nil
+}
+
+// TestEngine_IndexesTurnOnSuccess verifies the L3c-4 hook fires after a clean
+// turn with the turn uuid, user text, and accumulated assistant text.
+func TestEngine_IndexesTurnOnSuccess(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		f := w.(http.Flusher)
+		sseLine(w, `data: {"choices":[{"delta":{"content":"Hello"}}]}`)
+		sseLine(w, "")
+		f.Flush()
+		sseLine(w, "data: [DONE]")
+		sseLine(w, "")
+		f.Flush()
+	}))
+	t.Cleanup(upstream.Close)
+
+	db := openLocalTestDB(t)
+	idx := &recordingIndexer{}
+	engine := NewEngine(
+		stubProfile{protocol: protocolOpenAI, baseURL: upstream.URL, modelID: engineTestModel},
+		db, nil, idx,
+	)
+	dst := &memSSEWriter{}
+	if err := engine.Chat(context.Background(), cloudproxy.ChatRequest{
+		ThreadID: 1, ThreadUUID: "thr_1", TurnUUID: engineTestTurnUUID,
+		UID: engineTestUID, UserText: "hi", ChatMode: "general",
+	}, dst); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	calls := idx.waitForCall(t, 2*time.Second)
+	if len(calls) != 1 {
+		t.Fatalf("want 1 IndexTurn call, got %d", len(calls))
+	}
+	c := calls[0]
+	if c.turnUUID != engineTestTurnUUID || c.userText != "hi" || c.assistantText != "Hello" {
+		t.Errorf("IndexTurn args = %+v, want {%s hi Hello}", c, engineTestTurnUUID)
+	}
+}
+
+// TestEngine_DoesNotIndexOnFailure verifies the hook is skipped when a turn
+// fails (upstream 500), so partial/failed turns are not recorded as memory.
+func TestEngine_DoesNotIndexOnFailure(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(upstream.Close)
+
+	db := openLocalTestDB(t)
+	idx := &recordingIndexer{}
+	engine := NewEngine(
+		stubProfile{protocol: protocolOpenAI, baseURL: upstream.URL, modelID: engineTestModel},
+		db, nil, idx,
+	)
+	dst := &memSSEWriter{}
+	_ = engine.Chat(context.Background(), cloudproxy.ChatRequest{
+		ThreadID: 1, TurnUUID: engineTestTurnUUID, UID: engineTestUID, UserText: "hi",
+	}, dst)
+
+	if got := idx.snapshot(); len(got) != 0 {
+		t.Errorf("IndexTurn must not be called on failure, got %+v", got)
+	}
+}
+
+// TestEngine_InjectsRetrievedContext verifies L3c-5: retrieved knowledge chunks
+// are prepended to the user text sent to the upstream model.
+func TestEngine_InjectsRetrievedContext(t *testing.T) {
+	var gotBody string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		f := w.(http.Flusher)
+		sseLine(w, "data: [DONE]")
+		sseLine(w, "")
+		f.Flush()
+	}))
+	t.Cleanup(upstream.Close)
+
+	db := openLocalTestDB(t)
+	idx := &recordingIndexer{retrieve: []string{"ALPHA-FACT", "BETA-FACT"}}
+	engine := NewEngine(
+		stubProfile{protocol: protocolOpenAI, baseURL: upstream.URL, modelID: engineTestModel},
+		db, nil, idx,
+	)
+	dst := &memSSEWriter{}
+	if err := engine.Chat(context.Background(), cloudproxy.ChatRequest{
+		ThreadID: 1, ThreadUUID: "thr_1", TurnUUID: engineTestTurnUUID,
+		UID: engineTestUID, UserText: "what is alpha?", ChatMode: "general",
+	}, dst); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	if !strings.Contains(gotBody, "ALPHA-FACT") || !strings.Contains(gotBody, "BETA-FACT") {
+		t.Errorf("retrieved context not injected into upstream body: %s", gotBody)
+	}
+	if !strings.Contains(gotBody, "what is alpha?") {
+		t.Errorf("original user text missing from body: %s", gotBody)
+	}
 }
 
 // cacheRow 读取本次 turn 写入的 message 行（按幂等 key）。
@@ -432,6 +583,7 @@ func TestEngine_OpenAI_WithImageAttachment(t *testing.T) {
 		stubProfile{protocol: protocolOpenAI, baseURL: upstream.URL, modelID: "llava"},
 		db,
 		fakeLoader{atts: []Attachment{{Kind: "image", MimeType: "image/png", Base64: "BASE64PNG"}}},
+		nil,
 	)
 	dst := &memSSEWriter{}
 	err := engine.Chat(context.Background(), cloudproxy.ChatRequest{
@@ -475,6 +627,7 @@ func TestEngine_Anthropic_WithAttachment(t *testing.T) {
 			{Kind: "text", Text: "DOC CONTENT"},
 			{Kind: "image", MimeType: "image/png", Base64: "BB"},
 		}},
+		nil,
 	)
 	dst := &memSSEWriter{}
 	err := engine.Chat(context.Background(), cloudproxy.ChatRequest{

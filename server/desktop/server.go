@@ -23,6 +23,17 @@ import (
 
 // ServerConfig is the runtime configuration the sidecar HTTP server
 // needs at startup. LocalToken and DB are required by NewServer.
+// FileIndexer indexes (and removes) file attachments into the local knowledge
+// store for RAG retrieval (L3c-3). It is satisfied structurally by
+// *knowledge.Indexer. Nil on the config means uploads are not indexed — the
+// sidecar runs without RAG until the onnxruntime resources are packaged and
+// the indexer is constructed (L3c-5). Defined here as an interface so the
+// desktop package does not depend on the cgo knowledge package.
+type FileIndexer interface {
+	IndexFile(ctx context.Context, uid uint64, fileID int64) error
+	RemoveFile(ctx context.Context, fileID int64) (int, error)
+}
+
 // Other subsystems are optional at boot and become required only when
 // their endpoint is hit, so diagnostics and read-only local history
 // can still work in trimmed test/support configurations.
@@ -106,6 +117,11 @@ type ServerConfig struct {
 	// POST /agent/threads/:uuid/files to local disk + w_workagent_thread_file,
 	// for use as model context in local turns (L3b). Nil → upload route returns 503.
 	LocalFiles *localrender.Store
+
+	// FileIndexer indexes uploaded files for local RAG retrieval (L3c-3).
+	// Nil → uploads still succeed but are not indexed (RAG disabled until the
+	// indexer is wired in L3c-5, pending onnxruntime resource packaging).
+	FileIndexer FileIndexer
 }
 
 // Server wraps the sidecar's loopback HTTP server, the listener it's

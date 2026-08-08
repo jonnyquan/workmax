@@ -59,7 +59,7 @@ test-go:
 	@cd server && $(HERMETIC_TEST_ENV) $(HOST_GO_ENV) go test ./...
 
 test-go-desktop:
-	@cd server && $(HERMETIC_TEST_ENV) $(HOST_GO_ENV) go test -tags desktop ./desktop/... ./api/desktop/... ./service/desktop/... ./router/desktop/... ./middleware/... ./cmd/workagent-desktop
+	@cd server && $(HERMETIC_TEST_ENV) $(HOST_GO_ENV) CGO_ENABLED=1 go test -tags desktop ./desktop/... ./api/desktop/... ./service/desktop/... ./router/desktop/... ./middleware/... ./cmd/workagent-desktop
 
 test-agent-platform:
 	@cd server && $(HERMETIC_TEST_ENV) $(HOST_GO_ENV) go test ./contracts/agent/v1 ./contracts/credential/v1 ./service/agentturn ./api/agent/v1 ./cmd/agent-worker ./service/desktop/oauth ./api/desktop/oauth ./middleware ./config ./migrations ./scripts/guard
@@ -85,7 +85,7 @@ build-server:
 	@cd server && go build ./...
 
 build-sidecar:
-	@cd server && go build -tags desktop -o /private/tmp/workmax-desktop-sidecar ./cmd/workagent-desktop
+	@cd server && CGO_ENABLED=1 go build -tags desktop -o /private/tmp/workmax-desktop-sidecar ./cmd/workagent-desktop
 
 package-preflight:
 	@./desktop/scripts/build-mac.sh --preflight-only

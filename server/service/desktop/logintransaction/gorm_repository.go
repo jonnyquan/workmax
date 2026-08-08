@@ -25,7 +25,36 @@ func NewGORMRepository(db *gorm.DB) (*GORMRepository, error) {
 	if db == nil {
 		return nil, fmt.Errorf("desktop login transaction repository: database is required")
 	}
+	if err := ensureProviderStatePartialUniqueIndex(db); err != nil {
+		return nil, fmt.Errorf("desktop login transaction repository: %w", err)
+	}
 	return &GORMRepository{db: db}, nil
+}
+
+// ensureProviderStatePartialUniqueIndex makes provider_state_digest's uniqueness
+// partial to non-empty values. The column is a nullable []byte that GORM
+// persists as an empty BLOB (not NULL) when unset, so a plain UNIQUE index would
+// reject two unset rows — breaking independent login transactions that carry no
+// Google state. Restricting the index to length > 0 restores the intended
+// "unique when set, repeatable when unset" semantics and absorbs the
+// nil-[]byte handling change in modernc.org/sqlite >= v1.47. Idempotent; a
+// no-op when the table does not yet exist (e.g. readiness/error-path tests).
+func ensureProviderStatePartialUniqueIndex(db *gorm.DB) error {
+	const (
+		idx = "uk_w_desktop_login_tx_provider_state"
+		tbl = "w_desktop_login_transaction"
+	)
+	if !db.Migrator().HasTable(tbl) {
+		return nil
+	}
+	if err := db.Exec("DROP INDEX IF EXISTS " + idx).Error; err != nil {
+		return fmt.Errorf("drop legacy provider_state index: %w", err)
+	}
+	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS " + idx +
+		" ON " + tbl + "(provider_state_digest) WHERE length(provider_state_digest) > 0").Error; err != nil {
+		return fmt.Errorf("create partial provider_state index: %w", err)
+	}
+	return nil
 }
 
 type loginTransactionRow struct {

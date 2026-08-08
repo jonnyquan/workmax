@@ -3,8 +3,11 @@
 package desktop
 
 import (
+	"context"
 	"errors"
+	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -74,6 +77,11 @@ func (s *Server) handleUploadThreadFile(c *gin.Context) {
 		respondThreadFileUploadError(c, err)
 		return
 	}
+	// L3c-3: kick off knowledge indexing asynchronously so the upload response
+	// is not blocked by extraction + embedding. Nil when RAG is disabled.
+	if s.cfg.FileIndexer != nil {
+		go s.indexUploadedFile(uid, saved.FileID)
+	}
 	c.JSON(http.StatusCreated, threadFileUploadResponse{
 		FileID:   saved.FileID,
 		FileName: saved.FileName,
@@ -94,5 +102,17 @@ func respondThreadFileUploadError(c *gin.Context, err error) {
 		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "unsupported_file_type"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "file_upload_failed"})
+	}
+}
+
+// indexUploadedFile runs L3c-3 knowledge indexing for a freshly saved file
+// asynchronously. Failures are logged only: a file that fails to index simply
+// is not retrievable via RAG until it is re-uploaded or re-indexed — it does
+// not affect the upload itself, which has already succeeded.
+func (s *Server) indexUploadedFile(uid uint64, fileID int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := s.cfg.FileIndexer.IndexFile(ctx, uid, fileID); err != nil {
+		log.Printf("knowledge: index file %d (uid %d): %v", fileID, uid, err)
 	}
 }

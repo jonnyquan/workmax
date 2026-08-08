@@ -53,6 +53,7 @@ import (
 	cloudproxy "server/desktop/cloud_proxy"
 	localinference "server/desktop/local_inference"
 	localrender "server/desktop/local_render"
+	knowledge "server/desktop/knowledge"
 	desktopsync "server/desktop/sync"
 
 	"gorm.io/gorm"
@@ -283,10 +284,49 @@ func main() {
 	// into model context.
 	localFiles := localrender.NewStore(dbRes.DB, filepath.Join(dbRes.DataDir, "thread_files"))
 
+	// L3c RAG (optional): the local knowledge indexer powers file indexing
+	// (L3c-3), conversation memory (L3c-4), and retrieval injection (L3c-5).
+	// Best-effort construction: if onnxruntime resources aren't resolvable
+	// (dev without resources, or not yet packaged), RAG is disabled and the
+	// sidecar runs normally. Enable by pointing WORKMAX_RESOURCES_DIR (or the
+	// individual *_PATH env vars in knowledge.ResolveResources) at the assets.
+	var (
+		knowledgeHooks localinference.KnowledgeHooks
+		fileIndexer    desktop.FileIndexer
+		emb            *knowledge.Embedder
+	)
+	if res, rerr := knowledge.ResolveResources(); rerr == nil {
+		if e, eerr := knowledge.NewEmbedder(res); eerr == nil {
+			if kstore, serr := knowledge.NewStore(dbRes.DB); serr == nil {
+				emb = e
+				idx := knowledge.NewIndexer(localFiles, emb, kstore)
+				knowledgeHooks = idx
+				fileIndexer = idx
+				log.Printf("knowledge: local RAG enabled (%d-dim embeddings)", emb.Dim())
+			} else {
+				log.Printf("knowledge: RAG disabled (vector store init: %v)", serr)
+			}
+		} else {
+			log.Printf("knowledge: RAG disabled (embedder init: %v)", eerr)
+		}
+	} else {
+		log.Printf("knowledge: RAG disabled (native resources unresolved: %v)", rerr)
+	}
+	// Release the ONNX Runtime environment during shutdown, before the Go
+	// runtime exits. Otherwise onnxruntime's C++ static destructors abort the
+	// process on exit ("mutex lock failed"). In-flight turns have drained by
+	// the time main returns (graceful shutdown waits on the HTTP server).
+	defer func() {
+		if emb != nil {
+			_ = emb.Close()
+		}
+	}()
+
 	localInference := localinference.NewEngine(
 		&desktop.LocalModelProfileReader{Store: modelSettings},
 		dbRes.DB,
 		localFiles,
+		knowledgeHooks,
 	)
 
 	// 4. Build & bind HTTP server
@@ -310,6 +350,7 @@ func main() {
 		ModelSettings:    modelSettings,
 		LocalInference:   localInference,
 		LocalFiles:       localFiles,
+		FileIndexer:      fileIndexer,
 	})
 	if err != nil {
 		log.Fatalf("new server: %v", err)

@@ -61,7 +61,7 @@ fi
 echo "==> building Go sidecar for $target_goos/$target_goarch (version=$desktop_version)"
 mkdir -p "$bin_dir"
 ( cd "$REPO_ROOT/server" \
-  && GOOS="$target_goos" GOARCH="$target_goarch" \
+  && GOOS="$target_goos" GOARCH="$target_goarch" CGO_ENABLED=1 \
      go build -tags desktop \
      -ldflags "-X server/desktop/buildinfo.Version=$desktop_version" \
      -o "$binary_path" ./cmd/workagent-desktop )

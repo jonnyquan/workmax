@@ -323,7 +323,7 @@ fi
 echo "==> building Go sidecar for darwin/$target_goarch (version=$desktop_version)"
 mkdir -p "$bin_dir"
 ( cd "$REPO_ROOT/server" \
-  && GOOS=darwin GOARCH="$target_goarch" \
+  && GOOS=darwin GOARCH="$target_goarch" CGO_ENABLED=1 \
      go build -tags desktop -ldflags "-s -w -X server/desktop/buildinfo.Version=$desktop_version" \
      -o "$binary_path" ./cmd/workagent-desktop )
 echo "    built: $binary_path"

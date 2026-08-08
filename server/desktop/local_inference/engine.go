@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -40,6 +42,17 @@ type ProfileReader interface {
 	LocalInferenceProfile() (protocol, baseURL, modelID, apiKey string, err error)
 }
 
+// KnowledgeHooks bundles the L3c RAG capabilities the local Engine consumes:
+// indexing a completed turn for cross-thread long-term memory (L3c-4), and
+// retrieving relevant context to inject at the start of a turn (L3c-5). It is
+// satisfied structurally by *knowledge.Indexer; defined here as an interface so
+// this package does not depend on the cgo knowledge package. Nil on the Engine
+// → no RAG (turns are not indexed, no context is injected).
+type KnowledgeHooks interface {
+	IndexTurn(ctx context.Context, turnUUID, userText, assistantText string) error
+	Retrieve(ctx context.Context, query string, topK int) ([]string, error)
+}
+
 // protocolAdapter 封装 OpenAI / Anthropic 兼容 endpoint 的线路差异：
 // endpoint 路径、请求体、鉴权头、以及如何从一帧 SSE 提取文本/识别终端。
 type protocolAdapter interface {
@@ -61,17 +74,20 @@ type protocolAdapter interface {
 type Engine struct {
 	profile    ProfileReader
 	db         *gorm.DB
-	httpClient *http.Client     // Timeout: 0（SSE turn 可持续数分钟）
+	httpClient *http.Client  // Timeout: 0（SSE turn 可持续数分钟）
 	loader     AttachmentLoader // 可 nil（无附件场景）
+	hooks      KnowledgeHooks   // 可 nil（L3c-4/5 RAG：索引 turn + 检索注入；nil=关闭）
 }
 
 // NewEngine 构造本地推理引擎。db 用于 CacheWriter 持久化本地 turn；loader
-// 把 file_ids 解析为模型 context（可 nil，表示该 Engine 不处理附件）。
-func NewEngine(profile ProfileReader, db *gorm.DB, loader AttachmentLoader) *Engine {
+// 把 file_ids 解析为模型 context（可 nil，表示该 Engine 不处理附件）；
+// hooks 提供 RAG 能力（L3c-4 索引完成的 turn + L3c-5 检索注入），可 nil。
+func NewEngine(profile ProfileReader, db *gorm.DB, loader AttachmentLoader, hooks KnowledgeHooks) *Engine {
 	return &Engine{
 		profile: profile,
 		db:      db,
 		loader:  loader,
+		hooks:   hooks,
 		httpClient: &http.Client{
 			// 无整体超时——SSE 响应持续整个 turn。空闲由 SSE keepalive 注释
 			// 保活，而非 HTTP 超时（对齐 cloud_proxy.Proxy.HTTPClient）。
@@ -155,8 +171,17 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 		atts = loaded
 	}
 
-	// 4. 构造请求。
-	body, berr := adapter.requestBody(modelID, req.UserText, atts)
+	// 4. 构造请求。L3c-5：若启用 RAG，先检索相关 chunk 注入到 user text 前。
+	userText := req.UserText
+	if e.hooks != nil {
+		if chunks, rerr := e.hooks.Retrieve(ctx, req.UserText, retrievalTopK); rerr != nil {
+			// 检索失败不阻断 turn，仅记日志、不带 context 继续。
+			log.Printf("knowledge: retrieve for turn %s: %v", req.TurnUUID, rerr)
+		} else if len(chunks) > 0 {
+			userText = prependKnowledgeContext(req.UserText, chunks)
+		}
+	}
+	body, berr := adapter.requestBody(modelID, userText, atts)
 	if berr != nil {
 		_ = dst.WriteProxyError(cloudproxy.ProxyError{Kind: cloudproxy.KindBadRequest, Message: "本地推理请求构造失败"})
 		return berr
@@ -191,15 +216,64 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 		return fmt.Errorf("local inference: upstream status %d", resp.StatusCode)
 	}
 
-	// 6. 归一化上游 SSE → workmax SSEEvent，写 dst + cache。
-	return pipeLocalSSE(resp.Body, adapter, dst, cache)
+	// 6. 归一化上游 SSE → workmax SSEEvent，写 dst + cache。同时累积 assistant
+	//    文本，turn 成功后异步索引进知识库（L3c-4 跨线程长期记忆）。
+	var assistantText strings.Builder
+	err = pipeLocalSSE(resp.Body, adapter, dst, cache, &assistantText)
+	if err == nil && e.hooks != nil {
+		go e.indexCompletedTurn(req.TurnUUID, req.UserText, assistantText.String())
+	}
+	return
+}
+
+// indexCompletedTurn runs L3c-4 conversation indexing asynchronously so the
+// turn response is not blocked by embedding. Failures are logged only: a turn
+// that fails to index simply is not retrievable via RAG memory until re-indexed.
+func (e *Engine) indexCompletedTurn(turnUUID, userText, assistantText string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := e.hooks.IndexTurn(ctx, turnUUID, userText, assistantText); err != nil {
+		log.Printf("knowledge: index turn %s: %v", turnUUID, err)
+	}
+}
+
+// retrievalTopK / maxRetrievalContextChars cap how much knowledge context is
+// injected per turn (plan L3c-5: "控制注入量 top-k + token 上限").
+const (
+	retrievalTopK         = 4
+	maxRetrievalContextChars = 1500
+	knowledgeContextPreamble = "以下是知识库中可能相关的内容，回答时可参考：\n"
+)
+
+// prependKnowledgeContext packs retrieved chunks (best first) under a char
+// budget and prepends them to the user text as model context.
+func prependKnowledgeContext(userText string, chunks []string) string {
+	var b strings.Builder
+	b.WriteString(knowledgeContextPreamble)
+	used := 0
+	for _, c := range chunks {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		if used+len(c) > maxRetrievalContextChars {
+			break
+		}
+		b.WriteString("- ")
+		b.WriteString(c)
+		b.WriteByte('\n')
+		used += len(c) + 2
+	}
+	b.WriteString("\n")
+	b.WriteString(strings.TrimSpace(userText))
+	return b.String()
 }
 
 // pipeLocalSSE 读取上游 SSE 流，按 adapter 解析每帧，归一化成 workmax
 // text_delta / done 事件写入 dst，并把文本片段 Enqueue 进 cache。
 // 收到终端帧（OpenAI [DONE] / Anthropic message_stop）→ 干净返回 nil。
 // EOF 前未见终端帧 → emit proxy_error 并返回 non-nil（截断，cache 自动 partial）。
-func pipeLocalSSE(src io.Reader, adapter protocolAdapter, dst cloudproxy.SSEWriter, cache *cloudproxy.CacheWriter) error {
+func pipeLocalSSE(src io.Reader, adapter protocolAdapter, dst cloudproxy.SSEWriter, cache *cloudproxy.CacheWriter, assistantText *strings.Builder) error {
 	scanner := bufio.NewScanner(src)
 	scanner.Buffer(make([]byte, 0, 64*1024), localMaxSSEFrameBytes)
 
@@ -230,6 +304,9 @@ func pipeLocalSSE(src io.Reader, adapter protocolAdapter, dst cloudproxy.SSEWrit
 				return false, werr
 			}
 			_ = cache.Enqueue("text_delta", text)
+			if assistantText != nil {
+				assistantText.WriteString(text)
+			}
 		}
 		return false, nil
 	}
