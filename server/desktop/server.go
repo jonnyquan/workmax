@@ -142,8 +142,9 @@ type Server struct {
 // NewServer binds to 127.0.0.1:0 (OS-assigned port), registers the desktop
 // endpoint surface with an explicit per-route credential/request policy, and
 // keeps the authenticated not-found fallback that prevents route discovery.
-// It does NOT start serving — call Serve() after the handshake has been
-// emitted so the Electron parent learns the port first.
+// It does NOT start serving — call Serve() once the caller has published
+// the port however its transport does that. There is no longer a parent
+// process to hand it to; the Wails shell reads it in-process.
 //
 // The dynamic-port choice is deliberate: hardcoding a port would
 // collide with another sidecar instance or another app, and
@@ -174,7 +175,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	// Privileged loopback routes must never be reached through Gin's implicit
-	// trailing-slash or fixed-path redirects. The Electron compatibility bridge
+	// trailing-slash or fixed-path redirects. The renderer bridge
 	// also rejects redirects, but the Sidecar keeps this independent second
 	// line of defense for every caller.
 	router.RedirectTrailingSlash = false

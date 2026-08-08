@@ -4,7 +4,7 @@
 // the sidecar's loopback HTTP server from non-renderer callers on the
 // same machine.
 //
-// The token is generated fresh on each sidecar startup (Electron
+// The token is generated fresh on each sidecar startup (the shell
 // passes it via env var; renderer receives it via contextBridge).
 // Renderer requests must include it as a header; everyone else (other
 // browser tabs, other local processes that happened to guess the port)

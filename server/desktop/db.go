@@ -93,8 +93,7 @@ func openLocalDBWithIntegrityChecker(integrityChecker func(*gorm.DB) (string, er
 		// statement caching adds complexity without measurable gain.
 		//
 		// Custom logger pinned to stderr (NOT stdout): the sidecar
-		// reserves stdout for the single-line handshake JSON that
-		// Electron parses on startup. Any GORM noise on stdout would
+		// keeps stdout clean. Any GORM noise on stdout would
 		// break that contract.
 		Logger: newSilentishLogger(),
 	})

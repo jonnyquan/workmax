@@ -1,8 +1,8 @@
 //go:build desktop
 
 // Bootstrap is the single shared startup path for every WorkMax Desktop
-// entry point: the legacy Electron sidecar (cmd/workagent-desktop) and the
-// Wails binary (desktop/wails, both windowed and --serve-only modes).
+// mode of the Wails binary (desktop/wails): windowed, --serve-only, and the
+// verification harnesses.
 //
 // The wiring lived in cmd/workagent-desktop/main.go until the Wails migration
 // needed a second caller. Keeping one copy is the point: two entry points that
@@ -13,8 +13,8 @@
 // What Bootstrap deliberately does NOT do, so callers stay in control:
 //   - it does not serve (mirrors NewServer: bind now, serve after the caller
 //     has emitted whatever handshake its transport needs);
-//   - it does not install signal handlers or a stdin watcher (Electron needs
-//     stdin-EOF semantics, Wails needs OnBeforeClose — neither belongs here);
+//   - it does not install signal handlers or window hooks (--serve-only wants
+//     signals, the windowed mode wants OnBeforeClose — neither belongs here);
 //   - it does not seed smoke fixtures (that stays in the entry point that
 //     owns the smoke contract).
 //

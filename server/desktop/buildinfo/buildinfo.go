@@ -7,7 +7,7 @@
 //
 // CI builds can override via -ldflags:
 //
-//	go build -tags desktop -ldflags="-X server/desktop/buildinfo.Version=$(git describe --tags)" ./cmd/workagent-desktop
+//	go build -tags desktop -ldflags="-X server/desktop/buildinfo.Version=$(git describe --tags)" ./desktop/wails
 //
 // Without an override the default below ships; bump it when cutting
 // a release. Keep the form semver-ish so version-gated cloud
@@ -15,7 +15,7 @@
 package buildinfo
 
 // Version is the sidecar version string. Emitted in:
-//   - the handshake JSON on stdout to Electron
+//   - /system/server-version and /system/diagnostics
 //   - the X-WorkMax-Client-Version header on every cloud-bound request
 //   - the startup log line
 //

@@ -16,7 +16,7 @@ import (
 // RendererLogger appends structured log entries from the renderer
 // process to a rotated file under <dataDir>/logs/renderer.log.
 //
-// Why this exists: in a packaged Electron build, console.error
+// Why this exists: in a packaged build, console.error
 // from the renderer evaporates — there's no devtools, no terminal,
 // no Sentry. A user reporting "the app crashed" gives us nothing
 // to debug from. Persisting renderer events to disk gives us at

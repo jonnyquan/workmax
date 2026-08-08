@@ -15,7 +15,7 @@ for required_file in \
   "$repo_root/server/go.mod" \
   "$repo_root/server/config.example.yaml" \
   "$repo_root/server/config.release.example.yaml" \
-  "$repo_root/desktop/electron/package-lock.json" \
+  "$repo_root/desktop/renderer/package-lock.json" \
   "$repo_root/desktop/contracts/desktop-boundaries.v0.json"; do
   if [ ! -f "$required_file" ]; then
     echo "doctor: missing required file: $required_file" >&2

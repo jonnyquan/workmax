@@ -9,7 +9,7 @@
 // the machine.
 //
 // Native assets (the libonnxruntime shared lib, model.onnx, tokenizer.json)
-// are NOT embedded in the binary. They ship as Electron extraResources and are
+// are NOT embedded in the binary. They are downloaded on first use and are
 // loaded by path at runtime, keeping the sidecar binary small and avoiding the
 // Git-LFS-through-Go-proxy problem that breaks library-embedded models. See
 // memory workmax-l3c-embedding-spike for the rationale.
@@ -52,8 +52,8 @@ type Embedder struct {
 	tokenizer *tokenizer.Tokenizer
 }
 
-// Resources locates the native embedding assets on disk (extraResources in the
-// packaged app, local paths in dev).
+// Resources locates the native embedding assets on disk. They live under the
+// user's data directory, where the downloader writes them on first use.
 type Resources struct {
 	// LibOnnxPath is the libonnxruntime shared library (.dylib/.so/.dll).
 	LibOnnxPath string

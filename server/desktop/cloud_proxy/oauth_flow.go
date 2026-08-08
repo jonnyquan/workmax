@@ -26,14 +26,14 @@ const OAuthFlowTimeout = 5 * time.Minute
 // trip. The lifecycle is:
 //
 //  1. Start()  — sidecar mints PKCE + state, spins up the loopback
-//     callback server, and returns the authorize URL that Electron Main
+//     callback server, and returns the authorize URL that the shelln Main
 //     validates before handing it to the system browser.
 //  2. Wait()   — blocks until the loopback server receives the
 //     redirect, exchanges code → token, persists to
 //     Keychain, returns success.
 //
 // One instance per concurrent flow. Multiple concurrent flows from
-// the same user are not expected (one Electron window, one user)
+// the same user are not expected (one window, one user)
 // but the design tolerates them via per-flow state.
 type OAuthFlow struct {
 	client     *Client

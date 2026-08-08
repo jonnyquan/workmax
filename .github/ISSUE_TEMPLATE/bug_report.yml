@@ -33,7 +33,7 @@ body:
       label: Component
       options:
         - Go Server
-        - Desktop Electron shell
+        - Desktop shell (Wails)
         - Desktop renderer
         - Build or packaging
         - Documentation
