@@ -2110,6 +2110,13 @@ function submitChat(event) {
   };
   state.activeTurn = activeTurn;
   chatInput.value = "";
+  // Read the attachments before clearing the tray: startTurn below needs the
+  // ids, and clearing first meant every turn was sent with an empty file list
+  // — the attachment feature looked like it worked and silently dropped every
+  // file.
+  const fileIDs = state.pendingFiles
+    .filter((file) => file.status === "ready")
+    .map((file) => file.id);
   state.pendingFiles = [];
   renderAttachments();
   turnState.textContent = "Working";
@@ -2122,9 +2129,7 @@ function submitChat(event) {
           threadUUID: thread.uuid,
           userText,
           chatMode: state.selectedMode,
-          fileIDs: state.pendingFiles
-            .filter((f) => f.status === "ready")
-            .map((f) => f.id),
+          fileIDs,
         },
         (rawEvent) => {
           if (!isCurrentTurn(activeTurn)) return;

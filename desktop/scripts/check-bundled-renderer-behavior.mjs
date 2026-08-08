@@ -199,63 +199,43 @@ class FakeElement {
   }
 }
 
+// The element set is derived from index.html rather than listed here.
+//
+// It used to be a hardcoded array, and it drifted: twenty elements added by
+// later milestones (model settings, attachments) were never added to the list,
+// so renderer.js threw on a null element and this whole behavior suite has
+// been failing rather than checking anything. Reading the real markup means
+// the stub cannot fall behind what ships — a new element in index.html simply
+// exists here too.
+//
+// Tag name and initial hidden state come from the markup for the same reason:
+// guessing them from the id ("...-button" means a button) is another place for
+// the two to disagree.
+function parseRendererElements(html) {
+  const elements = new Map();
+  for (const match of html.matchAll(/<([a-zA-Z][a-zA-Z0-9-]*)\s([^>]*)>/gu)) {
+    const [, tagName, attributes] = match;
+    const idMatch = /\bid="([^"]+)"/u.exec(attributes);
+    if (!idMatch) continue;
+    elements.set(idMatch[1], {
+      tagName: tagName.toLowerCase(),
+      hidden: /\bhidden\b/u.test(attributes),
+    });
+  }
+  if (elements.size === 0) {
+    throw new Error("no id-bearing elements found in index.html; the parse is wrong, not the markup");
+  }
+  return elements;
+}
+
 class FakeDocument {
-  constructor() {
+  constructor(rendererHtml) {
     this.byId = new Map();
-    for (const id of [
-      "status-card",
-      "runtime-label",
-      "refresh-button",
-      "login-button",
-      "login-form",
-      "login-email",
-      "login-password",
-      "login-submit-button",
-      "login-cancel-button",
-      "new-thread-button",
-      "new-thread-form",
-      "new-thread-name",
-      "new-thread-mode",
-      "new-thread-error",
-      "new-thread-submit-button",
-      "new-thread-cancel-button",
-      "thread-list",
-      "empty-state",
-      "empty-title",
-      "empty-description",
-      "empty-new-thread-button",
-      "thread-panel",
-      "thread-title",
-      "thread-meta",
-      "message-viewport",
-      "message-list",
-      "turn-recovery-card",
-      "turn-recovery-description",
-      "turn-recovery-prompt",
-      "turn-recovery-feedback",
-      "turn-recovery-resume-button",
-      "turn-recovery-dismiss-button",
-      "chat-form",
-      "agent-mode",
-      "composer-status",
-      "chat-input",
-      "stop-button",
-      "send-button",
-      "turn-state",
-    ]) {
-      let tagName = "div";
-      if (id.endsWith("button")) tagName = "button";
-      if (id === "login-form" || id === "new-thread-form" || id === "chat-form") tagName = "form";
-      if (id === "login-email" || id === "login-password" || id === "new-thread-name") tagName = "input";
-      if (id === "agent-mode" || id === "new-thread-mode") tagName = "select";
-      if (id === "chat-input") tagName = "textarea";
-      this.byId.set(id, new FakeElement(tagName));
+    for (const [id, spec] of parseRendererElements(rendererHtml)) {
+      const element = new FakeElement(spec.tagName);
+      element.hidden = spec.hidden;
+      this.byId.set(id, element);
     }
-    this.byId.get("login-form").hidden = true;
-    this.byId.get("new-thread-form").hidden = true;
-    this.byId.get("new-thread-error").hidden = true;
-    this.byId.get("thread-panel").hidden = true;
-    this.byId.get("stop-button").hidden = true;
   }
 
   querySelector(selector) {
@@ -395,7 +375,7 @@ function walk(node, predicate, out = []) {
 }
 
 async function runRenderer(mockBridge, mockDesktopBridge) {
-  const document = new FakeDocument();
+  const document = new FakeDocument(rendererHTML);
   let uuidSequence = 0;
   const crypto = {
     randomUUID() {
@@ -1118,6 +1098,81 @@ async function testCachedStreamingStatesRenderPartialAndRejectUnknown() {
   assert.doesNotMatch(invalid.document.byId.get("message-list").textContent, /Answer/);
 }
 
+// A turn must carry the attachments the user staged. This regression is the
+// reason worth having: the tray was cleared before startTurn read it, so
+// fileIDs was always empty and every upload was silently dropped — the chips
+// appeared, the upload succeeded, and the model never saw the file.
+async function testStagedAttachmentsAreSentWithTheTurn() {
+  let sentFileIDs = null;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("attach-thread", "Attachments")] });
+      }
+      if (pathname === "/agent/threads/attach-thread/messages") {
+        return response({ items: [] });
+      }
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() {
+        return typedSuccess({ file_id: 4242 });
+      },
+      async listSkills() {
+        return typedSuccess(pptCatalog());
+      },
+      startTurn(input, callback) {
+        sentFileIDs = input.fileIDs;
+        callback({ type: "text_delta", turnID: "attach-turn", delta: "ok" });
+        callback({
+          type: "done",
+          turnID: "attach-turn",
+          result: { code: "", subtype: "", is_error: false },
+        });
+        return { turnID: "attach-turn" };
+      },
+      async cancelTurn(turnID) {
+        return { turnID, canceled: true };
+      },
+    },
+  };
+
+  const { document, context } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  // Stage one uploaded attachment the way the upload callback does.
+  // uploadThreadFile is a top-level renderer function; the VM context exposes
+  // it, and a plain object is enough because the renderer only reads name/size
+  // before handing the file to the bridge.
+  context.uploadThreadFile({ name: "notes.txt", size: 12 });
+  await settle();
+
+  const input = document.byId.get("chat-input");
+  input.value = "Summarise the attachment";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  // Array.from because the value crossed a VM realm boundary: same contents,
+  // different Array prototype, and deepStrictEqual cares.
+  assert.deepEqual(
+    Array.from(sentFileIDs ?? []),
+    [4242],
+    "the staged attachment id must reach startTurn; an empty list means the tray was cleared first"
+  );
+  assert.equal(
+    document.byId.get("attachment-chips").hidden,
+    true,
+    "the tray must be cleared once the turn owns the ids"
+  );
+}
+
 async function testSynchronousTurnCallbacksAreBufferedUntilOpenResult() {
   const bridge = {
     async fetch(pathname) {
@@ -1137,6 +1192,9 @@ async function testSynchronousTurnCallbacksAreBufferedUntilOpenResult() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         return typedSuccess(pptCatalog());
       },
@@ -1216,6 +1274,9 @@ async function testAgentTurnStreamsAndReconciles() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         skillReads += 1;
         return typedSuccess(pptCatalog());
@@ -1376,6 +1437,9 @@ async function testThreadSwitchCancelsAndFencesOldTurn() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         return typedSuccess(pptCatalog());
       },
@@ -1440,6 +1504,9 @@ async function testStopTurnIsSingleShot() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         return typedSuccess(pptCatalog());
       },
@@ -1500,6 +1567,9 @@ async function testInitialTurnBusyRefreshesRecoveryWithoutReplay() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         return typedSuccess(pptCatalog());
       },
@@ -1583,6 +1653,9 @@ async function testCancelAckFailureShowsLocalStopAndRefreshesRecovery() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         return typedSuccess(pptCatalog());
       },
@@ -1663,6 +1736,9 @@ async function testSSESessionChangedClearsPromptWithoutReplay() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         skillReads += 1;
         return typedSuccess(pptCatalog());
@@ -1740,6 +1816,9 @@ async function testCatalog409UsesSessionChangedRecovery() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         skillsCalls += 1;
         if (skillsCalls === 1) {
@@ -1786,6 +1865,9 @@ async function testRejectsMalformedAgentContractsWithoutLeakingPayload() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         return typedSuccess(pptCatalog());
       },
@@ -1883,6 +1965,9 @@ async function testRejectsLegacyOpenAgentEventShapes() {
     };
     const desktopBridge = {
       agent: {
+        async uploadThreadFile() {
+          throw new Error("uploadThreadFile is not exercised by this test");
+        },
         async listSkills() {
           return typedSuccess(pptCatalog());
         },
@@ -1928,6 +2013,9 @@ async function testRejectsMalformedCatalogResult() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         const malformed = pptCatalog();
         malformed.count = 2;
@@ -1976,6 +2064,9 @@ async function testRecoverableTurnRequiresExplicitResumeAndHandlesBusy() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         return typedSuccess(pptCatalog());
       },
@@ -2105,6 +2196,9 @@ async function testRecoverableTurnDismissIsExplicitAndIdempotent() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         return typedSuccess(pptCatalog());
       },
@@ -2158,6 +2252,9 @@ async function testRecoverableErrorResultIsSanitized() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         return typedSuccess(pptCatalog());
       },
@@ -2213,6 +2310,9 @@ async function testMalformedRecoverableTurnDoesNotLeakOrRender() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         return typedSuccess(pptCatalog());
       },
@@ -2262,6 +2362,9 @@ async function testCreatesThreadOnceAndFocusesComposer() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         return typedSuccess(pptCatalog());
       },
@@ -2356,6 +2459,9 @@ async function testCreateRetriesKeepUUIDAndAcceptCurrentReplayRow() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         return typedSuccess(pptCatalogWithReplayMode());
       },
@@ -2500,6 +2606,9 @@ async function testPermanentCreateFailuresDoNotOfferSameIdentityRetry() {
     };
     const desktopBridge = {
       agent: {
+        async uploadThreadFile() {
+          throw new Error("uploadThreadFile is not exercised by this test");
+        },
         async listSkills() {
           return typedSuccess(pptCatalog());
         },
@@ -2569,6 +2678,9 @@ async function testPausedCreateReplayRequiresExplicitCancel() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         return typedSuccess(pptCatalog());
       },
@@ -2634,6 +2746,9 @@ async function testCreateEscapeFencesLateCompletion() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         return typedSuccess(pptCatalog());
       },
@@ -2696,6 +2811,9 @@ async function testCreateSessionChangedUsesUnifiedRecovery() {
   };
   const desktopBridge = {
     agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
       async listSkills() {
         skillReads += 1;
         return typedSuccess(pptCatalog());
@@ -2752,6 +2870,9 @@ async function testCreateRejectsForeignUUIDAndMode() {
     };
     const desktopBridge = {
       agent: {
+        async uploadThreadFile() {
+          throw new Error("uploadThreadFile is not exercised by this test");
+        },
         async listSkills() {
           return typedSuccess(pptCatalog());
         },
@@ -2796,6 +2917,7 @@ await testRejectsMalformedMessageTimestamps();
 await testRejectsMalformedLoginTransactionResult();
 await testRedactsErrorStatusMessages();
 await testCachedStreamingStatesRenderPartialAndRejectUnknown();
+await testStagedAttachmentsAreSentWithTheTurn();
 await testSynchronousTurnCallbacksAreBufferedUntilOpenResult();
 await testAgentTurnStreamsAndReconciles();
 await testLateThreadHistoryCannotContaminateSelection();
