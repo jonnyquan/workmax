@@ -1459,6 +1459,112 @@ async function testThreadDeleteIsTwoStepAndLocalOnly() {
   );
 }
 
+// "Selected for the next request": a persisted file can be re-attached to a
+// new turn by checking it in the Sources panel. Until this existed, files from
+// earlier sessions were display-only — the panel showed them, but only a fresh
+// upload could ever reach the model again.
+async function testSelectedSourcesRideTheNextTurn() {
+  const sentFileIDs = [];
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("src-thread", "Sourced"), thread("other-thread", "Other")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() {
+        return typedSuccess({ file_id: 4242 });
+      },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      async listThreadFiles() {
+        return typedSuccess({
+          items: [
+            { file_id: 7, file_name: "report.pdf", file_size: 1024, file_type: "pdf", mime_type: "application/pdf", on_disk: true, created_at: "2026-05-01T00:00:00Z" },
+            { file_id: 8, file_name: "gone.txt", file_size: 10, file_type: "txt", mime_type: "text/plain", on_disk: false, created_at: "2026-05-01T00:00:00Z" },
+          ],
+          count: 2,
+        });
+      },
+      startTurn(input, callback) {
+        sentFileIDs.push(Array.from(input.fileIDs ?? []));
+        callback({ type: "text_delta", turnID: `src-turn-${sentFileIDs.length}`, delta: "ok" });
+        callback({ type: "done", turnID: `src-turn-${sentFileIDs.length}`, result: { code: "", subtype: "", is_error: false } });
+        return { turnID: `src-turn-${sentFileIDs.length}` };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document, context } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  const checkboxes = () =>
+    walk(document.byId.get("sources-list"), (n) => n.classList?.contains("source-select"));
+  assert.equal(
+    checkboxes().length,
+    1,
+    "only the readable persisted file gets a checkbox; missing bytes have nothing to attach",
+  );
+
+  const box = checkboxes()[0];
+  box.checked = true;
+  box.dispatch("change");
+  await settle();
+  assert.equal(document.byId.get("sources-selected").hidden, false);
+  assert.match(document.byId.get("sources-selected").textContent, /1 selected for the next request/);
+
+  // A fresh upload joins the selection: the turn carries the union, deduped.
+  context.uploadThreadFile({ name: "notes.txt", size: 12 });
+  await settle();
+
+  const input = document.byId.get("chat-input");
+  input.value = "Use both documents";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  assert.deepEqual(
+    Array.from(sentFileIDs[0]).sort(),
+    [4242, 7],
+    "the turn must carry the checked persisted file AND the fresh upload",
+  );
+  assert.equal(
+    document.byId.get("sources-selected").hidden,
+    true,
+    "the label says 'next request', and this was it — the selection must clear once a turn owns the ids",
+  );
+
+  // The next turn goes out clean.
+  input.value = "And now without them";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+  assert.deepEqual(Array.from(sentFileIDs[1]), [], "no selection, no file ids");
+
+  // A selection names one thread's files; switching threads must drop it, or
+  // thread A's ids would ride into thread B's next turn.
+  const rearm = checkboxes()[0];
+  rearm.checked = true;
+  rearm.dispatch("change");
+  await settle();
+  assert.equal(document.byId.get("sources-selected").hidden, false, "precondition: re-armed");
+  walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[1].click();
+  await settle();
+  assert.equal(
+    document.byId.get("sources-selected").hidden,
+    true,
+    "the selection must not survive a thread switch",
+  );
+}
+
 // The default thread name is minted before the conversation exists, so it is
 // wrong more often than right — and grouping and search key off the title.
 // This drives the rename flow end to end and pins its local-only scope.
@@ -4070,6 +4176,7 @@ await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
 await testThreadDeleteIsTwoStepAndLocalOnly();
 await testThreadRenameFlow();
+await testSelectedSourcesRideTheNextTurn();
 await testMessageActionsCopyAndReuse();
 await testMessageActionsAbsentWithoutAClipboard();
 await testStreamedAnswerGainsActionsWhenReconcileFails();

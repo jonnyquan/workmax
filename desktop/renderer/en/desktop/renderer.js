@@ -2936,10 +2936,18 @@ function submitChat(event) {
   // ids, and clearing first meant every turn was sent with an empty file list
   // — the attachment feature looked like it worked and silently dropped every
   // file.
-  const fileIDs = state.pendingFiles
-    .filter((file) => file.status === "ready")
-    .map((file) => file.id);
+  // Fresh uploads from the tray plus persisted files checked in the Sources
+  // panel, deduped: re-uploading a checked file must not attach it twice.
+  const fileIDSet = new Set(
+    state.pendingFiles
+      .filter((file) => file.status === "ready")
+      .map((file) => file.id)
+  );
+  for (const id of contextState.selectedFileIDs) fileIDSet.add(id);
+  const fileIDs = Array.from(fileIDSet);
   state.pendingFiles = [];
+  // Cleared with the tray: the label says "next request", and this was it.
+  contextState.selectedFileIDs = new Set();
   renderAttachments();
   turnState.textContent = "Working";
   renderTaskContext();
@@ -4090,7 +4098,15 @@ function ctxEl(id) {
   return document.querySelector(`#${id}`);
 }
 
-const contextState = { sources: [], sourcesThreadUUID: null, retrieved: [] };
+const contextState = {
+  sources: [],
+  sourcesThreadUUID: null,
+  retrieved: [],
+  // File ids the user has checked in the Sources panel to send with the NEXT
+  // request. Per-request on purpose — the label says "next request", so the
+  // set clears once a turn owns the ids, exactly like the upload tray.
+  selectedFileIDs: new Set(),
+};
 
 // Retrieval provenance is per-turn and lives only in memory: the sidecar
 // announces it on the stream and does not persist it, so there is nothing to
@@ -4207,14 +4223,49 @@ function renderSources() {
     ...pending.filter((f) => !f.file_id || !persistedIds.has(f.file_id)),
   ];
 
+  // Ids that stopped existing (file deleted, thread reloaded) must not linger
+  // in the selection, or the count lies and a dead id rides into a turn.
+  const selectable = new Set(
+    contextState.sources
+      .filter((f) => f.on_disk !== false)
+      .map((f) => f.file_id)
+  );
+  for (const id of Array.from(contextState.selectedFileIDs)) {
+    if (!selectable.has(id)) contextState.selectedFileIDs.delete(id);
+  }
+
   ctxEl("sources-list").innerHTML = "";
   for (const file of items) {
     const item = document.createElement("li");
     item.className = "context-item" + (file.on_disk === false ? " is-missing" : "");
 
-    const name = document.createElement("span");
-    name.className = "context-item-name";
-    name.textContent = file.file_name;
+    // Persisted, readable files can be re-attached to the next request. A
+    // fresh upload is already armed through the tray, and a file whose bytes
+    // are gone has nothing to attach — neither gets a checkbox.
+    const checkable = !file.pending && file.on_disk !== false && persistedIds.has(file.file_id);
+    if (checkable) {
+      const label = document.createElement("label");
+      label.className = "context-item-select";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.className = "source-select";
+      box.checked = contextState.selectedFileIDs.has(file.file_id);
+      box.addEventListener("change", () => {
+        if (box.checked) contextState.selectedFileIDs.add(file.file_id);
+        else contextState.selectedFileIDs.delete(file.file_id);
+        renderTaskContext();
+      });
+      const name = document.createElement("span");
+      name.className = "context-item-name";
+      name.textContent = file.file_name;
+      label.append(box, name);
+      item.appendChild(label);
+    } else {
+      const name = document.createElement("span");
+      name.className = "context-item-name";
+      name.textContent = file.file_name;
+      item.appendChild(name);
+    }
 
     const meta = document.createElement("span");
     meta.className = "context-item-meta";
@@ -4226,12 +4277,18 @@ function renderSources() {
         ? "Uploading…"
         : formatFileSize(file.file_size);
 
-    item.append(name, meta);
+    item.appendChild(meta);
     ctxEl("sources-list").appendChild(item);
   }
 
   if (ctxEl("sources-empty")) ctxEl("sources-empty").hidden = items.length > 0;
   if (ctxEl("sources-meta")) ctxEl("sources-meta").textContent = String(items.length);
+  if (ctxEl("sources-selected")) {
+    const chosen = contextState.selectedFileIDs.size;
+    ctxEl("sources-selected").hidden = chosen === 0;
+    ctxEl("sources-selected").textContent =
+      `${chosen} selected for the next request`;
+  }
   if (ctxEl("deliverables-meta")) ctxEl("deliverables-meta").textContent = "0";
   if (ctxEl("context-count")) ctxEl("context-count").textContent = String(items.length);
 }
@@ -4285,8 +4342,12 @@ async function loadThreadSources(threadUUID) {
   contextState.sources = [];
   // Provenance belongs to a turn, and the turn belongs to a thread. Carrying
   // it across a switch would credit this thread's answer to another one's
-  // documents.
+  // documents. The selection likewise: these ids name another thread's files.
   contextState.retrieved = [];
+  // Redundant with renderSources' pruning-to-current-sources, deliberately:
+  // either alone prevents one thread's ids riding into another's turn, and
+  // the negative test only fails when both are removed.
+  contextState.selectedFileIDs = new Set();
   renderTaskContext();
   if (!threadUUID) return;
 

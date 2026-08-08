@@ -1203,6 +1203,26 @@ textarea:focus-visible {
   font-style: italic;
 }
 
+/* A checked source is armed for the next request; the row reads as one
+   clickable label so the target is bigger than the 13px box. */
+.context-item-select {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+.context-item-select input {
+  margin: 0;
+  accent-color: hsl(var(--primary));
+}
+
+.context-selected {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: hsl(var(--primary));
+}
+
 .context-empty {
   margin: 0;
   font-size: 11px;
