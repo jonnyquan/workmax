@@ -768,6 +768,60 @@ textarea:focus-visible {
   animation: cursor-blink 1s steps(2, start) infinite;
 }
 
+/* Per-message actions. Always present rather than revealed on hover: a
+   control nobody can see is a control nobody uses, and the row is quiet
+   enough to sit under every message without competing with the answer. */
+.message-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.message.user .message-actions {
+  justify-content: flex-end;
+}
+
+.message-action {
+  padding: 3px 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.message-action:hover {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+.message-action:focus-visible {
+  outline: none;
+  border-color: hsl(var(--ring));
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.35);
+}
+
+/* The code block's button is positioned against a wrapper rather than the
+   <pre> itself, so it never becomes part of the block's text. */
+.md-code-wrap {
+  position: relative;
+}
+
+/* Only inside a wrapper, which only exists when there is a button: the first
+   line of code must not run underneath it. */
+.md-code-wrap > .md-code {
+  padding-right: 92px;
+}
+
+.md-code-wrap > .message-action {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  background: hsl(var(--card));
+}
+
 .message.partial .message-role::after {
   content: " · partial";
   color: hsl(var(--warning));

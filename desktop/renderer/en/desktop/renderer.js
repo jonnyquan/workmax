@@ -1597,7 +1597,17 @@ function buildCodeBlock(code, language) {
   }
   node.textContent = code;
   pre.appendChild(node);
-  return pre;
+
+  // A code block the user cannot get out of the window is a screenshot of
+  // code. The button is a sibling of <pre>, not a child: inside it, its label
+  // would become part of the block's own text — so selecting the code by hand,
+  // or copying it, would pick up the word "Copy".
+  const copy = buildCopyButton(code, "Copy code");
+  if (!copy) return pre;
+  const wrap = document.createElement("div");
+  wrap.className = "md-code-wrap";
+  wrap.append(copy, pre);
+  return wrap;
 }
 
 // Inline scanning. Written as a scanner rather than a chain of replacements
@@ -1729,6 +1739,49 @@ function buildLink(link) {
   return anchor;
 }
 
+// Clipboard access, or null when there is none.
+//
+// The UI origin is http://127.0.0.1, which browsers treat as a secure context,
+// so this is present in the shipped shell. It is still checked because the
+// behaviour suite runs the same code in a VM with no navigator at all, and
+// because a missing clipboard should remove the affordance rather than break
+// the message.
+const COPY_FEEDBACK_MS = 1200;
+
+function clipboardWriter() {
+  const clipboard = globalThis.navigator?.clipboard;
+  return typeof clipboard?.writeText === "function" ? clipboard : null;
+}
+
+function buildCopyButton(text, label) {
+  const clipboard = clipboardWriter();
+  if (!clipboard || typeof text !== "string" || text === "") return null;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "message-action";
+  button.textContent = label;
+  button.addEventListener("click", () => {
+    // The result is reported on the button itself rather than in the status
+    // card: this is a per-message action, and a global status line would make
+    // every copy look like an application event.
+    Promise.resolve(clipboard.writeText(text)).then(
+      () => {
+        button.textContent = "Copied";
+        setTimeout(() => {
+          button.textContent = label;
+        }, COPY_FEEDBACK_MS);
+      },
+      () => {
+        button.textContent = "Copy failed";
+        setTimeout(() => {
+          button.textContent = label;
+        }, COPY_FEEDBACK_MS);
+      }
+    );
+  });
+  return button;
+}
+
 function renderMessage(role, text, streamingState = "complete") {
   const wrapper = document.createElement("article");
   wrapper.className = `message ${role}`;
@@ -1750,7 +1803,45 @@ function renderMessage(role, text, streamingState = "complete") {
     bubble.textContent = text;
   }
   wrapper.append(label, bubble);
+
+  attachMessageActions(wrapper, role, text);
   return wrapper;
+}
+
+// Built separately from the bubble because a streamed answer starts empty:
+// renderMessage cannot offer "copy" for text that has not arrived yet, so the
+// finished turn calls this once it has.
+function attachMessageActions(wrapper, role, text) {
+  if (!wrapper) return;
+  // Idempotent. No current path reaches this: renderMessage builds the
+  // streaming bubble from empty text, which yields no row, so the finished
+  // turn is always the first to add one. Kept because "one row per message" is
+  // the invariant, and the day a placeholder action appears on a streaming
+  // bubble the alternative is two of every button.
+  for (const child of Array.from(wrapper.children || [])) {
+    if (child.classList?.contains("message-actions")) return;
+  }
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+  const copy = buildCopyButton(text, role === "assistant" ? "Copy answer" : "Copy");
+  if (copy) actions.appendChild(copy);
+  if (role === "user" && text) {
+    // Not a retry: it puts the words back in the composer so they can be
+    // changed first. Re-running a prompt verbatim is rarely what someone wants
+    // when they did not like the answer, and a one-click resend would also
+    // have to duplicate the turn machinery it would be bypassing.
+    const reuse = document.createElement("button");
+    reuse.type = "button";
+    reuse.className = "message-action";
+    reuse.textContent = "Edit and resend";
+    reuse.addEventListener("click", () => {
+      chatInput.value = text;
+      updateComposerState();
+      chatInput.focus();
+    });
+    actions.appendChild(reuse);
+  }
+  if (actions.children.length > 0) wrapper.appendChild(actions);
 }
 
 function scrollMessagesToEnd() {
@@ -3160,6 +3251,11 @@ function finishActiveTurn(activeTurn, label, canceled) {
     // second is cost: re-parsing the whole answer per delta is quadratic in
     // its length, which a long reply would feel.
     renderMarkdownInto(activeTurn.assistantBubble, activeTurn.assistantText);
+    attachMessageActions(
+      activeTurn.assistantBubble.parentNode,
+      "assistant",
+      activeTurn.assistantText
+    );
   }
   turnState.textContent = label;
   updateComposerState();

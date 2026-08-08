@@ -396,7 +396,7 @@ function walk(node, predicate, out = []) {
   return out;
 }
 
-async function runRenderer(mockBridge, mockDesktopBridge) {
+async function runRenderer(mockBridge, mockDesktopBridge, options = {}) {
   const document = new FakeDocument(rendererHTML);
   let uuidSequence = 0;
   const crypto = {
@@ -418,6 +418,10 @@ async function runRenderer(mockBridge, mockDesktopBridge) {
       desktopBridge: mockDesktopBridge,
     },
   };
+  // Absent unless a test asks for it: the renderer must degrade to no copy
+  // affordance where there is no clipboard, and most tests run in exactly that
+  // shape, so leaving it out keeps them honest about it.
+  if (options.clipboard) context.navigator = { clipboard: options.clipboard };
   vm.createContext(context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
   await settle();
@@ -1377,6 +1381,226 @@ async function testShimInterceptsExternalLinks() {
   click.handler({ target: anchor, preventDefault() { prevented = true; } });
   await settle();
   assert.equal(prevented, false, "a fragment link must be left to the page");
+}
+
+// An answer the user cannot get out of the window is a screenshot. These are
+// the affordances that make the chat column usable as a work surface rather
+// than a transcript viewer.
+async function testMessageActionsCopyAndReuse() {
+  const answer = "Here is the query.\n\n```sql\nSELECT 1;\n```\n";
+  const written = [];
+  const clipboard = { async writeText(text) { written.push(text); } };
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("copy-thread", "Copyable")] });
+      }
+      if (pathname === "/agent/threads/copy-thread/messages") {
+        return response({
+          items: [{
+            uuid: "copy-msg",
+            user_text: "Show me the query",
+            ai_text: answer,
+            streaming_state: "complete",
+            created_at: "2026-05-21T00:00:00Z",
+            updated_at: "2026-05-21T00:00:00Z",
+          }],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn() { return { turnID: "copy-turn" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge, { clipboard });
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  const buttons = walk(
+    document.byId.get("message-list"),
+    (n) => n.tagName === "BUTTON" && n.classList?.contains("message-action"),
+  );
+  const byLabel = (label) => buttons.find((b) => b.textContent === label);
+
+  const copyAnswer = byLabel("Copy answer");
+  assert.ok(copyAnswer, "a finished answer must offer a copy");
+  copyAnswer.click();
+  await settle();
+  assert.equal(
+    written.at(-1),
+    answer,
+    "copying an answer must yield the Markdown the model wrote, not the rendered text",
+  );
+
+  const copyCode = byLabel("Copy code");
+  assert.ok(copyCode, "a code block must offer a copy");
+  copyCode.click();
+  await settle();
+  assert.equal(
+    written.at(-1),
+    "SELECT 1;",
+    "copying code must yield the code alone — no fence, no button label",
+  );
+
+  const pre = walk(document.byId.get("message-list"), (n) => n.tagName === "PRE")[0];
+  assert.equal(
+    pre.textContent,
+    "SELECT 1;",
+    "the button must not live inside <pre>, or its label becomes part of the code",
+  );
+
+  // A user message offers its words back, editable. Not a one-click retry:
+  // re-running a prompt verbatim is rarely what someone wants after a bad
+  // answer.
+  const reuse = byLabel("Edit and resend");
+  assert.ok(reuse, "a user message must be reusable");
+  reuse.click();
+  await settle();
+  assert.equal(document.byId.get("chat-input").value, "Show me the query");
+
+  // One action row per message, however many times it is rendered.
+  const rows = walk(
+    document.byId.get("message-list"),
+    (n) => n.classList?.contains("message-actions"),
+  );
+  assert.equal(rows.length, 2, "one action row for the question and one for the answer");
+}
+
+// Where there is no clipboard there is no button. An affordance that silently
+// does nothing is worse than its absence.
+//
+// This has to render real messages to mean anything. The first version of it
+// used the missing-bridge run, where the renderer bails before drawing any
+// message at all — so it asserted that an empty list contains no buttons, and
+// passed with the clipboard check deleted.
+async function testMessageActionsAbsentWithoutAClipboard() {
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("no-clip", "No clipboard")] });
+      }
+      if (pathname === "/agent/threads/no-clip/messages") {
+        return response({
+          items: [{
+            uuid: "m", user_text: "hi", ai_text: "hello",
+            streaming_state: "complete",
+            created_at: "2026-05-21T00:00:00Z", updated_at: "2026-05-21T00:00:00Z",
+          }],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn() { return { turnID: "t" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+  // No clipboard option: the shipped shell has one, this run does not.
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  assert.match(
+    document.byId.get("message-list").textContent,
+    /hello/,
+    "precondition: the messages must actually be on screen",
+  );
+  const copyButtons = walk(
+    document.byId.get("message-list"),
+    (n) => n.tagName === "BUTTON" && /^Copy/u.test(n.textContent || ""),
+  );
+  assert.equal(copyButtons.length, 0, "no clipboard, no copy button");
+  // "Edit and resend" does not touch the clipboard, so it must survive.
+  assert.equal(
+    walk(document.byId.get("message-list"), (n) => n.tagName === "BUTTON" && n.textContent === "Edit and resend").length,
+    1,
+    "reuse does not depend on a clipboard and must still be offered",
+  );
+}
+
+// When the post-turn cache read fails, the streamed bubble is what stays on
+// screen — and it has to carry the same actions as a cached one, because
+// renderMessage could not offer them when it ran against empty text.
+//
+// (A successful reconcile repaints from cache, so that path is covered by the
+// test above. This is the one where it does not.)
+async function testStreamedAnswerGainsActionsWhenReconcileFails() {
+  const written = [];
+  const clipboard = { async writeText(text) { written.push(text); } };
+  let emit = null;
+  let answered = false;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("stream-thread", "Streamed")] });
+      }
+      if (pathname === "/agent/threads/stream-thread/messages") {
+        // Fine on selection, broken once the turn has been answered: the
+        // sidecar could not be read back.
+        if (!answered) return response({ items: [] });
+        return response({ error: "unavailable" }, { ok: false, status: 500 });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input, callback) {
+        emit = (event) => callback({ ...event, turnID: "stream-turn" });
+        return { turnID: "stream-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge, { clipboard });
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  const input = document.byId.get("chat-input");
+  input.value = "Give me one line";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  emit({ type: "text_delta", delta: "**done**" });
+  answered = true;
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  await settle();
+
+  const copy = walk(
+    document.byId.get("message-list"),
+    (n) => n.tagName === "BUTTON" && n.textContent === "Copy answer",
+  );
+  assert.equal(copy.length, 1, "the finished answer must offer exactly one copy");
+  copy[0].click();
+  await settle();
+  assert.equal(written.at(-1), "**done**", "copying yields what the model wrote");
 }
 
 // Signed out with a local model configured is a supported way to use this
@@ -3677,6 +3901,9 @@ await testThreadGroupingAndSearch();
 await testThreadSearchIsHiddenWithNothingToFilter();
 await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
+await testMessageActionsCopyAndReuse();
+await testMessageActionsAbsentWithoutAClipboard();
+await testStreamedAnswerGainsActionsWhenReconcileFails();
 await testSignedOutLocalRouteCanDriveTheAgent();
 await testSignedOutWithoutLocalRouteStaysGated();
 await testAssistantMarkdownIsRenderedAsElements();
