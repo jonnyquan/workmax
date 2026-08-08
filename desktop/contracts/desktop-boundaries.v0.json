@@ -87,6 +87,10 @@
         "routeId": "agent.thread-file-list"
       },
       {
+        "bridgeMethod": "agent.listWorkspaceFiles",
+        "routeId": "agent.thread-workspace-list"
+      },
+      {
         "bridgeMethod": "agent.listRecoverableTurns",
         "routeId": "agent.turns-recoverable"
       },
@@ -458,6 +462,18 @@
       "id": "agent.thread-file-list",
       "method": "GET",
       "path": "/agent/threads/:uuid/files",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "agent.thread-workspace-list",
+      "method": "GET",
+      "path": "/agent/threads/:uuid/workspace",
       "credential": "local-token",
       "requestPolicy": {
         "origin": "absent",

@@ -81,6 +81,8 @@ const PROXY_ERROR_KINDS = new Set([
 const AGENT_EVENT_TYPES = new Set([
   "text_delta",
   "retrieval",
+  "tool_use",
+  "tool_denied",
   "unknown",
   "done",
   "proxy_error",
@@ -718,6 +720,25 @@ function parseAgentTurnEvent(value) {
         throw new Error("Malformed agent turn event");
       }
       return { type: value.type, turnID: value.turnID, delta: value.delta };
+    case "tool_use":
+      if (
+        !hasExactKeys(value, ["type", "turnID", "name"]) ||
+        !isSafeProtocolString(value.name, 64)
+      ) {
+        throw new Error("Malformed agent turn event");
+      }
+      return { type: value.type, turnID: value.turnID, name: value.name };
+    case "tool_denied":
+      if (
+        !hasExactKeys(value, ["type", "turnID", "name", "reason"]) ||
+        !isSafeProtocolString(value.name, 64) ||
+        typeof value.reason !== "string" ||
+        !hasWellFormedUTF16(value.reason) ||
+        value.reason.length > 300
+      ) {
+        throw new Error("Malformed agent turn event");
+      }
+      return { type: value.type, turnID: value.turnID, name: value.name, reason: value.reason };
     case "retrieval":
       if (
         !hasExactKeys(value, ["type", "turnID", "sources"]) ||
@@ -3029,8 +3050,10 @@ function submitChat(event) {
   state.turnGeneration += 1;
   // The previous turn's provenance stops being true the moment a new question
   // is asked. Cleared here rather than when the next retrieval event arrives,
-  // because a turn that retrieves nothing sends no event at all.
+  // because a turn that retrieves nothing sends no event at all. Tool
+  // activity follows the same rule.
   contextState.retrieved = [];
+  contextState.toolActivity = [];
   const optimistic = appendOptimisticTurn(userText);
   const activeTurn = {
     turnID: "",
@@ -3449,6 +3472,12 @@ function handleParsedTurnEvent(activeTurn, event) {
       scrollMessagesToEnd();
       return;
     }
+    case "tool_use":
+      recordToolActivity({ name: event.name, denied: false });
+      return;
+    case "tool_denied":
+      recordToolActivity({ name: event.name, denied: true, reason: event.reason });
+      return;
     case "retrieval":
       // What the local model was given from the knowledge base, announced
       // before the first token. Recorded against the turn so a stale event
@@ -3552,6 +3581,8 @@ function finishActiveTurn(activeTurn, label, canceled) {
   updateComposerState();
   const context = selectionContext(activeTurn.threadUUID);
   void reconcileCompletedTurn(activeTurn.threadUUID, context);
+  // A completed turn is the only time new workspace files can exist.
+  void loadWorkspaceDeliverables(activeTurn.threadUUID);
 }
 
 function finishActiveTurnWithError(activeTurn, message) {
@@ -4231,6 +4262,15 @@ const contextState = {
   sources: [],
   sourcesThreadUUID: null,
   retrieved: [],
+  // The current turn's tool activity, in order. Per-turn like retrieval:
+  // cleared when a new turn starts, because last turn's Writes are not what
+  // this turn is doing.
+  toolActivity: [],
+  // Files the tool loop produced in this thread's workspace — the
+  // Deliverables panel's content. Loaded on selection, refreshed when a turn
+  // completes (that is when new files can exist).
+  deliverables: [],
+  deliverablesTruncated: false,
   // File ids the user has checked in the Sources panel to send with the NEXT
   // request. Per-request on purpose — the label says "next request", so the
   // set clears once a turn owns the ids, exactly like the upload tray.
@@ -4244,6 +4284,14 @@ const contextState = {
 // saw, which is worse than showing nothing.
 function setRetrievedContext(sources) {
   contextState.retrieved = Array.isArray(sources) ? sources : [];
+  renderTaskContext();
+}
+
+function recordToolActivity(entry) {
+  // Bounded: a pathological turn making thousands of calls must not grow an
+  // unbounded array behind the panel.
+  if (contextState.toolActivity.length >= 200) return;
+  contextState.toolActivity.push(entry);
   renderTaskContext();
 }
 
@@ -4287,14 +4335,34 @@ function buildRunSteps() {
     {
       label: "Agent execution",
       state: failed ? "failed" : running ? "active" : brief ? "complete" : "pending",
-      detail: failed ? "Failed" : running ? "In progress" : brief ? "Complete" : "Waiting",
+      detail: agentExecutionDetail(running, failed, brief),
     },
     {
       label: "Deliverables",
-      state: "neutral",
-      detail: "Text only",
+      state: contextState.deliverables.length > 0 ? "complete" : "neutral",
+      detail: contextState.deliverables.length > 0
+        ? `${contextState.deliverables.length} file${contextState.deliverables.length === 1 ? "" : "s"}`
+        : "None yet",
     },
   ];
+}
+
+// The execution step used to be a binary; with a tool loop it has a story.
+// While running it names the latest tool; finished, it counts what ran and
+// what was blocked.
+function agentExecutionDetail(running, failed, brief) {
+  const activity = contextState.toolActivity;
+  const denied = activity.filter((a) => a.denied).length;
+  if (running) {
+    const last = activity[activity.length - 1];
+    if (last) return last.denied ? `${last.name} blocked` : `${last.name}…`;
+    return "In progress";
+  }
+  if (failed) return "Failed";
+  if (!brief) return "Waiting";
+  if (activity.length === 0) return "Complete";
+  const calls = `${activity.length - denied} tool call${activity.length - denied === 1 ? "" : "s"}`;
+  return denied > 0 ? `${calls} · ${denied} blocked` : calls;
 }
 
 const RUN_STEP_MARKS = {
@@ -4418,7 +4486,6 @@ function renderSources() {
     ctxEl("sources-selected").textContent =
       `${chosen} selected for the next request`;
   }
-  if (ctxEl("deliverables-meta")) ctxEl("deliverables-meta").textContent = "0";
   if (ctxEl("context-count")) ctxEl("context-count").textContent = String(items.length);
 }
 
@@ -4457,10 +4524,62 @@ function renderRetrieved() {
   if (ctxEl("retrieved-meta")) ctxEl("retrieved-meta").textContent = String(items.length);
 }
 
+// What the agent produced: the workspace listing, newest first. Until L2
+// this panel could only explain its own emptiness; now local tool-loop turns
+// put real files here.
+function renderDeliverables() {
+  if (!ctxEl("deliverables-list")) return;
+  const items = contextState.deliverables;
+  ctxEl("deliverables-list").innerHTML = "";
+  for (const file of items) {
+    const item = document.createElement("li");
+    item.className = "context-item";
+    const name = document.createElement("span");
+    name.className = "context-item-name";
+    name.textContent = file.path;
+    const meta = document.createElement("span");
+    meta.className = "context-item-meta";
+    meta.textContent = `${formatFileSize(file.size)} · ${formatMessageTime(file.modified_at)}`;
+    item.append(name, meta);
+    ctxEl("deliverables-list").appendChild(item);
+  }
+  if (ctxEl("deliverables-empty")) ctxEl("deliverables-empty").hidden = items.length > 0;
+  if (ctxEl("deliverables-meta")) {
+    ctxEl("deliverables-meta").textContent = contextState.deliverablesTruncated
+      ? `${items.length}+`
+      : String(items.length);
+  }
+}
+
 function renderTaskContext() {
   renderRunOverview();
   renderSources();
   renderRetrieved();
+  renderDeliverables();
+}
+
+// Reads what the tool loop produced in this thread's workspace. Failure
+// degrades to an empty panel — the conversation itself is unaffected.
+async function loadWorkspaceDeliverables(threadUUID) {
+  const agent = window.desktopBridge?.agent;
+  if (!threadUUID || !agent || typeof agent.listWorkspaceFiles !== "function") return;
+  try {
+    const result = parseDesktopBridgeResult(
+      await agent.listWorkspaceFiles(threadUUID),
+      "agent workspace result"
+    );
+    // The selection may have moved while this was in flight.
+    if (contextState.sourcesThreadUUID !== threadUUID) return;
+    if (result.ok && isRecord(result.data) && Array.isArray(result.data.items)) {
+      contextState.deliverables = result.data.items.filter(
+        (f) => isRecord(f) && typeof f.path === "string"
+      );
+      contextState.deliverablesTruncated = result.data.truncated === true;
+    }
+  } catch {
+    return;
+  }
+  renderTaskContext();
 }
 
 // Reads the attachments the sidecar has for this thread. Uploads persisted
@@ -4473,11 +4592,15 @@ async function loadThreadSources(threadUUID) {
   // it across a switch would credit this thread's answer to another one's
   // documents. The selection likewise: these ids name another thread's files.
   contextState.retrieved = [];
+  contextState.toolActivity = [];
+  contextState.deliverables = [];
+  contextState.deliverablesTruncated = false;
   // Redundant with renderSources' pruning-to-current-sources, deliberately:
   // either alone prevents one thread's ids riding into another's turn, and
   // the negative test only fails when both are removed.
   contextState.selectedFileIDs = new Set();
   renderTaskContext();
+  void loadWorkspaceDeliverables(threadUUID);
   if (!threadUUID) return;
 
   const agent = desktopAgentBridge();

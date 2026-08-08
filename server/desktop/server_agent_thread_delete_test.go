@@ -5,6 +5,7 @@ package desktop
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -72,7 +73,10 @@ func openMigratedTestDB(t *testing.T) *gorm.DB {
 func newDeleteFixture(t *testing.T) (base string, db *gorm.DB, filesDir string, index *recordingKnowledgeIndex) {
 	t.Helper()
 	db = openMigratedTestDB(t)
-	filesDir = t.TempDir()
+	// The full DataDir layout, so routes that derive paths from it (the
+	// workspace listing) see the same shape production does.
+	dataDir := t.TempDir()
+	filesDir = filepath.Join(dataDir, "thread_files")
 	index = &recordingKnowledgeIndex{}
 	modelSettings := ensureLocalModelSettingsDB(t, db)
 
@@ -81,6 +85,7 @@ func newDeleteFixture(t *testing.T) (base string, db *gorm.DB, filesDir string, 
 		LocalToken:     "tok",
 		DB:             db,
 		DeviceID:       "dev",
+		DataDir:        dataDir,
 		TokenStore:     cloudproxy.NewTokenStore(newMemKeychain()),
 		ModelSettings:  modelSettings,
 		LocalInference: &fakeLocalRunner{},
@@ -389,5 +394,121 @@ func TestRenameThread_ScopedToTheCaller(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// --- Workspace listing -----------------------------------------------------
+
+func TestListWorkspaceFiles_ListsOwnedThreadNewestFirst(t *testing.T) {
+	base, db, fixtureFilesDir, _ := newDeleteFixture(t)
+	seedLocalThreadForDelete(t, db, localSingleUserUID, deleteTestThreadUUID)
+
+	ws := filepath.Join(filepath.Dir(fixtureFilesDir), "agent_workspace", "thread_"+deleteTestThreadUUID)
+	if err := os.MkdirAll(filepath.Join(ws, "deck"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "notes.txt"), []byte("n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "deck", "outline.md"), []byte("o"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, base+"/agent/threads/"+deleteTestThreadUUID+"/workspace", nil)
+	req.Header.Set("X-Local-Token", "tok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	var body workspaceListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Count != 2 || body.Truncated {
+		t.Fatalf("body = %+v", body)
+	}
+	paths := []string{body.Items[0].Path, body.Items[1].Path}
+	found := strings.Join(paths, ",")
+	if !strings.Contains(found, "notes.txt") || !strings.Contains(found, "deck/outline.md") {
+		t.Errorf("paths = %v; want relative slash paths for both files", paths)
+	}
+}
+
+// The workspace directory is keyed by uuid alone; the thread row is the
+// ownership authority. Another identity's uuid must 404 without revealing
+// whether a workspace exists.
+func TestListWorkspaceFiles_ScopedToTheCaller(t *testing.T) {
+	base, db, _, _ := newDeleteFixture(t)
+	if err := db.Exec(
+		`INSERT INTO w_workagent_thread (uid, uuid, name, cloud_sync_state) VALUES (?, ?, 'Not yours', 'local')`,
+		localSingleUserUID+1, deleteTestThreadUUID,
+	).Error; err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodGet, base+"/agent/threads/"+deleteTestThreadUUID+"/workspace", nil)
+	req.Header.Set("X-Local-Token", "tok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// A thread that never ran a tool turn has no workspace directory; that is an
+// empty listing, not an error.
+func TestListWorkspaceFiles_MissingDirIsEmpty(t *testing.T) {
+	base, db, _, _ := newDeleteFixture(t)
+	seedLocalThreadForDelete(t, db, localSingleUserUID, deleteTestThreadUUID)
+
+	req, _ := http.NewRequest(http.MethodGet, base+"/agent/threads/"+deleteTestThreadUUID+"/workspace", nil)
+	req.Header.Set("X-Local-Token", "tok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	var body workspaceListResponse
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if body.Count != 0 || len(body.Items) != 0 {
+		t.Errorf("body = %+v, want empty", body)
+	}
+}
+
+// listWorkspaceFiles is bounded and does not follow symlinks out.
+func TestListWorkspaceFiles_BoundsAndSymlinks(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("s"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxWorkspaceListEntries+20; i++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("f%03d.txt", i)), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, truncated := listWorkspaceFiles(root)
+	if !truncated {
+		t.Error("the cap must report truncation")
+	}
+	if len(items) > maxWorkspaceListEntries {
+		t.Errorf("listed %d entries, cap is %d", len(items), maxWorkspaceListEntries)
+	}
+	for _, it := range items {
+		if strings.Contains(it.Path, "secret") {
+			t.Errorf("the walk followed a symlink out of the workspace: %s", it.Path)
+		}
 	}
 }

@@ -113,6 +113,7 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	newCurrentSidecarRoutePolicy("settings.model-route.put", http.MethodPut, "/settings/model-route", SidecarBodyRequired, maxModelSettingsPolicyBodyBytes, "application/json"),
 	newCurrentSidecarRoutePolicy("agent.thread-file-upload", http.MethodPost, "/agent/threads/:uuid/files", SidecarBodyRequired, maxThreadFileUploadBodyBytes, "multipart/form-data"),
 	newCurrentSidecarRoutePolicy("agent.thread-file-list", http.MethodGet, "/agent/threads/:uuid/files", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("agent.thread-workspace-list", http.MethodGet, "/agent/threads/:uuid/workspace", SidecarBodyForbidden, 0),
 }
 
 func newCurrentSidecarRoutePolicy(
@@ -294,6 +295,8 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handleRenameAgentThread, true
 	case "agent.thread-file-list":
 		return s.handleListThreadFiles, true
+	case "agent.thread-workspace-list":
+		return s.handleListWorkspaceFiles, true
 	case "agent.thread-file-upload":
 		return s.handleUploadThreadFile, true
 	case "agent.skills.catalog":

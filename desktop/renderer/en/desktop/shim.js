@@ -360,6 +360,21 @@ function dispatchAgentSSEFrame(active, eventName, rawData) {
     emit(active, { type: "text_delta", turnID: active.turnID, delta: parsed.value.delta });
     return;
   }
+  if (eventName === "tool_use" || eventName === "tool_denied") {
+    const parsed = parseAgentJSON(rawData);
+    const value = parsed.ok && isRecord(parsed.value) ? parsed.value : null;
+    // Informational, like retrieval: a malformed activity frame costs the
+    // narration, never the answer.
+    if (!value || typeof value.name !== "string" || value.name === "" || value.name.length > 64) {
+      return;
+    }
+    const event = { type: eventName, turnID: active.turnID, name: value.name };
+    if (eventName === "tool_denied") {
+      event.reason = typeof value.reason === "string" ? value.reason.slice(0, 300) : "";
+    }
+    emit(active, event);
+    return;
+  }
   if (eventName === "retrieval") {
     const parsed = parseAgentJSON(rawData);
     const sources = parsed.ok && isRecord(parsed.value) ? parseRetrievalSources(parsed.value.sources) : null;

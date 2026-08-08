@@ -230,6 +230,19 @@ export interface AgentThreadFileList {
   count: number;
 }
 
+/** One file the tool loop produced in the thread's workspace. */
+export interface AgentWorkspaceFile {
+  path: string;
+  size: number;
+  modified_at: string;
+}
+
+export interface AgentWorkspaceFileList {
+  items: AgentWorkspaceFile[];
+  count: number;
+  truncated: boolean;
+}
+
 export interface AgentSkillCatalog {
   items: AgentSkill[];
   count: number;
@@ -454,6 +467,9 @@ export interface DesktopBridge {
     listThreadFiles: (
       threadUUID: string
     ) => Promise<DesktopBridgeResult<AgentThreadFileList>>;
+    listWorkspaceFiles: (
+      threadUUID: string
+    ) => Promise<DesktopBridgeResult<AgentWorkspaceFileList>>;
     listRecoverableTurns: () => Promise<
       DesktopBridgeResult<AgentRecoverableTurnList>
     >;
@@ -614,6 +630,14 @@ const ROUTES = {
     "none",
     null
   ),
+  agentListWorkspaceFiles: defineTypedRoute(
+    "agent.listWorkspaceFiles",
+    "agent.thread-workspace-list",
+    "GET",
+    "/agent/threads/:uuid/workspace",
+    "none",
+    null
+  ),
   agentRenameThread: defineTypedRoute(
     "agent.renameThread",
     "agent.thread-rename",
@@ -760,6 +784,14 @@ export function createDesktopBridge(
       listSkills: () =>
         execute<AgentSkillCatalog>(deps, ROUTES.agentListSkills),
       listModes: () => execute<AgentModes>(deps, ROUTES.agentListModes),
+      listWorkspaceFiles: async (threadUUID) => {
+        const uuid = validateCanonicalV4UUID(threadUUID, "listWorkspaceFiles threadUUID");
+        const path = ROUTES.agentListWorkspaceFiles.path.replace(
+          ":uuid",
+          encodeURIComponent(uuid)
+        );
+        return execute<AgentWorkspaceFileList>(deps, ROUTES.agentListWorkspaceFiles, path);
+      },
       renameThread: async (threadUUID, name) => {
         const uuid = validateCanonicalV4UUID(threadUUID, "renameThread threadUUID");
         const path = ROUTES.agentRenameThread.path.replace(

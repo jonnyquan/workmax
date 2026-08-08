@@ -1469,6 +1469,116 @@ async function testThreadDeleteIsTwoStepAndLocalOnly() {
   );
 }
 
+// The L2 tool loop's renderer surface: activity narrated while it runs,
+// denials visible, and the files it produced listed as deliverables.
+async function testToolLoopActivityAndDeliverables() {
+  let emit = null;
+  let turnDone = false;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("l2-thread", "Tool loop")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      async listWorkspaceFiles() {
+        return typedSuccess({
+          items: turnDone
+            ? [
+                { path: "deck/outline.md", size: 2048, modified_at: "2026-08-09T10:00:00Z" },
+                { path: "notes.txt", size: 512, modified_at: "2026-08-09T09:59:00Z" },
+              ]
+            : [],
+          count: turnDone ? 2 : 0,
+          truncated: false,
+        });
+      },
+      startTurn(input, callback) {
+        emit = (event) => callback({ ...event, turnID: "l2-turn" });
+        return { turnID: "l2-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  assert.equal(
+    document.byId.get("deliverables-meta").textContent,
+    "0",
+    "an empty workspace is an empty panel",
+  );
+
+  const input = document.byId.get("chat-input");
+  input.value = "Build the deck";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  emit({ type: "tool_use", name: "Write" });
+  await settle();
+  assert.match(
+    document.byId.get("run-overview-list").textContent,
+    /Write…/,
+    "a running tool must be narrated in the execution step",
+  );
+
+  emit({ type: "tool_denied", name: "Write", reason: "outside the workspace" });
+  await settle();
+  assert.match(
+    document.byId.get("run-overview-list").textContent,
+    /Write blocked/,
+    "a denial must be visible, not silently absorbed",
+  );
+
+  emit({ type: "tool_use", name: "Edit" });
+  emit({ type: "text_delta", delta: "Deck ready." });
+  turnDone = true;
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  await settle();
+
+  assert.match(
+    document.byId.get("run-overview-list").textContent,
+    /2 tool calls · 1 blocked/,
+    "the finished step must count what ran and what was blocked",
+  );
+  assert.equal(document.byId.get("deliverables-meta").textContent, "2");
+  assert.match(document.byId.get("deliverables-list").textContent, /deck\/outline\.md/);
+  assert.equal(
+    document.byId.get("deliverables-empty").hidden,
+    true,
+    "with files present the empty note must give way",
+  );
+
+  // A new turn starts its own story: the last turn's activity is not what
+  // this turn is doing.
+  input.value = "And now refine it";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+  // With activity reset, a fresh running turn with no events yet reads
+  // "In progress" — stale entries would surface as the last tool's name.
+  assert.match(
+    document.byId.get("run-overview-list").textContent,
+    /In progress/,
+    "activity must reset per turn",
+  );
+  assert.doesNotMatch(document.byId.get("run-overview-list").textContent, /Edit…|blocked/);
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  await settle();
+}
+
 // A first-time user faces an empty screen and a text box. The starter cards
 // are the bridge: one click opens the create flow, and once the thread exists
 // the card's prompt is waiting in the composer — sending stays the user's
@@ -4336,6 +4446,7 @@ await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
 await testThreadDeleteIsTwoStepAndLocalOnly();
 await testThreadRenameFlow();
+await testToolLoopActivityAndDeliverables();
 await testStarterPromptLandsInTheComposer();
 await testCancelledStarterDropsItsPrompt();
 await testSelectedSourcesRideTheNextTurn();
