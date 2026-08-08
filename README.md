@@ -34,7 +34,7 @@ Server/Desktop-only source policy before they are considered for inclusion.
 | Surface | Current location | Current state |
 |---|---|---|
 | Go Server | `server/` | Cloud APIs, durable Agent services and Desktop resources |
-| Desktop shell | `desktop/electron/` | Electron main/preload and Go Sidecar lifecycle |
+| Desktop shell | `desktop/wails/` | Wails shell: webview, same-origin UI server, embedded sidecar |
 | Desktop Renderer | `desktop/renderer/` | Bundled sole Agent UI; login, cached history, idempotent PPT-thread creation, synced-thread continuation, explicit interrupted-turn recovery, and **Models** local/official route settings (bridge alpha.7) are current; local model **inference** and event-cursor Attach / full durable workbench remain partial |
 | Architecture | `ProjectDocs/` | Consolidated Server/Desktop design baseline |
 
@@ -52,7 +52,7 @@ loopback and cloud-resource contracts remain the supported user-client boundary.
 
 - Go 1.24.1 or newer, with the toolchain declared by `server/go.mod`
 - Node.js 20 LTS or newer
-- npm with the committed `desktop/electron/package-lock.json`
+- npm only to regenerate the renderer bridge library (`desktop/renderer/`); the generated output is committed
 - Network access for the first download of the pinned Go and npm dependencies
 
 ## Bootstrap and verification
@@ -70,7 +70,7 @@ Useful focused targets:
 make test-go
 make test-go-desktop
 make test-agent-platform
-make test-electron
+make test-shell
 make test-boundaries
 make test-config
 make package-preflight
@@ -110,7 +110,7 @@ Never commit:
 - `server/config.yaml` or production/local variants;
 - `switchglm.sh` / `switchkimi.sh`;
 - `server/uploads/`, SQLite databases, logs or caches;
-- Electron `bin/`, `dist/`, `release/` or `node_modules/`;
+- shell `bin/`, `release/` or `node_modules/`;
 - signing keys or notarization credentials.
 
 Run `make baseline-audit` before preparing any imported source area. The

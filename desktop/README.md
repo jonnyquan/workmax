@@ -1,6 +1,23 @@
 # WorkMax Desktop
 
-Official Desktop Agent client. The current Electron package, bundle ID and
+> **Shell: Wails (Go + WebView). The Electron shell was retired 2026-08-08.**
+>
+> One binary — `desktop/wails` — hosts the webview and the sidecar in the same
+> process. There is no separate `workagent-desktop` process, no preload, and no
+> npm dependency at runtime.
+>
+> ```
+> ./desktop/scripts/dev.sh                 # run the app
+> ./desktop/scripts/dev.sh --serve-only    # sidecar only (dev + smoke target)
+> ./desktop/scripts/dev.sh --verify-shim   # check the renderer bridge contract
+> ```
+>
+> Why the shape is what it is — same-origin UI server, capability path, login
+> gate — is measured, not assumed. The evidence is in
+> `ProjectDocs/wails-migration-evaluation-2026-08.md` §0.5.9–§0.5.17.
+> Electron is mentioned below only where the contrast explains a decision.
+
+Official Desktop Agent client. The current bundle ID and
 environment variable prefix still use the legacy `workmax` identity for release
 compatibility; renaming them is not a Phase 0 task.
 
@@ -30,7 +47,7 @@ Smoke/release-readiness checklist:
 ./desktop/scripts/test-desktop.sh
 ```
 
-This verifies the observed Desktop boundary manifest, Electron shell and
+This verifies the observed Desktop boundary manifest, the Wails shell and
 Desktop Go packages. Run `make bootstrap` first when dependencies are absent.
 
 `dev.sh` now defaults explicitly to the repository-bundled static Renderer, so
@@ -49,15 +66,17 @@ Node 20.11+ LTS.
 
 | Path | Purpose |
 |---|---|
-| `desktop/electron/` | Electron main process + preload (`src/`), compiled to `dist/` |
-| `desktop/build/` | electron-builder assets, macOS entitlements, and app icon |
-| `desktop/scripts/` | `dev.sh` (local) + `build-mac.sh` (release packaging) |
-| **`server/cmd/workagent-desktop/`** | Go sidecar binary entry |
+| `desktop/wails/` | The shell: `main.go` (modes), `uiserver.go` (same-origin UI origin + sidecar proxy), kill-check and shim-verification harnesses. Its own Go module, so Wails never enters the cloud server's dependency graph |
+| `desktop/renderer/src/` | `desktop-bridge.ts` — the single source of the typed facade contract |
+| `desktop/renderer/en/desktop/` | What ships to the webview: `index.html`, `renderer.js`, `shim.js`, and the generated `lib/desktop-bridge.js` |
+| `desktop/build/` | macOS entitlements and app icon |
+| `desktop/scripts/` | `dev.sh` (build + run), `build-renderer-lib.sh` (regenerate the bridge library), boundary/renderer checkers, `notarize-mac.sh` |
+| **`server/desktop/bootstrap.go`** | The shared boot path every mode uses |
 | **`server/desktop/`** | Desktop-only Go subpackages (`cloud_proxy/`, `auth/`, `migrations_desktop/`) |
 | **`server/api/desktop/`** | Mounted Desktop OAuth/sync/version/Agent APIs plus the Login Transaction Phase 1 Server API |
 
 The Go code lives in `server/` because that's the Go module root
-(`server/go.mod`). Only Electron + packaging assets live at the
+(`server/go.mod`). Only the shell, the renderer and packaging assets live at the
 top-level `desktop/` folder.
 
 ## Desktop Login Transaction Phase 1 status
@@ -155,9 +174,9 @@ Local-Token-protected Sidecar routes require the Main-only flow header on every
 mutation but expose only `{state}` or `{state,error}`; the Sidecar route inventory
 is therefore 19.
 
-Electron bridge `1.0.0-alpha.7` keeps begin/status/password/cancel as four
+Bridge `1.0.0-alpha.7` keeps begin/status/password/cancel as four
 Main-only IPC commands. Main generates and retains the flow ID without adding it
-to any Preload/Renderer type, pins method/path, omits cookies, rejects redirects,
+to any Renderer type, pins method/path, omits cookies, rejects redirects,
 validates the exact 4 KiB public response envelope and restricts calls to the
 main window's main frame. Candidate/active ownership covers repeated/busy Begin,
 ambiguous transport, and Begin/Cancel request reordering; Cancel waits for the
@@ -189,7 +208,7 @@ SQLite marker and Keychain delete both fail, the current process remains logged
 out but a restart can still recover stale Keychain bytes; SQLite loss or
 rollback has the same residual risk.
 The Keychain service/account is still app-global while the Sidecar PID lock and
-SQLite marker are per data directory: normal Electron use relies on its app-wide
+SQLite marker are per data directory: normal use relies on the app-wide
 single-instance lock, and standalone multi-profile support still requires a
 global lock or profile/device-scoped Keychain account plus migration.
 
@@ -248,11 +267,10 @@ command for this imported baseline.
 
 What it does (script is self-documenting at the top):
 1. Detect host platform → `GOOS`/`GOARCH`
-2. Build the Go sidecar with `-tags desktop` into `desktop/electron/bin/workagent-desktop`
-3. `npm ci` if `node_modules/`, local `tsc`, or local `electron` is missing
-4. `tsc -p .` in `desktop/electron/`
-5. Select the bundled, loopback, or allowlisted HTTPS development Renderer
-6. `npm start` (which is `electron .`)
+2. Regenerate `lib/desktop-bridge.js` if `desktop-bridge.ts` is newer
+3. Build `desktop/wails` with `-tags desktop` and `CGO_ENABLED=1`
+4. Point the app at the working tree's renderer
+5. Exec the binary, forwarding any flags you passed
 
 To use a live local Renderer, configure an exact `/desktop` route:
 
@@ -277,12 +295,12 @@ typed Main IPC and Go Coordinator; it does not launch a browser. The legacy
 `/auth/start` route is retained only for deferred compatibility and has no
 Bundled Renderer entry point.
 
-Sidecar logs land on **stderr** (visible in your terminal) and Electron also
+Sidecar logs land on **stderr** (visible in your terminal); the app also
 persists them, along with SidecarManager lifecycle diagnostics, under
 `<dataDir>/logs/sidecar-main.log` with targeted token and URL-credential
 redaction across message strings and structured fields. SidecarManager applies
 the same redaction before logging sidecar output or malformed handshake
-excerpts. stdout is reserved for the one-shot handshake JSON that Electron
+excerpts. (The stdout handshake is gone with the separate sidecar process; that
 parses; any later stdout line is treated as an unexpected diagnostic. Renderer logs are written by the sidecar to
 `<dataDir>/logs/renderer.log` with the same best-effort token and URL-credential
 redaction applied in the renderer helper and again before disk append;
@@ -290,14 +308,14 @@ Diagnostics → **Open logs** reveals the data directory.
 
 ### Working on just one layer
 
-If you're iterating on the Go sidecar only and don't need Electron
+If you're iterating on the Go sidecar only and don't need a window
 rebuilds:
 
 ```bash
 cd server
 GOOS=darwin GOARCH=arm64 WORKMAX_LOCAL_TOKEN=$(uuidgen) \
   WORKMAX_DESKTOP_SKIP_STDIN_WATCHER=1 \
-  go run -tags desktop ./cmd/workagent-desktop
+  ./desktop/scripts/dev.sh --serve-only
 ```
 
 The `SKIP_STDIN_WATCHER` env var prevents the sidecar from shutting
@@ -320,7 +338,7 @@ WORKMAX_LOCAL_TOKEN=<token> ./desktop/scripts/smoke-local.sh --port <port> --tri
 WORKMAX_LOCAL_TOKEN=<token> ./desktop/scripts/smoke-local.sh --port <port> --with-userinfo
 WORKMAX_LOCAL_TOKEN=<token> ./desktop/scripts/smoke-local.sh --port <port> --with-server-version
 WORKMAX_LOCAL_TOKEN=<token> ./desktop/scripts/smoke-local.sh --port <port> --with-skills-catalog
-WORKMAX_LOCAL_TOKEN=<token> ./desktop/scripts/smoke-local.sh --port <port> --check-pid-lock --sidecar-binary desktop/electron/bin/workagent-desktop
+WORKMAX_LOCAL_TOKEN=<token> ./desktop/scripts/smoke-local.sh --port <port> --check-pid-lock --sidecar-binary desktop/wails/bin/workmax-desktop
 WORKMAX_LOCAL_TOKEN=<token> ./desktop/scripts/smoke-local.sh --port <port> --diagnostics-samples 6 --diagnostics-interval 10
 ```
 
@@ -365,8 +383,8 @@ sidecar with Ctrl-C.
 If you're iterating on a live local Renderer only:
 
 ```bash
-cd desktop/electron
-npm run watch       # tsc --watch in one terminal
+cd desktop/renderer
+npm run build:lib   # regenerate the bridge library after editing src/
 # In another terminal, point dev.sh at the local /desktop URL as shown above.
 ```
 
@@ -385,7 +403,7 @@ services + middleware):
 
 ```bash
 cd server
-GOCACHE=/tmp/workmax-go-build go test -tags desktop ./desktop/... ./api/desktop/... ./service/desktop/... ./router/desktop/... ./middleware/... ./cmd/workagent-desktop
+GOCACHE=/tmp/workmax-go-build go test -tags desktop ./desktop/... ./api/desktop/... ./service/desktop/... ./router/desktop/... ./middleware/...
 ```
 
 Focused Login Transaction Phase 1 candidate checks:
@@ -421,72 +439,58 @@ waits, bounded messages Drain, and the three diagnostics persistence states. It 
 external database/MySQL or real cloud, or invoke the real OS Keychain. This is
 contract-level evidence, not packaged or fresh-profile E2E.
 
-Electron shell tests:
+Shell tests:
 
 ```bash
-cd desktop/electron
-npm test
+cd desktop/wails
+CGO_ENABLED=1 go test -tags desktop ./...
 cd ../..
 node desktop/scripts/check-desktop-boundaries.mjs
 node desktop/scripts/check-bundled-renderer-behavior.mjs
 ```
 
-This suite includes the preload bridge runtime-surface invariant, fail-closed
-Renderer selection, route/redirect guards, privileged sign-in IPC validation, and
-SidecarManager lifecycle coverage.
+The shell suite covers the UI origin's capability requirement, server-side
+refusal of the credential routes, path-canonicalisation, Origin stripping, and
+the containment headers. `check-desktop-boundaries.mjs` is the parity gate: it
+pins the loopback route table, the typed bridge contract, the login gate's verb
+list, and eleven named shell guarantees against the files that must carry them
+(`desktop/contracts/desktop-boundaries.v0.json` → `wailsShell`).
+`check-bundled-renderer-behavior.mjs` drives `renderer.js` against mock bridges
+in a VM; its fake DOM is derived from `index.html`, so it cannot drift from the
+markup that ships.
 
-Mac package inspector regression tests:
+Two checks worth running by hand, because they use a real webview:
 
 ```bash
-./desktop/scripts/build-mac.test.sh
+./desktop/scripts/dev.sh --kill-check     # SSE through WKWebView, byte-for-byte
+./desktop/scripts/dev.sh --verify-shim    # the shipped shim satisfies the renderer contract
+```
+
+Script regression tests:
+
+```bash
 ./desktop/scripts/check-bundled-renderer.test.sh
 ./desktop/scripts/smoke-local.test.sh
-./desktop/scripts/smoke-packaged-app.test.sh
-./desktop/scripts/inspect-mac-package.test.sh
 ./desktop/scripts/notarize-mac.test.sh
 ```
 
-The build wrapper test covers argument validation and the `--preflight-only`
-path against the current packaging inputs, including electron-builder config
-drift for output directory, hardened runtime, runtime entry allowlist, bundled
-renderer resources, `publish: null`, and rejection of `extraFiles`,
-`afterSign`, or inline `mac.notarize` side-effect hooks. The bundled-renderer test verifies
-source preflight failures before packaging: missing files, missing or unsafe
-CSP, extra remote CSP connect sources, non-relative asset references, and
-unexpected or token-like embedded files. Its behavior probe also rejects
-malformed auth/OAuth/cache payloads before the static shell renders state or
-invokes the sign-in IPC. The smoke helper test verifies local validation paths,
-including unsafe `--base` values, before any token-bearing curl can run. The
-package inspector test
-creates disposable fake `.app` bundles under `/tmp` and verifies that the
-inspector accepts minimal valid unpacked and `app.asar` payloads while rejecting
-ambiguous payload modes, sidecar duplication inside either Electron payload
-mode, package main drift, missing compiled runtime entries, and extra unexpected
-payload entries. Bundled-renderer package inspection parses the CSP meta tag and
-requires the exact static-shell directives, including loopback-only
-`connect-src http://127.0.0.1:*`. The notarization helper test uses disposable
-fake DMG/app
-fixtures to verify local validation paths: unsupported targets, missing
-artifacts, missing credentials, release-DMG app-bundle inference,
-keychain-profile dry-run, Apple ID credential dry-run, and the Developer ID
-gate. It proves ad-hoc signatures, missing TeamIdentifier, non-Developer-ID
-authority chains, and strict codesign verification failures are rejected before
-Apple submission, and requires the Developer ID signature to report a
-`Developer ID Application` authority and hardened runtime metadata.
-The packaged-smoke helper test covers prelaunch validation paths such as missing
-app path, missing values for value-taking options, invalid timeout,
-negative-mode option pairing, incompatible cached-history/token-rotation modes,
-missing app bundle shape, and missing `Info.plist` / `CFBundleExecutable`. It
-also stubs `codesign` against a fake
-`.app` to verify valid signatures pass strict verification, ad-hoc signatures
-are repaired for controlled local smoke, and other signature failures are not
-auto-repaired.
+The bundled-renderer test verifies source preflight failures before packaging:
+missing files, missing or unsafe CSP, extra remote CSP connect sources,
+non-relative asset references, and unexpected or token-like embedded files. Its
+behavior probe also rejects malformed auth/OAuth/cache payloads before the
+static shell renders state. The smoke helper test verifies local validation
+paths, including unsafe `--base` values, before any token-bearing curl can run.
+The notarization helper test uses disposable fake DMG/app fixtures to prove that
+ad-hoc signatures, a missing `TeamIdentifier`, non-Developer-ID authority
+chains, and strict codesign verification failures are all rejected before Apple
+submission.
 
-TypeScript type-check:
+TypeScript type-check (only needed when editing `desktop/renderer/src/`):
 
 ```bash
-cd desktop/electron
-npm run lint:types
+cd desktop/renderer
+npx tsc src/desktop-bridge.ts --target ES2022 --module ES2022 \
+  --moduleResolution bundler --strict --noEmit
 ```
 
 It should be silent. The Go production build path must also stay clean:
@@ -500,12 +504,13 @@ If `go build ./...` (without the tag) fails, you've leaked a desktop
 import into a file that isn't gated. Each desktop-only `.go` file
 must start with `//go:build desktop`.
 
-When manually checking the sidecar build, write the binary outside the repo or
-to `desktop/electron/bin/` via the existing scripts:
+The desktop package must also build **without** cgo. That is what keeps the
+knowledge seam honest — a build with no C toolchain runs with retrieval off
+rather than failing to compile:
 
 ```bash
 cd server
-go build -tags desktop -o /tmp/workmax-workagent-desktop-smoke ./cmd/workagent-desktop
+CGO_ENABLED=0 go build -tags desktop ./...
 ```
 
 ### Useful env vars
@@ -515,9 +520,9 @@ go build -tags desktop -o /tmp/workmax-workagent-desktop-smoke ./cmd/workagent-d
 | `WORKMAX_DESKTOP_DATA_DIR` | SQLite + state dir | `~/.workmax` |
 | `WORKMAX_LOCAL_TOKEN` | X-Local-Token (renderer→sidecar auth) | auto-generated |
 | `WORKMAX_CLOUD_BASE` | Direct Go Server API origin (OAuth + Cloud Proxy target) | official hosted Server gateway |
-| `WORKMAX_DESKTOP_RENDERER_URL` | Explicit development Renderer URL | `dev.sh`: repository bundle; direct Electron: required; packaged: rejected |
+| `WORKMAX_DESKTOP_RENDERER_DIR` | Directory the shell serves to the webview | `dev.sh`: the working tree's renderer; packaged: `Contents/Resources/renderer/en/desktop` |
 | `WORKMAX_DESKTOP_TRUSTED_RENDERER_ORIGINS` | Comma-separated bare HTTPS Origins allowed for remote development Renderer URLs | unset |
-| `WORKMAX_DESKTOP_OPEN_DEVTOOLS` | Force Electron devtools in packaged builds | unset |
+| `WORKMAX_DESKTOP_RESOURCES_DIR` | Native asset root for the local knowledge index | derived from the executable; empty disables RAG |
 | `WORKMAX_DESKTOP_SKIP_STDIN_WATCHER` | Don't shut down on stdin EOF (curl smoke tests) | unset |
 
 Point at a local cloud dev server:
@@ -535,9 +540,9 @@ are appended as absolute `/api/...` paths. Self-hosted builds must point this
 directly at Go Server or an explicitly configured API gateway, never at a
 separate browser application.
 
-### Versioned preload bridge
+### Versioned renderer bridge
 
-Preload exposes `window.desktopBridge` version `1.0.0-alpha.7` alongside the
+`shim.js` exposes `window.desktopBridge` version `1.0.0-alpha.7` alongside the
 `window.workmaxLocal` compatibility surface. The bundled Renderer can continue
 using `workmaxLocal.fetch` for non-privileged local auth, history and system
 operations. The compatibility fetch explicitly rejects Agent chat and skill
@@ -569,7 +574,7 @@ does not switch PPT chat off the cloud path.
 Each HTTP method owns its Method, route template, query allowlist, body policy,
 content type and body limit. Callers cannot supply a URL or `RequestInit`.
 The four login-transaction methods are privileged: Renderer uses fixed typed
-IPC, Electron Main calls only the declared `/auth/login-transaction` routes with
+the `/login/` gate, Go calls only the declared `/auth/login-transaction` routes with
 the Local Token, and the Renderer receives only the closed public state/error
 envelope. Password is the one permitted transient input; transaction secret,
 exchange token, OAuth state, PKCE verifier, callback port, authorization code
@@ -577,19 +582,19 @@ and OAuth tokens stay in Go. Neither `/auth/start` nor the privileged namespace
 is reachable through the compatibility bridge. The Sidecar alone owns the
 loopback binding, cloud capability exchange, token exchange and Keychain save.
 Agent create accepts only a canonical caller-generated v4 UUID, a bounded name,
-and an enabled mode. Preload owns fixed `PUT /agent/threads/:uuid` and emits the
-exact `{name,agent_mode}` body. Preload rejects malformed successful create
+and an enabled mode. The typed bridge owns fixed `PUT /agent/threads/:uuid` and
+emits the exact `{name,agent_mode}` body. It rejects malformed successful create
 responses, including wrong status/state pairs, foreign UUIDs, extra fields and
 invalid local rows; the returned `cloud_sync_state` remains the server's exact
 allowlisted `synced` or `paused` value. `202 pending_local_sync` retains the same
 UUID and request fields for an idempotent retry. Agent start accepts only
 `{threadUUID,userText,chatMode}` plus an event callback;
 Renderer cannot supply a URL, `RequestInit`, token, raw `Response`/reader,
-`AbortSignal`, cloud conversation ID or arbitrary Sidecar payload. Preload owns
+`AbortSignal`, cloud conversation ID or arbitrary Sidecar payload. The shim owns
 the fixed `/agent/chat` fetch, reader and abort controller, bounds every SSE
 frame to 1 MiB, and emits only `text_delta`, `unknown`, `done`, `proxy_error`,
 `canceled` or `protocol_error` DTOs with one terminal event. `cancelTurn` acts
-only on the matching active Preload turn and invokes reader cancellation plus
+only on the matching active shim turn and invokes reader cancellation plus
 fetch abort without exposing either primitive.
 
 `desktopBridge.capabilities()` therefore reports Agent as supported with
@@ -612,243 +617,68 @@ artifact/question-form workbench remain future contracts.
 
 ### Release build (macOS)
 
-```bash
-./desktop/scripts/build-mac.sh            # host arch
-./desktop/scripts/build-mac.sh arm64      # Apple Silicon
-./desktop/scripts/build-mac.sh x64        # Intel
-./desktop/scripts/build-mac.sh --preflight-only arm64
-./desktop/scripts/build-mac.sh --public-release arm64
+**Packaging is not written yet.** It went with the Electron shell, and the
+Wails replacement is W4. What exists today is a binary you build and run from
+source (`dev.sh`), plus the parts of the release pipeline that were never
+shell-specific.
 
-# Public distribution only, after Developer ID signing:
+What carries over, and why it is worth carrying:
+
+- **`appId` must stay `ai.workmax.desktop`.** macOS scopes Keychain entries by
+  the calling bundle id, so changing it means a packaged build cannot see the
+  session a dev build wrote, and vice versa. The sidecar's Keychain service
+  name is pinned to it in `server/desktop/cloud_proxy/keychain.go`.
+- **Entitlements stay minimal** (`desktop/build/entitlements.mac.plist`).
+  Notarization inspects them and rejects what the binary's behaviour does not
+  justify. Two changes are due in W4: `allow-jit` and
+  `allow-unsigned-executable-memory` were Electron's V8 needs and can go, while
+  `disable-library-validation` may need to be *added* — the local knowledge
+  index dlopens an ONNX Runtime library that is downloaded to the data
+  directory rather than shipped inside the bundle (see
+  `ProjectDocs/wails-migration-evaluation-2026-08.md` §0.5.6).
+- **The renderer must be bundled.** The app has never had a hosted-JavaScript
+  fallback and must not grow one; a packaged build that cannot find its
+  renderer should fail to start rather than reach the network.
+
+Notarization:
+
+```bash
 WORKMAX_NOTARY_KEYCHAIN_PROFILE=workmax-notary ./desktop/scripts/notarize-mac.sh arm64
 
-# Equivalent npm wrappers from desktop/electron/:
-cd desktop/electron
-npm run dist:mac
-npm run dist:mac:arm64
-npm run dist:mac:x64
-npm run dist:mac:public:arm64
-npm run notarize:mac:arm64
+# Validate paths, signing state, and credentials without contacting Apple:
+./desktop/scripts/notarize-mac.sh --dry-run arm64
 ```
 
-Cross-compiles the Go sidecar with the Electron package version
-embedded into `server/desktop/buildinfo.Version`, compiles Electron,
-runs electron-builder, inspects the generated `.app`, then drops a `.dmg` +
-`.zip` in `desktop/electron/release/` named
-`WorkMax Desktop-<version>-<arch>.<ext>`.
-The build wrapper verifies the freshly built sidecar contains the expected
-Electron package version before invoking electron-builder, and verifies the
-expected `.dmg` and `.zip` artifacts exist and are non-empty before reporting
-success. `--preflight-only` runs the static packaging input checks without
-compiling or packaging; it is useful for script regression tests and local
-sanity checks, but it does not replace a real build. The preflight also rejects
-`extraFiles`, `afterSign`, and inline `mac.notarize` so artifact-shape changes
-and Apple submission stay behind the reviewed package inspector and
-`notarize-mac.sh` gates.
+`notarize-mac.sh` survived because `codesign` / `notarytool` / `stapler` /
+`spctl` is shell plumbing, not shell-specific. It takes credentials as either
+`WORKMAX_NOTARY_KEYCHAIN_PROFILE` or
+`APPLE_ID` + `APPLE_TEAM_ID` + `APPLE_APP_SPECIFIC_PASSWORD`, and it still
+enforces the signature gates: no ad-hoc signatures, a `TeamIdentifier` must be
+set, `Authority=Developer ID Application: ...`, hardened runtime, and strict
+`codesign --verify --deep`.
 
-Use these wrappers instead of invoking `electron-builder` directly. Direct
-`electron-builder` packaging only copies the already-present
-`desktop/electron/bin/workagent-desktop` binary; it does not rebuild the sidecar
-or inject the Electron package version, so it can produce a stale bundle that
-fails the startup version check. The wrapper installs Electron dependencies when
-the local `tsc` or `electron-builder` binary is missing, then invokes
-`./node_modules/.bin/electron-builder` so packaging uses the version pinned in
-`desktop/electron/package-lock.json`.
-The wrapper runs `desktop/scripts/inspect-mac-package.sh` on the generated
-`.app` for the requested arch before reporting success. That verifies the bundle
-id, app version, packaged main executable, Electron app payload, sidecar path,
-executable bits, and sidecar version marker before launch. The inspector also
-requires exactly one Electron payload mode (`app.asar` or `Resources/app`),
-checks the payload package name/main/version plus all compiled runtime entry
-points, and rejects any unexpected payload entry. Known-bad examples include
-compiled test files, source maps, source files, nested `.app` bundles, stale
-`release/` / `dist/mac*` package output, or a duplicated
-`workagent-desktop` sidecar in both asar and unpacked packaging modes. It also
-rejects unexpected `app.asar.unpacked` content and unexpected top-level
-`Contents/Resources` entries so files cannot bypass the asar/runtime resource
-allowlists. It reports signing, strict codesign verification, and Gatekeeper
-assessment status.
-Every packaged channel requires and inspects the bundled Renderer; the app
-aborts startup if it is missing and never falls back to hosted JavaScript.
-Public-release candidates must build with
-`desktop/scripts/build-mac.sh --public-release <arch>` or the equivalent
-`npm run dist:mac:public:<arch>` wrapper. That mode adds the app-icon and
-Developer ID signature gates and fails unless
-`Contents/Resources/renderer/en/desktop/index.html`, `styles.css`,
-`renderer.js`, and `Contents/Resources/icon.icns` are present and non-empty,
-and the app has a `codesign -dv` `Authority=Developer ID Application: ...`
-hardened-runtime signature that passes strict codesign verification. It also
-verifies exact packaged renderer CSP, relative asset references, absence of
-unexpected or token-like embedded files, the icon file's `icns` header, and
-`CFBundleIconFile=icon.icns`. The CSP gate rejects both non-loopback
-`connect-src` replacements and added remote `connect-src` fallbacks.
-Run the inspector manually only when checking an already-built or extracted app
-bundle.
-
-Config lives at `desktop/electron/electron-builder.yml`. App bundle
-id is `ai.workmax.desktop` — matches the macOS Keychain service the
-sidecar uses, so a packaged build sees the same session entries the
-dev (un-bundled) build wrote. Entitlements at
-`desktop/build/entitlements.mac.plist` are minimal: JIT (Electron
-V8), unsigned-executable-memory (Electron V8), dyld-env-vars, and
-network.client. Everything else is intentionally absent — adding
-more entitlements without a justified reason gets the binary
-rejected by notarization. The build preflight pins this exact entitlement set
-and rejects both missing required entitlements and unexpected
-`com.apple.security.*` keys.
-
-Notarization is a separate public-distribution step. After building a signed
-DMG with a Developer ID Application certificate, run
-`desktop/scripts/notarize-mac.sh arm64` or `desktop/scripts/notarize-mac.sh x64`.
-The script first re-runs the package inspector in public-release mode, requiring
-the bundled renderer entry, custom app icon, and Developer ID Application
-hardened-runtime signature, then rejects unsigned/ad-hoc bundles, requires a
-`TeamIdentifier`, `Authority=Developer ID Application: ...`, and hardened
-runtime signature metadata, runs strict `codesign --verify --deep` on the
-`.app`, submits the DMG with
-`xcrun notarytool`, staples the ticket, and verifies the result. It accepts
-either `WORKMAX_NOTARY_KEYCHAIN_PROFILE` or
-`APPLE_ID` + `APPLE_TEAM_ID` + `APPLE_APP_SPECIFIC_PASSWORD`; use `--dry-run`
-to validate local paths, bundled-renderer/icon readiness, signing state, and
-credentials without contacting Apple. The legacy-named
-`--allow-hosted-renderer` option bypasses only structural bundle inspection for
-controlled dry-runs; it cannot enable a hosted Renderer in the application.
-The icon gate still applies, and Apple submission with that option is rejected.
-Passing a versioned release DMG path such as
-`release/WorkMax Desktop-<version>-arm64.dmg` still infers and inspects the
-neighboring `release/mac-arm64/WorkMax Desktop.app`; arbitrary DMG paths are
-accepted only with `--allow-hosted-renderer --dry-run` because the script cannot
-prove their contained app bundle. Non-dry-run submission requires an arch target
-or a versioned release DMG path that maps to an inspectable neighboring `.app`.
-
-The electron-builder file list is intentionally narrow. The app payload should
-contain only the compiled runtime entry points and `package.json`, not the whole
-`dist/` directory. This prevents stale package output such as nested
-`dist/mac*/*.app` bundles, test files, source maps, or release artifacts from
-being captured recursively into `app.asar`. The package inspector opens
-`app.asar` and rejects any entry outside the expected `dist/*.js` runtime set
-and `package.json` before a build is treated as usable. It also rejects a second
-`Resources/app` payload beside `app.asar`, rejects unexpected
-`app.asar.unpacked` content, and verifies that
-`workagent-desktop` is only present as `Resources/workagent-desktop`, not inside
-the Electron JS payload.
-
-The sidecar executable is packaged as an `extraResources` file at
-`Resources/workagent-desktop`; Electron resolves that path via
-`process.resourcesPath` in packaged builds. In dev it still uses
-`desktop/electron/bin/workagent-desktop`.
-
-Renderer URL resolution is build-mode aware:
-
-- `dev.sh` explicitly defaults to the repository Renderer under
-  `desktop/renderer/en/desktop/`.
-- Development `WORKMAX_DESKTOP_RENDERER_URL` may select that exact file or an
-  exact loopback `/desktop` route. Remote development requires HTTPS plus a
-  matching bare Origin in `WORKMAX_DESKTOP_TRUSTED_RENDERER_ORIGINS`.
-- Packaged builds require
-  `Resources/renderer/en/desktop/index.html`, which electron-builder copies as
-  an extra resource. Missing files abort startup.
-- Packaged builds reject `WORKMAX_DESKTOP_RENDERER_URL`, including otherwise valid
-  remote `/desktop` routes.
-
-Because the renderer receives privileged preload bridges, Electron
-locks the main window to the configured desktop route. In-window navigation
-outside that route is blocked, and popups / external links are opened through
-the OS browser instead of a bridged Electron window only when the target is a
-non-credential, non-local/private HTTP(S) URL. OS permission prompts from the
-main renderer session are denied by default. Privileged IPC handlers also verify
-the sender URL before starting sign-in or revealing the data directory.
-
-Desktop is also single-instance at the Electron layer. A second launch focuses
-the existing window instead of spawning another sidecar. The sidecar also
-claims `<dataDir>/sidecar.pid` before opening SQLite, so standalone sidecar
-launches using the same data directory fail fast when another live sidecar owns
-the cache. Stale or corrupt pid files are removed and replaced during startup.
-
-Current password Login Transaction does not open an OAuth page: the bundled
-form calls four fixed Main-only commands, and Go keeps the callback binding,
-PKCE, capabilities, code and tokens outside Renderer memory. The old
-`/auth/start` authorize route remains registered only as deferred compatibility;
-the compatibility fetch facade blocks it and Main/Preload expose no browser-open
-command for it. A future Google/external-IdP flow may hand an allowlisted URL to
-the system browser only after a dedicated Main contract and callback adapter are
-implemented and reviewed; that flow is not present today.
-
-The bundled static renderer path now exists and is covered by source/package
-inspection plus packaged runtime smoke. The seeded cached-history smoke launches
-the `.app` against an unreachable `WORKMAX_CLOUD_BASE=http://127.0.0.1:9`, so it
-proves the bundled renderer can read a local cached thread/message without a
-live hosted renderer or cloud dependency. The packaged smoke also validates
-live sidecar diagnostics: readable SQLite data/db/backup paths,
-`integrity_check: "ok"`, non-empty applied SQLite migrations, and Go
-heap/goroutine counters. It verifies missing/wrong local-token rejection across
-representative packaged sidecar read/write surfaces, with duplicate-header
-rejection pinned on `/health`. The Electron reporter redacts and flags any raw
-local token or token-like renderer text found in renderer-observation fields
-before writing the smoke artifact, and the shell helper requires both leak
-flags and redaction markers to be absent from a positive result. It also
-treats a non-zero packaged app process exit as failure even when a renderer
-smoke result was written. The helper now has an opt-in real-cache mode for the
-public-release offline gate:
-`--data-dir <existing-dir> --expect-thread-text <text>
---expect-message-text <text>` launches against an existing Desktop data dir
-without seeding smoke rows and forces
-`WORKMAX_CLOUD_BASE=http://127.0.0.1:9`, so a previously authenticated
-Keychain-backed cache can be verified without a live cloud dependency. It also
-supports
-`--expect-body-text "Auth state: unauthenticated"` for the clean-data-dir,
-no-session packaged path after clearing the Desktop Keychain session. The helper
-rejects `--data-dir` unless one of those text assertions is present, so an
-existing profile cannot be smoke-launched accidentally without the forced
-unreachable cloud base. Public
-release still needs that real offline GUI smoke evidence. Until that
-evidence exists, packaged builds are suitable for controlled smoke only. The
-public-release gate and implementation evidence are maintained by this README
-together with `desktop/scripts/smoke-packaged-app.sh` and its tests.
-
-**Not yet shipped**:
-
-- Complete Desktop Agent workbench — the bundled PPT preview can idempotently
-  create a synchronized thread, stream a turn, and stop it. It still has no
-  durable attach/replay across reload or artifact/question-form workflow, and
-  has no real-cloud packaged evidence.
-- Fresh-profile Desktop Login Transaction production E2E — the password chain
-  is connected in source through Server API, Sidecar coordinator and four local
-  privileged routes, Electron Main-only IPC, bundled password UI and Keychain
-  commit. It has hermetic tests but no target-MySQL migration/semantics,
-  real-cloud, real-Keychain packaged evidence. Google adapter/callback,
-  cross-instance account/device abuse controls, terminal cleanup, recovery from
-  a lost successful Server password response, DB-authoritative time and key
-  rotation/AAD are also absent.
-- Notarization — helper script exists at `desktop/scripts/notarize-mac.sh`,
-  but public distribution still needs a Developer ID Application certificate
-  and Apple notary credentials configured in CI/local env. Until then, the
-  `.dmg` will trigger Gatekeeper warnings on a different machine. The current
-  build host has no valid Developer ID Application certificate, so
-  electron-builder skips application signing.
-- Packaged offline renderer smoke — seeded packaged smoke exists, but release
-  still needs a packaged `.app` launch against cached local history from a
-  previously authenticated Keychain-backed session with the helper-enforced
-  unreachable sidecar cloud base.
+One deliberate hole: the bundle inspector it used to call was
+electron-builder-layout-specific and was deleted. Rather than quietly dropping
+the gate it enforced — *do not notarize a build whose renderer is not actually
+bundled* — the script **fails closed**: `--dry-run` still works, and a real
+submission is refused until a Wails-layout inspector exists. Set
+`WORKMAX_DESKTOP_RELEASE_DIR` and `WORKMAX_DESKTOP_VERSION` to point it at
+wherever W4 decides packaged artifacts land.
 
 ## Version Pins
 
-Electron `package.json` version and the sidecar default version must match.
-`desktop/electron/src/main.ts` fails fast after the sidecar handshake if they
-diverge, which catches stale bundled sidecar binaries during packaging or local
-dev. `desktop/scripts/dev.sh` and `desktop/scripts/build-mac.sh` read the
-Electron package version and inject it into the Go sidecar with
-`-ldflags -X server/desktop/buildinfo.Version=...`.
+There is one version now, and it lives in Go. The Electron `package.json` that
+used to be the second source of truth is gone, along with the handshake check
+that guarded against the two drifting — with a single binary there is nothing
+left to drift.
 
 | Component | Pinned | Source of truth |
 |---|---|---|
-| Desktop app | 0.1.0-p1-ea | `desktop/electron/package.json` |
-| Sidecar | 0.1.0-p1-ea default; CI can override via `-ldflags -X server/desktop/buildinfo.Version=...` | `server/desktop/buildinfo/buildinfo.go` |
-| Go | 1.24.1 | `server/go.mod` |
-| TypeScript | 5.8.3+ | `desktop/electron/package.json` |
-| Node | 20.11+ LTS | not pinned in repo yet |
-| Electron | 40.x | `desktop/electron/package.json` |
-| electron-builder | 25.x | `desktop/electron/package.json` |
+| Desktop app + sidecar | 0.1.0-p1-ea (CI may override with `-ldflags -X server/desktop/buildinfo.Version=...`) | `server/desktop/buildinfo/buildinfo.go` |
+| Go | 1.25.0 | `server/go.mod` |
+| Wails | v3.0.0-beta.5 | `desktop/wails/go.mod` |
+| TypeScript | 5.6+ — build-time only, for regenerating `lib/desktop-bridge.js` | `desktop/renderer/package.json` |
+| Node | 20.11+ LTS — only for the boundary and renderer checkers | not pinned in repo yet |
 
 ## On `//go:build desktop`
 
@@ -875,7 +705,7 @@ available.
 | P0.1 — scaffold + sidecar stub | ✅ | (pre-spike) |
 | P0.2 — SQLite + 4-table migration | ✅ | (pre-spike) |
 | P0.3 — sidecar HTTP + handshake + /health | ✅ | (pre-spike) |
-| P0.4 — Electron main + preload | ✅ | (pre-spike) |
+| P0.4 — Electron main + preload | ✅ | (pre-spike; that shell was retired 2026-08-08) |
 | P0.5 — Renderer LoginPage + apiPaths | ✅ | (pre-spike) |
 | P-1.1..P-1.7 — backend OAuth Authorization Server | ✅ | `b8d3a02f` → `ff8b4f19` |
 | P0.6a..d — OAuth integration (Keychain + Flow; historical BrowserWindow later replaced by guarded system-browser launch) | ✅ legacy flow only | `1f1d5dbe`, `c86151cd`, `77a7cc61`, `81847c1f` (+ `9c59bf23` re-stage) |
