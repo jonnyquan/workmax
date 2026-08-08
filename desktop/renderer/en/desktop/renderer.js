@@ -27,6 +27,7 @@ const state = {
   recoveryFeedbackKind: "default",
   recoveringSession: false,
   pendingFiles: [],
+  threadQuery: "",
   uploadGeneration: 0,
 };
 
@@ -1865,8 +1866,87 @@ async function submitNewThread(event) {
   }
 }
 
+// Groups threads by the user's local calendar day rather than elapsed hours.
+//
+// Ported from the web client, including the two edge cases that make the
+// difference between a list that reads right and one that surprises people: a
+// conversation from 11pm last night belongs under "Yesterday" at 1am, not
+// "3 hours ago", and a timestamp that will not parse goes to Older rather than
+// silently disappearing. Future timestamps stay in Today.
+function localCalendarDay(date) {
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000;
+}
+
+const THREAD_GROUPS = [
+  { key: "today", label: "Today" },
+  { key: "week", label: "Previous 7 days" },
+  { key: "older", label: "Older" },
+];
+
+function groupThreads(threads, now) {
+  const today = localCalendarDay(now);
+  const groups = { today: [], week: [], older: [] };
+  for (const thread of threads) {
+    const updated = new Date(thread.updated_at);
+    if (Number.isNaN(updated.getTime())) {
+      // Unreachable through the normal path today: parseThread rejects an
+      // unparseable updated_at, and parseThreadList maps over every item, so a
+      // single bad row empties the whole list before it gets here. Kept
+      // because grouping should not be the thing that breaks if that parser
+      // ever softens — and because a thread with no readable date is still a
+      // thread the user has.
+      groups.older.push(thread);
+      continue;
+    }
+    const ageInDays = today - localCalendarDay(updated);
+    if (ageInDays <= 0) groups.today.push(thread);
+    else if (ageInDays <= 7) groups.week.push(thread);
+    else groups.older.push(thread);
+  }
+  return groups;
+}
+
+// Matches on the title only. Message bodies live in SQLite and are not loaded
+// for unselected threads, so searching them here would quietly match a subset
+// — the threads that happen to be open — which is worse than not offering it.
+function threadMatchesQuery(thread, query) {
+  if (!query) return true;
+  return (thread.name || "Untitled thread").toLowerCase().includes(query);
+}
+
+function renderThreadButton(thread) {
+  const item = document.createElement("li");
+  item.className = "thread-item";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "thread-button";
+  button.classList.toggle("active", thread.uuid === state.selectedThreadUUID);
+  const title = document.createElement("strong");
+  title.textContent = thread.name || "Untitled thread";
+  const meta = document.createElement("p");
+  meta.textContent = `${thread.message_count || 0} messages · ${formatDate(thread.updated_at)}`;
+  button.append(title, meta);
+  if (state.recoverableTurns.some((turn) => turn.thread_uuid === thread.uuid)) {
+    const badge = document.createElement("span");
+    badge.className = "thread-recovery-badge";
+    badge.textContent = "Interrupted";
+    button.appendChild(badge);
+  }
+  button.addEventListener("click", () => {
+    selectThread(thread);
+  });
+  item.appendChild(button);
+  return item;
+}
+
 function renderThreads() {
   threadList.textContent = "";
+  // A filter above a list with nothing in it is noise — and worse, it reads as
+  // "your search found nothing" when the truth is that nothing is cached yet.
+  // Looked up here rather than held in a module const: this runs before the
+  // element lookups at the bottom of the file have been evaluated.
+  const searchPanel = document.querySelector("#thread-search-panel");
+  if (searchPanel) searchPanel.hidden = state.threads.length === 0;
   if (state.threads.length === 0) {
     const item = document.createElement("li");
     item.appendChild(renderNotice("No cached threads yet."));
@@ -1874,34 +1954,30 @@ function renderThreads() {
     renderEmptyState();
     return;
   }
-  for (const thread of state.threads) {
+
+  const query = (state.threadQuery || "").trim().toLowerCase();
+  const matches = state.threads.filter((thread) => threadMatchesQuery(thread, query));
+  if (matches.length === 0) {
     const item = document.createElement("li");
-    item.className = "thread-item";
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "thread-button";
-    button.classList.toggle("active", thread.uuid === state.selectedThreadUUID);
-    button.innerHTML = "";
-    const title = document.createElement("strong");
-    title.textContent = thread.name || "Untitled thread";
-    const meta = document.createElement("p");
-    meta.textContent = `${thread.message_count || 0} messages · ${formatDate(thread.updated_at)}`;
-    button.append(title, meta);
-    if (
-      state.recoverableTurns.some(
-        (turn) => turn.thread_uuid === thread.uuid
-      )
-    ) {
-      const badge = document.createElement("span");
-      badge.className = "thread-recovery-badge";
-      badge.textContent = "Interrupted";
-      button.appendChild(badge);
-    }
-    button.addEventListener("click", () => {
-      selectThread(thread);
-    });
-    item.appendChild(button);
+    // Naming the query distinguishes "nothing matched" from "nothing cached",
+    // which the empty list alone cannot.
+    item.appendChild(renderNotice(`No conversations match “${state.threadQuery.trim()}”.`));
     threadList.appendChild(item);
+    renderEmptyState();
+    return;
+  }
+
+  const groups = groupThreads(matches, new Date());
+  for (const group of THREAD_GROUPS) {
+    const bucket = groups[group.key];
+    if (bucket.length === 0) continue;
+    const heading = document.createElement("li");
+    heading.className = "thread-group";
+    heading.textContent = group.label;
+    threadList.appendChild(heading);
+    for (const thread of bucket) {
+      threadList.appendChild(renderThreadButton(thread));
+    }
   }
   renderEmptyState();
 }
@@ -3397,3 +3473,13 @@ async function loadThreadSources(threadUUID) {
 // index.html shipped with — which looks like a rendered panel that is simply
 // empty, rather than one that never ran.
 renderTaskContext();
+
+// Filtering is local and instant: the thread list is already in memory, so
+// there is nothing to debounce and no request to make.
+const threadSearchInput = document.querySelector("#thread-search");
+if (threadSearchInput) {
+  threadSearchInput.addEventListener("input", () => {
+    state.threadQuery = threadSearchInput.value;
+    renderThreads();
+  });
+}

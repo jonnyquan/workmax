@@ -1118,6 +1118,150 @@ async function testCachedStreamingStatesRenderPartialAndRejectUnknown() {
 // It sits after the bootstrap call in renderer.js, so an initial render is not
 // implicit — and a panel that never ran is indistinguishable from one that ran
 // and found nothing, because index.html ships plausible-looking static values.
+// Conversation grouping and search.
+//
+// Grouping is by local calendar day, not elapsed hours — the case that makes
+// the difference is a conversation from late last night read at 1am: "3 hours
+// ago" is true and useless, "Yesterday" is what someone is looking for. The
+// two other rules are equally deliberate: a timestamp that will not parse goes
+// to Older rather than vanishing, and a future one stays in Today.
+async function testThreadGroupingAndSearch() {
+  // Built from LOCAL date components, not UTC strings. The grouping is by
+  // local calendar day, so a fixture written in UTC would pass or fail
+  // depending on the machine's timezone — which is how the first version of
+  // this test failed: "23:30 UTC yesterday" is this morning in UTC+8, and the
+  // code was right to call it today.
+  const local = (y, m, d, h = 9) => new Date(y, m - 1, d, h, 0, 0).toISOString();
+  const now = new Date(2026, 7, 8, 10, 0, 0);
+  const threads = [
+    { uuid: "t-today", name: "Quarterly sales", updatedAt: local(2026, 8, 8, 1) },
+    { uuid: "t-lastnight", name: "Late night", updatedAt: local(2026, 8, 7, 23) },
+    { uuid: "t-week", name: "Pipeline notes", updatedAt: local(2026, 8, 3) },
+    { uuid: "t-old", name: "Archived plan", updatedAt: local(2026, 6, 1) },
+    { uuid: "t-broken", name: "Broken stamp", updatedAt: "not-a-date" },
+    { uuid: "t-future", name: "Clock skew", updatedAt: local(2026, 8, 9) },
+  ];
+
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-08-08T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        // Built through the shared helper so the fixture satisfies the same
+        // strict parser the renderer applies; only the timestamp is varied.
+        // The malformed row is deliberately NOT served here: parseThread
+        // rejects an unparseable updated_at and parseThreadList maps over
+        // every item, so one bad row empties the entire sidebar. The grouping
+        // function's own handling of it is asserted directly below instead.
+        return response({
+          items: threads
+            .filter((t) => t.uuid !== "t-broken")
+            .map((t) => ({ ...thread(t.uuid, t.name), updated_at: t.updatedAt })),
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn() { return { turnID: "unused" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { context, document } = await runRenderer(bridge, desktopBridge);
+
+  const groups = context.groupThreads(
+    threads.map((t) => ({ ...t, updated_at: t.updatedAt })),
+    now,
+  );
+  // Array.from because these crossed a VM realm boundary: same contents,
+  // different Array prototype, and deepStrictEqual cares.
+  const ids = (bucket) => Array.from(bucket).map((t) => t.uuid).sort();
+  assert.deepEqual(
+    ids(groups.today),
+    ["t-future", "t-today"],
+    "today holds the same calendar day, and a future timestamp stays there rather than forming its own bucket",
+  );
+  assert.deepEqual(
+    ids(groups.week),
+    ["t-lastnight", "t-week"],
+    "late last night belongs to the previous week bucket by calendar day, not to today by elapsed hours",
+  );
+  assert.deepEqual(
+    ids(groups.older),
+    ["t-broken", "t-old"],
+    "an unparseable timestamp is kept in Older; dropping it would hide a real conversation",
+  );
+
+  // Group headings appear only for buckets that have something in them.
+  const headings = Array.from(document.byId.get("thread-list").children).filter(
+    (node) => node.classList?.contains("thread-group"),
+  );
+  assert.ok(headings.length >= 2, "populated groups must be labelled");
+
+  // Driven through the input rather than by poking state: that is the path a
+  // user takes, and top-level consts in a VM script are not reachable from the
+  // context object anyway.
+  const search = document.byId.get("thread-search");
+  search.value = "quarterly";
+  search.dispatch("input");
+  const shown = Array.from(document.byId.get("thread-list").children)
+    .filter((n) => n.classList?.contains("thread-item"));
+  assert.equal(shown.length, 1, "search must narrow the list to matching titles");
+
+  search.value = "nothing-matches-this";
+  search.dispatch("input");
+  assert.match(
+    document.byId.get("thread-list").textContent,
+    /No conversations match/,
+    "an empty result must say the query found nothing, not look like an empty cache",
+  );
+  assert.equal(
+    document.byId.get("thread-search-panel").hidden,
+    false,
+    "a query that matches nothing must keep its own input on screen — hiding it would strand the text the user typed",
+  );
+}
+
+// The counterpart to the assertion above: with nothing cached, the filter is
+// not just useless, it is misleading — an empty list under a search box reads
+// as "your search found nothing".
+async function testThreadSearchIsHiddenWithNothingToFilter() {
+  // A signed-in session whose thread list comes back empty, rather than the
+  // missing-bridge run: this has to prove renderThreads decided to hide the
+  // filter, not merely that index.html ships it hidden.
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-08-08T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async listSkills() { return typedSuccess(pptCatalog()); },
+    },
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  assert.match(
+    document.byId.get("thread-list").textContent,
+    /No cached threads yet/,
+    "precondition: this run must have an empty thread list",
+  );
+  assert.equal(
+    document.byId.get("thread-search-panel").hidden,
+    true,
+    "the conversation filter must stay hidden until there is something to filter",
+  );
+}
+
 async function testTaskContextPanelRendersOnLoad() {
   const { document } = await runRenderer(undefined);
   const steps = document.byId.get("run-overview-list");
@@ -3028,6 +3172,8 @@ await testRejectsMalformedMessageTimestamps();
 await testRejectsMalformedLoginTransactionResult();
 await testRedactsErrorStatusMessages();
 await testCachedStreamingStatesRenderPartialAndRejectUnknown();
+await testThreadGroupingAndSearch();
+await testThreadSearchIsHiddenWithNothingToFilter();
 await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
 await testStagedAttachmentsAreSentWithTheTurn();
