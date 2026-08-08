@@ -167,6 +167,18 @@
 
 **倾向 (c)**：能力路径落地后，它的安全性质与绑定等价甚至更好（凭据只经过我们自己的进程内调用），而且少一个对 beta 框架内部的依赖。W2 开工时定。
 
+### 0.5.19 W4 起步：entitlements 重写 + bundle 检查器（2026-08-08）
+
+**entitlements 从 4 条减到 1 条**。去掉 `allow-jit` 与 `allow-unsigned-executable-memory`（Electron 的 V8 才需要；Wails 用系统 WebView，JS 引擎跑在自带授权的系统进程里，我们的二进制既不生成也不执行代码）与 `allow-dyld-environment-variables`（Wails 构建不需要 `DYLD_*`，资源路径由可执行文件位置显式推导）。只留 `network.client`。
+
+**`disable-library-validation` 刻意暂不添加**——它要到 RAG 里程碑才有正当理由（ONNX 库下载到数据目录、由别的团队签名，库验证下加载不了）。提前加等于为一个还没启用的功能削弱每一个构建。plist 里把**每一条缺席的理由也写下来了**，因为公证拒绝的理由通常是"授权与行为不符"，而"当初为什么没加"是最容易丢失的信息。
+
+**`inspect-mac-package.sh` 按 Wails 布局重写**，补上了我上一轮故意留的失败关闭。Wails 布局比 Electron 小得多（一个可执行文件 + 一个 renderer 目录），所以检查是穷举式的：Resources 顶层与 renderer 内部都是白名单，任何未列出的条目即失败。专门检查的项：bundle id 必须是 `ai.workmax.desktop`（它决定能否看见用户已有的 Keychain 会话）、可执行文件必须携带 Info.plist 声明的版本标记（否则是"用新版本号发旧代码"）、**不得存在打包的 sidecar 二进制**（那意味着打包步骤还在按退役的布局走）、CSP 的每个 `connect-src` 源逐个校验、以及 entitlements 集合与 plist 完全一致。
+
+16 项负向测试逐条钉住（`inspect-mac-package.test.sh`），已接回 CI。
+
+> 写这个检查器时自己踩了两次"重叠即死"：① 一条 `connect-src` 规则用了 `grep -E` 不支持的负向先行断言，还把 stderr 丢了 —— **它从写下那天起就什么都没匹配过**，测试是唯一发现方式；② source map 检查与文件白名单重叠、签名检查与 notarize 重叠，两处都删掉了弱的那个。**两条重叠的检查里，总有一条永远不会是构建失败的原因，于是也没人维护它。**
+
 ### 0.5.18 W2 安全收尾（2026-08-08）
 
 | 项 | 落地 |
@@ -821,7 +833,8 @@ Wails **无 preload 世界**，故 `desktop/electron/src/preload.ts`（`AgentSSE
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | rev.1 | 2026-08-08 | 首版评估 + Part B 落地方案；D1/D4/入口结构三项决策落定（v3 / A2 / 单入口双模式） |
-| **rev.13** | **2026-08-08** | **W2 安全收尾。** 新增 §0.5.18：CSP 去掉 `'unsafe-inline'`（出货 renderer 实测不需要，harness 的 `<style>` 一并外置）、DevTools 改为仅 env 显式开启且应用内无法开启、单实例两层实测。契约增至 12 条保证（新增 `devtools-off-by-default`，`containment-headers` 加缺席断言），`uiserver_test.go` 独立复核 |
+| **rev.14** | **2026-08-08** | **W4 起步。** 新增 §0.5.19：entitlements 从 4 条减到 1 条（去掉 V8/dyld 三条，`disable-library-validation` 待 RAG 里程碑再加，缺席理由写进 plist）；`inspect-mac-package.sh` 按 Wails 布局重写并配 16 项负向测试，补上 `notarize-mac.sh` 的失败关闭，两者已接回 CI。修掉自己写的一条静默失效检查（`grep -E` 不支持负向先行断言 + stderr 被丢），并把两处重叠检查收敛到一处 |
+| rev.13 | 2026-08-08 | **W2 安全收尾。** 新增 §0.5.18：CSP 去掉 `'unsafe-inline'`（出货 renderer 实测不需要，harness 的 `<style>` 一并外置）、DevTools 改为仅 env 显式开启且应用内无法开启、单实例两层实测。契约增至 12 条保证（新增 `devtools-off-by-default`，`containment-headers` 加缺席断言），`uiserver_test.go` 独立复核 |
 | rev.12 | 2026-08-08 | **文档与许可审计链收口。** `desktop/README.md` 逐节重写；顶层 README / RELEASING / THIRD_PARTY_NOTICES 同步；`license-audit.sh` 改指 renderer 的构建期 npm 树，并新增 `desktop/wails` 模块的 go-licenses 审计（此前无任何一遍覆盖真正出货的那个模块）。`make bootstrap` / `make test-shell` / `make build-desktop` 取代原 Electron 目标 |
 | rev.11 | 2026-08-08 | **修好行为闸门，并因此抓到一个真实缺陷。** 新增 §0.5.17。`check-bundled-renderer-behavior.mjs` 的假 DOM 改为从 `index.html` 派生（元素集合、tag 名、初始 hidden 全部读真实标记），结构上杜绝再次漂移；补齐 22 个 agent mock 的 `uploadThreadFile`。修复 L3b 缺陷：`state.pendingFiles` 在 `startTurn` 读取前被清空，导致附件 `fileIDs` 恒为空、文件静默丢失；已加回归测试并做负向验证 |
 | rev.10 | 2026-08-08 | **Electron 已退役。** 新增 §0.5.16。删 `desktop/electron/` + `cmd/workagent-desktop/` + electron-builder 专用打包脚本；`desktop-bridge.ts` 迁入 `desktop/renderer/src/` 并与 Node 类型解耦；契约 checker 的每条 Electron 断言换成同职能的 Wails 断言（而非删除），边界扫描加扫 `.go`；契约 `ipc` 段更名 `privilegedGate`；`notarize-mac.sh` 去耦 electron-builder 布局并对缺失 bundle 检查器**失败关闭**。`dev.sh` 重写为构建并运行单一二进制 |

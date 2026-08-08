@@ -3,54 +3,62 @@
 <!--
   Minimal hardenedRuntime entitlements for WorkMax Desktop.
 
-  Each entitlement is here for a specific reason — don't add things
-  speculatively. The macOS notarization process inspects this plist
-  and rejects the app if entitlements aren't justified by the binary
-  behavior.
-
-  - com.apple.security.cs.allow-jit:
-      Electron's V8 emits JIT code. Without this entitlement,
-      hardenedRuntime blocks JIT and Electron crashes on launch.
-
-  - com.apple.security.cs.allow-unsigned-executable-memory:
-      Electron's V8 also writes executable memory pages it later
-      JITs into. Without this, hardenedRuntime SIGKILLs on first
-      JS execution.
-
-  - com.apple.security.cs.allow-dyld-environment-variables:
-      Electron Forge / build-from-source workflows occasionally
-      need DYLD_LIBRARY_PATH-style overrides. Without this they
-      get silently scrubbed under hardenedRuntime.
+  Each entitlement is here for a specific reason. Notarization inspects this
+  plist and rejects entitlements the binary's behavior does not justify, so
+  "might need it later" is not a reason — it is a rejection.
 
   - com.apple.security.network.client:
-      The sidecar binary makes outbound HTTPS calls to workmax.app
-      (OAuth + Cloud Proxy). Electron's main process makes the
-      authenticated loopback request that starts the system-browser
-      login transaction. Without this entitlement macOS sandbox
-      blocks client TCP.
+      The sidecar makes outbound HTTPS calls to workmax.app (OAuth + Cloud
+      Proxy). Note this covers outbound connections only.
 
-  NOT included on purpose:
-    - com.apple.security.network.server: we don't accept incoming
-      connections from outside the loopback interface. The sidecar
-      binds 127.0.0.1:0; macOS treats loopback differently.
-    - com.apple.security.files.user-selected.read-write: we don't
-      handle user-picked files in P0 (chat composer attachments
-      are a later milestone).
-    - com.apple.security.device.camera / microphone: no media
-      capture in WorkMax Desktop.
+  NOT included, and why each absence is deliberate:
 
-  Public distribution: paired with the codesign runtime option and an
-  Apple Developer ID Application certificate, this plist satisfies
-  notarytool. desktop/scripts/notarize-mac.sh runs the actual upload.
+    - com.apple.security.cs.allow-jit
+    - com.apple.security.cs.allow-unsigned-executable-memory:
+        These existed for Electron's V8, which emitted and executed JIT code.
+        The Wails shell uses the operating system's WebView, whose JavaScript
+        engine runs in a system process that carries its own entitlements. Our
+        binary neither emits nor executes generated code, so both were removed
+        when the Electron shell was retired (2026-08-08).
+
+    - com.apple.security.cs.allow-dyld-environment-variables:
+        Electron's build-from-source workflows occasionally needed DYLD_*
+        overrides. Nothing in the Wails build does: the shell locates its
+        renderer and native assets through explicit paths derived from the
+        executable location, not through the dynamic loader's environment.
+
+    - com.apple.security.cs.disable-library-validation:
+        NOT NEEDED YET, and deliberately not added in advance. The local
+        knowledge index dlopens an ONNX Runtime library that is downloaded to
+        the user's data directory rather than shipped in the bundle, and a
+        library signed by another team cannot be loaded under library
+        validation. That milestone is where this entitlement gets justified —
+        adding it now would weaken every build in the meantime for a feature
+        that is not enabled. See
+        ProjectDocs/wails-migration-evaluation-2026-08.md §0.5.6.
+
+    - com.apple.security.network.server:
+        We do accept connections, but only on the loopback interface, which
+        macOS does not gate behind this entitlement. Adding it would claim a
+        capability we do not want and cannot justify.
+
+    - com.apple.security.files.user-selected.read-write:
+        Chat attachments are read through the webview's own file input and
+        handed to the sidecar in-process; the app never opens a path the user
+        picked through a system panel.
+
+    - com.apple.security.device.camera / microphone:
+        No media capture. The webview is also served a Permissions-Policy that
+        denies both, so this is refused in two places.
+
+  Public distribution: paired with the codesign runtime option and an Apple
+  Developer ID Application certificate, this plist satisfies notarytool.
+  desktop/scripts/notarize-mac.sh runs the actual submission, and
+  desktop/scripts/inspect-mac-package.sh pins this exact entitlement set so a
+  speculative addition fails the build rather than surprising Apple.
 -->
 <plist version="1.0">
 <dict>
-    <key>com.apple.security.cs.allow-jit</key>
-    <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
-    <true/>
     <key>com.apple.security.network.client</key>
     <true/>
 </dict>

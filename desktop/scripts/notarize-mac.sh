@@ -147,6 +147,12 @@ if [ "$allow_hosted_renderer" -eq 1 ] && [ "$dry_run" -eq 0 ]; then
   exit 1
 fi
 
+fail_missing_inspector() {
+  echo "notarize-mac.sh: desktop/scripts/inspect-mac-package.sh is missing or not executable" >&2
+  echo "  Refusing to submit a bundle nothing has inspected." >&2
+  exit 1
+}
+
 if [ -n "$app_path" ]; then
   if [ ! -d "$app_path" ]; then
     echo "notarize-mac.sh: missing app bundle for inspection: $app_path" >&2
@@ -154,27 +160,19 @@ if [ -n "$app_path" ]; then
     exit 1
   fi
 
-  # The bundle inspector was electron-builder-layout-specific and went with
-  # the Electron shell. Its gate — do not notarize a build whose renderer is
-  # not actually bundled — is a real property, so this fails closed rather
-  # than quietly dropping it: signature checks below still run, but a real
-  # submission is refused until a Wails-layout inspector exists.
+  # Structure first, signature second. The inspector enumerates what is in the
+  # bundle and rejects anything unreviewed; the checks below verify how it was
+  # signed. Neither duplicates the other, so each one failing means something
+  # specific.
   inspector="$REPO_ROOT/desktop/scripts/inspect-mac-package.sh"
-  if [ -x "$inspector" ]; then
-    inspect_args=()
-    if [ "$allow_hosted_renderer" -eq 0 ]; then
-      inspect_args+=(--require-bundled-renderer)
-    fi
-    inspect_args+=(--require-app-icon --require-developer-id-signature)
-    "$inspector" "${inspect_args[@]}" "$app_path" >/dev/null
-  elif [ "$dry_run" -eq 0 ]; then
-    echo "notarize-mac.sh: no bundle inspector for the Wails layout yet" >&2
-    echo "  Refusing to notarize a bundle nothing has checked. Write" >&2
-    echo "  desktop/scripts/inspect-mac-package.sh for the Wails layout (W4) first." >&2
-    exit 1
-  else
-    echo "notarize-mac.sh: skipping bundle inspection (no inspector for the Wails layout yet)" >&2
+  [ -x "$inspector" ] || \
+    fail_missing_inspector
+  inspect_args=()
+  if [ "$allow_hosted_renderer" -eq 0 ]; then
+    inspect_args+=(--require-bundled-renderer)
   fi
+  inspect_args+=(--require-app-icon)
+  "$inspector" "${inspect_args[@]}" "$app_path" >/dev/null
 
   if ! codesign_output="$(codesign -dv --verbose=4 "$app_path" 2>&1)"; then
     echo "notarize-mac.sh: app is not codesigned strongly enough for notarization" >&2

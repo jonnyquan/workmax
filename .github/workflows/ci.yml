@@ -58,13 +58,10 @@ jobs:
         with:
           node-version: 20
 
-      # The electron-builder-specific packaging tests went with the Electron
-      # shell. What survives is the pipeline that is not shell-specific:
-      # the bundled-renderer allowlist and the notarization plumbing. Wails
-      # packaging tests land with W4.
       - name: Run packaging policy tests
         run: |
           ./desktop/scripts/check-bundled-renderer.test.sh
+          ./desktop/scripts/inspect-mac-package.test.sh
           ./desktop/scripts/notarize-mac.test.sh
 
   secrets:

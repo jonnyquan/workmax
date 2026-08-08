@@ -84,7 +84,7 @@ expect_pass "accepts app-specific password credentials in dry run" \
 
 write_release_app_fixture() {
   local app_path="$1"
-  mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources/app/dist"
+  mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources/renderer/en/desktop/lib"
 
   cat > "$app_path/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -103,14 +103,21 @@ write_release_app_fixture() {
 </plist>
 PLIST
 
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$app_path/Contents/MacOS/WorkMax Desktop"
+  # The Wails layout: one binary in MacOS/, the bundled renderer in Resources/.
+  # No app payload, no separate sidecar executable — the shell and the sidecar
+  # are one process now.
+  #
+  # The fixture has to satisfy inspect-mac-package.sh, which notarize-mac.sh
+  # runs before submitting, so it carries the real renderer files and a
+  # version marker rather than placeholders. That coupling is the point: these
+  # two scripts gate the same artifact and should agree about what it is.
+  printf '#!/usr/bin/env bash\n# %s\nexit 0\n' "$desktop_version" > "$app_path/Contents/MacOS/WorkMax Desktop"
   chmod +x "$app_path/Contents/MacOS/WorkMax Desktop"
   printf 'icnsfake icon bytes\n' > "$app_path/Contents/Resources/icon.icns"
-  # The Wails layout: one binary in MacOS/, the bundled renderer in
-  # Resources/. No app/dist/*.js, no separate sidecar executable — the sidecar
-  # runs inside the same process now.
-  mkdir -p "$app_path/Contents/Resources/renderer/en/desktop"
-  printf '<html></html>\n' > "$app_path/Contents/Resources/renderer/en/desktop/index.html"
+  local renderer_src="$SCRIPT_DIR/../renderer/en/desktop"
+  cp "$renderer_src/index.html" "$renderer_src/styles.css" "$renderer_src/renderer.js" \
+     "$renderer_src/shim.js" "$app_path/Contents/Resources/renderer/en/desktop/"
+  cp "$renderer_src/lib/desktop-bridge.js" "$app_path/Contents/Resources/renderer/en/desktop/lib/"
 }
 
 make_codesign_stub() {
