@@ -815,3 +815,167 @@ func TestEngine_Keyless_Ollama(t *testing.T) {
 	}
 	assertCleanDone(t, frames)
 }
+
+// --- Conversation history --------------------------------------------------
+// The local route used to send only the current prompt: every turn reached a
+// model that had never seen the conversation it was allegedly continuing.
+
+func seedHistoryRow(t *testing.T, db *gorm.DB, threadID uint64, userText, aiText, idemKey string) {
+	t.Helper()
+	if err := db.Exec(
+		`INSERT INTO w_workagent_message (uid, uuid, thread_id, user_text, ai_text, message_idempotency_key)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		engineTestUID, "m-"+idemKey+userText[:min(8, len(userText))], threadID, userText, aiText, idemKey,
+	).Error; err != nil {
+		t.Fatalf("seed history: %v", err)
+	}
+}
+
+// capturedMessages decodes the upstream request body's messages array.
+func capturedMessages(t *testing.T, body string) []map[string]any {
+	t.Helper()
+	var payload struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatalf("upstream body is not JSON: %v (%s)", err, body)
+	}
+	return payload.Messages
+}
+
+func TestEngine_SendsConversationHistoryInOrder(t *testing.T) {
+	var gotBody string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		sseLine(w, "data: [DONE]")
+		sseLine(w, "")
+	}))
+	t.Cleanup(upstream.Close)
+
+	db := openLocalTestDB(t)
+	seedHistoryRow(t, db, 1, "What were Q3 revenues?", "Revenue was 4.2M.", "key-1")
+	seedHistoryRow(t, db, 1, "And the margin?", "Margin was 31%.", "key-2")
+	// An interrupted exchange: answered nothing. Including it would put two
+	// user messages in a row, which the Anthropic protocol rejects.
+	seedHistoryRow(t, db, 1, "This one never got an answer", "", "key-3")
+	// Another thread's conversation must not leak in.
+	seedHistoryRow(t, db, 2, "Unrelated thread", "Unrelated answer", "key-4")
+
+	engine := NewEngine(
+		stubProfile{protocol: protocolOpenAI, baseURL: upstream.URL, modelID: engineTestModel},
+		db, nil, nil,
+	)
+	if err := engine.Chat(context.Background(), cloudproxy.ChatRequest{
+		ThreadID: 1, ThreadUUID: "thr_hist", TurnUUID: engineTestTurnUUID,
+		UID: engineTestUID, UserText: "Expand on the margin.", ChatMode: "general",
+	}, &memSSEWriter{}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	messages := capturedMessages(t, gotBody)
+	var texts []string
+	for _, m := range messages {
+		if s, ok := m["content"].(string); ok {
+			texts = append(texts, m["role"].(string)+": "+s)
+		}
+	}
+	want := []string{
+		"user: What were Q3 revenues?",
+		"assistant: Revenue was 4.2M.",
+		"user: And the margin?",
+		"assistant: Margin was 31%.",
+		"user: Expand on the margin.",
+	}
+	if len(texts) != len(want) {
+		t.Fatalf("messages = %v, want %v", texts, want)
+	}
+	for i := range want {
+		if texts[i] != want[i] {
+			t.Errorf("message[%d] = %q, want %q", i, texts[i], want[i])
+		}
+	}
+	if strings.Contains(gotBody, "Unrelated") {
+		t.Error("another thread's conversation leaked into this one")
+	}
+	if strings.Contains(gotBody, "never got an answer") {
+		t.Error("an unanswered exchange must not ride as history")
+	}
+}
+
+// A replay re-runs a turn whose row already exists under the same idempotency
+// key. Sending that row back as history gives the model its own question
+// twice.
+func TestEngine_ReplayExcludesTheCurrentTurnFromHistory(t *testing.T) {
+	var gotBody string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		sseLine(w, "data: [DONE]")
+		sseLine(w, "")
+	}))
+	t.Cleanup(upstream.Close)
+
+	db := openLocalTestDB(t)
+	requestID, err := cloudproxy.DesktopTurnRequestID(engineTestTurnUUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The interrupted attempt's own row, plus one real prior exchange.
+	seedHistoryRow(t, db, 1, "Tell me about Q3", "partial answer that got cut", requestID)
+	seedHistoryRow(t, db, 1, "Earlier question", "Earlier answer", "key-prior")
+
+	engine := NewEngine(
+		stubProfile{protocol: protocolOpenAI, baseURL: upstream.URL, modelID: engineTestModel},
+		db, nil, nil,
+	)
+	if err := engine.Chat(context.Background(), cloudproxy.ChatRequest{
+		ThreadID: 1, ThreadUUID: "thr_replay", TurnUUID: engineTestTurnUUID,
+		UID: engineTestUID, UserText: "Tell me about Q3", ChatMode: "general",
+	}, &memSSEWriter{}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	if strings.Contains(gotBody, "partial answer that got cut") {
+		t.Error("the replayed turn's own row rode along as history")
+	}
+	if !strings.Contains(gotBody, "Earlier answer") {
+		t.Error("real prior history must still be present on a replay")
+	}
+}
+
+// The budget drops the OLDEST exchanges. Dropping the newest would forget
+// exactly the part of the conversation the user is continuing.
+func TestLoadThreadHistory_BudgetDropsOldestFirst(t *testing.T) {
+	db := openLocalTestDB(t)
+	big := strings.Repeat("x", maxHistoryChars/2)
+	seedHistoryRow(t, db, 1, "oldest question", big, "key-old")
+	seedHistoryRow(t, db, 1, "middle question", big, "key-mid")
+	seedHistoryRow(t, db, 1, "newest question", "newest answer", "key-new")
+
+	history, err := loadThreadHistory(db, engineTestUID, 1, "none")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var joined strings.Builder
+	for _, m := range history {
+		joined.WriteString(m.Text)
+		joined.WriteString("\n")
+	}
+	if !strings.Contains(joined.String(), "newest question") {
+		t.Error("the newest exchange fell off; the budget must trim from the old end")
+	}
+	if strings.Contains(joined.String(), "oldest question") {
+		t.Error("the oldest exchange survived a budget that cannot hold all three")
+	}
+	if len(history)%2 != 0 {
+		t.Errorf("history must be whole pairs, got %d messages", len(history))
+	}
+	if len(history) > 0 && history[0].Role != "user" {
+		t.Errorf("history must open with a user message, got %q", history[0].Role)
+	}
+}

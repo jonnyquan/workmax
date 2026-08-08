@@ -18,10 +18,17 @@ func (openaiAdapter) endpoint(baseURL string) string {
 	return strings.TrimRight(baseURL, "/") + "/chat/completions"
 }
 
-func (openaiAdapter) requestBody(modelID, userText string, atts []Attachment) (io.Reader, error) {
+func (openaiAdapter) requestBody(modelID string, history []Message, userText string, atts []Attachment) (io.Reader, error) {
+	// Prior exchanges ride as plain text — attachments and retrieval context
+	// belong to the turn that carried them, not to every turn after it.
+	messages := make([]map[string]any, 0, len(history)+1)
+	for _, m := range history {
+		messages = append(messages, map[string]any{"role": m.Role, "content": m.Text})
+	}
+	messages = append(messages, map[string]any{"role": "user", "content": openaiContent(userText, atts)})
 	body := map[string]any{
 		"model":    modelID,
-		"messages": []map[string]any{{"role": "user", "content": openaiContent(userText, atts)}},
+		"messages": messages,
 		"stream":   true,
 	}
 	raw, err := json.Marshal(body)

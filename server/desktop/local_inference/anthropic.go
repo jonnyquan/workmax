@@ -21,10 +21,18 @@ func (anthropicAdapter) endpoint(baseURL string) string {
 	return strings.TrimRight(baseURL, "/") + "/messages"
 }
 
-func (anthropicAdapter) requestBody(modelID, userText string, atts []Attachment) (io.Reader, error) {
+func (anthropicAdapter) requestBody(modelID string, history []Message, userText string, atts []Attachment) (io.Reader, error) {
+	// History arrives as strictly alternating user/assistant pairs (the
+	// loader only emits completed exchanges), which is what this wire
+	// protocol requires — two user messages in a row are a 400.
+	messages := make([]map[string]any, 0, len(history)+1)
+	for _, m := range history {
+		messages = append(messages, map[string]any{"role": m.Role, "content": m.Text})
+	}
+	messages = append(messages, map[string]any{"role": "user", "content": anthropicContent(userText, atts)})
 	body := map[string]any{
 		"model":      modelID,
-		"messages":   []map[string]any{{"role": "user", "content": anthropicContent(userText, atts)}},
+		"messages":   messages,
 		"max_tokens": 4096,
 		"stream":     true,
 	}

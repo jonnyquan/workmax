@@ -76,11 +76,32 @@ type RetrievedSource struct {
 	Score float64
 }
 
+// Message is one prior utterance handed to the upstream model as context.
+// Role is "user" or "assistant" — the two roles both wire protocols share.
+type Message struct {
+	Role string
+	Text string
+}
+
+// History limits. A conversation is context, not a transcript obligation: the
+// newest exchanges matter most, so the budget walks backwards from the most
+// recent completed pair and stops when either cap is hit.
+//
+// 24k chars is roughly 6-8k tokens — deliberately conservative, because the
+// local route serves models whose context windows the sidecar cannot know
+// (an Ollama 3B and a hosted frontier model configure identically). Overshoot
+// truncates silently upstream, which corrupts answers in ways nobody can see;
+// undershoot merely forgets older turns, which the user can at least notice.
+const (
+	maxHistoryPairs = 20
+	maxHistoryChars = 24_000
+)
+
 // protocolAdapter 封装 OpenAI / Anthropic 兼容 endpoint 的线路差异：
 // endpoint 路径、请求体、鉴权头、以及如何从一帧 SSE 提取文本/识别终端。
 type protocolAdapter interface {
 	endpoint(baseURL string) string
-	requestBody(modelID, userText string, atts []Attachment) (io.Reader, error)
+	requestBody(modelID string, history []Message, userText string, atts []Attachment) (io.Reader, error)
 	setAuth(req *http.Request, apiKey string)
 	// extractText 解析一帧 SSE（已组装好的 event + data），返回文本片段与
 	// 是否终端帧。文本为空且 terminal=false 表示该帧为元数据，可跳过。
@@ -209,7 +230,17 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 			emitRetrievalEvent(dst, used)
 		}
 	}
-	body, berr := adapter.requestBody(modelID, userText, atts)
+	// Without this the local route was stateless: every turn sent only the
+	// current prompt, so "expand on the second point" reached a model that had
+	// never seen any points. Failure degrades to an empty history — a turn
+	// that forgets is better than a turn that errors.
+	history, herr := loadThreadHistory(e.db, req.UID, req.ThreadID, requestID)
+	if herr != nil {
+		log.Printf("local inference: history for thread %d: %v", req.ThreadID, herr)
+		history = nil
+	}
+
+	body, berr := adapter.requestBody(modelID, history, userText, atts)
 	if berr != nil {
 		_ = dst.WriteProxyError(cloudproxy.ProxyError{Kind: cloudproxy.KindBadRequest, Message: "本地推理请求构造失败"})
 		return berr
@@ -361,6 +392,75 @@ func truncateRunes(s string, max int) string {
 		return s
 	}
 	return string(runes[:max]) + "…"
+}
+
+// loadThreadHistory returns the thread's prior completed exchanges as
+// alternating user/assistant messages, oldest first, within the history caps.
+//
+// Only rows where both halves exist are used. An interrupted answer would put
+// two user messages in a row, which the Anthropic wire protocol rejects
+// outright — and a question whose answer never arrived is context of dubious
+// value on any protocol. The current turn's own row is excluded by its
+// idempotency key: on a replay it already exists, and a model that receives
+// the question twice tends to answer it twice.
+func loadThreadHistory(db *gorm.DB, uid uint64, threadID uint64, excludeRequestID string) ([]Message, error) {
+	if db == nil || threadID == 0 {
+		return nil, nil
+	}
+	rows, err := db.Raw(
+		`SELECT COALESCE(user_text,''), COALESCE(ai_text,'')
+		   FROM w_workagent_message
+		  WHERE uid = ? AND thread_id = ?
+		    AND COALESCE(message_idempotency_key,'') <> ?
+		  ORDER BY id DESC
+		  LIMIT ?`,
+		uid, threadID, excludeRequestID, maxHistoryPairs,
+	).Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type pair struct{ user, assistant string }
+	newestFirst := make([]pair, 0, maxHistoryPairs)
+	for rows.Next() {
+		var p pair
+		if err := rows.Scan(&p.user, &p.assistant); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(p.user) == "" || strings.TrimSpace(p.assistant) == "" {
+			continue
+		}
+		newestFirst = append(newestFirst, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Budget from the newest backwards: when the conversation outgrows the
+	// cap, it is the oldest exchanges that fall off.
+	used := 0
+	kept := make([]pair, 0, len(newestFirst))
+	for _, p := range newestFirst {
+		cost := len(p.user) + len(p.assistant)
+		if used+cost > maxHistoryChars {
+			// Whole pairs only. Even when the very first pair is over budget
+			// on its own, dropping it beats shipping a truncated half-answer
+			// as if it were what was said.
+			break
+		}
+		used += cost
+		kept = append(kept, p)
+	}
+
+	out := make([]Message, 0, len(kept)*2)
+	for i := len(kept) - 1; i >= 0; i-- {
+		out = append(out,
+			Message{Role: "user", Text: kept[i].user},
+			Message{Role: "assistant", Text: kept[i].assistant},
+		)
+	}
+	return out, nil
 }
 
 // pipeLocalSSE 读取上游 SSE 流，按 adapter 解析每帧，归一化成 workmax
