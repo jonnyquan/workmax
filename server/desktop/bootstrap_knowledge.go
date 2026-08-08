@@ -68,6 +68,9 @@ func resolveKnowledge(deps KnowledgeDeps) KnowledgeWiring {
 		log.Printf("knowledge: RAG disabled (%v)", err)
 		return KnowledgeWiring{}
 	}
-	log.Printf("knowledge: local RAG enabled (%d-dim embeddings)", wiring.Dim)
+	// "available", not "loaded": the model is read on first use, so saying it
+	// is enabled here would misreport both the memory in use and when the
+	// startup cost is actually paid.
+	log.Printf("knowledge: local RAG available (%d-dim embeddings, loaded on first use)", wiring.Dim)
 	return wiring
 }

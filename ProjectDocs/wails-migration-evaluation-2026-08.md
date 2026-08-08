@@ -167,6 +167,29 @@
 
 **倾向 (c)**：能力路径落地后，它的安全性质与绑定等价甚至更好（凭据只经过我们自己的进程内调用），而且少一个对 beta 框架内部的依赖。W2 开工时定。
 
+### 0.5.21 RAG on/off 基准，以及它抓出的两个缺陷（2026-08-08）
+
+§14 要求性能基准**分 RAG on/off 两组**（"否则 ONNX 的体积/内存会污染 shell 瘦身的归因"）。补测之后，这条要求兑现了它的价值——两组数字直接推翻了 §5 的 RAG 说法，并牵出两个缺陷。
+
+**测量（`--serve-only`，仅 sidecar）**：
+
+| | 就绪 | 稳态 RSS |
+|---|---|---|
+| RAG off | ~48 ms | **32 MB** |
+| RAG on（改前） | 136–251 ms | **255 MB** |
+
+§5 写的 RAG 增量是"**+数十 MB**"，实测 **+223 MB**——差一个数量级。而且这是**刚启动、一次检索都没做**的地板值：ONNX Runtime 环境加模型会话本身就这么大。
+
+**缺陷一：急切加载**。embedder 原本在 `Bootstrap` 里直接构造，所以只要用户下载过资源，**哪怕从不使用知识库，每次启动都付这 223 MB**。改为懒加载（`lazyKnowledge`，首次调用时构造）后，资源在场但未使用的成本回到 **32 MB / 48 ms——与 RAG-off 完全相同**。资源是否存在决定检索**可用**，第一次真实调用决定它何时**加载**。
+
+**缺陷二：关闭竞态（真实崩溃，非懒加载引入）**。本地推理引擎在**后台 goroutine** 里索引已完成的 turn（`indexCompletedTurn`），而 `Boot.Shutdown` 同时销毁 ONNX 环境——`session.Run()` 打在已销毁的环境上，**SIGSEGV**。用户侧就是"回答刚出来就关窗 → 退出崩溃"。
+
+这个组合（RAG 在场 + 完成一次 turn + 立即关闭）此前从没被跑过：带资源时只跑过 `--serve-only`（无 turn），跑 kill-check 时又没带资源。**是补这组基准把它逼出来的。**
+
+修法是给 `lazyKnowledge` 记在途调用数，`Close` 先停止接单、再等待、最后才销毁；等待超时则**故意不销毁**——进程马上要退出了，泄漏几毫秒远好于把运行中的原生代码抽掉。复现场景连跑 3 次，退出码全 0、无崩溃迹象。
+
+> 值得记下的模式：这两个缺陷都不是"功能不工作"。一个是**每次启动多付 223 MB 而没人察觉**，一个是**只在特定关闭时序下崩溃**。它们都只能被"照着要求把基准补齐"抓到——而那条要求当时看起来只是个记数字的杂活。
+
 ### 0.5.20 首个打包产物与性能实测（2026-08-08）
 
 `build-mac.sh` 按 Wails 布局重写（手工组装，无打包框架——这个布局没有需要框架去拦的东西），**每次构建强制过 `inspect-mac-package.sh`**。产出的 arm64 `.app` 端到端可用：`--serve-only` 从 bundle 内起、`/health` 200、SIGTERM 退出码 0，`--verify-shim` 加载 **bundle 内**的 renderer 通过（8 帧/4151 字节）。
@@ -853,7 +876,8 @@ Wails **无 preload 世界**，故 `desktop/electron/src/preload.ts`（`AgentSSE
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | rev.1 | 2026-08-08 | 首版评估 + Part B 落地方案；D1/D4/入口结构三项决策落定（v3 / A2 / 单入口双模式） |
-| **rev.15** | **2026-08-08** | **首个打包产物 + 性能实测。** 新增 §0.5.20：`build-mac.sh` 按 Wails 布局重写并强制过检查器，arm64 `.app` 端到端可用。修复 `resolveResourcesDir()` 与下载目的地错位（打包后才显形）。实测替换 §5 估算：安装包 22 MB ✅、冷启动 ~48ms/~100ms ✅、**稳态内存 ~109–126 MB（§5 估的 40–80 MB 偏低约 50%）** ❌。记录一个流程错误：同机对照基线未在删除 Electron 前采集，比值暂无可引用实测 |
+| **rev.16** | **2026-08-08** | **补齐 RAG on/off 基准，抓出两个缺陷。** 新增 §0.5.21：实测 RAG 增量 **+223 MB**（§5 写的是"+数十 MB"，差一个数量级）。① embedder 改为**懒加载**，资源在场但未使用的成本回到 32 MB/48 ms，与 RAG-off 相同；② 修复**关闭竞态**——后台索引 goroutine 与 ONNX 环境销毁并发导致 SIGSEGV（"回答刚出来就关窗即崩溃"），`Close` 改为停单→等待→销毁，超时则不销毁。另验证 `smoke-local.sh` 核心集对新二进制通过（含 `--check-pid-lock`），两个可选检查依赖云端会话 |
+| rev.15 | 2026-08-08 | **首个打包产物 + 性能实测。** 新增 §0.5.20：`build-mac.sh` 按 Wails 布局重写并强制过检查器，arm64 `.app` 端到端可用。修复 `resolveResourcesDir()` 与下载目的地错位（打包后才显形）。实测替换 §5 估算：安装包 22 MB ✅、冷启动 ~48ms/~100ms ✅、**稳态内存 ~109–126 MB（§5 估的 40–80 MB 偏低约 50%）** ❌。记录一个流程错误：同机对照基线未在删除 Electron 前采集，比值暂无可引用实测 |
 | rev.14 | 2026-08-08 | **W4 起步。** 新增 §0.5.19：entitlements 从 4 条减到 1 条（去掉 V8/dyld 三条，`disable-library-validation` 待 RAG 里程碑再加，缺席理由写进 plist）；`inspect-mac-package.sh` 按 Wails 布局重写并配 16 项负向测试，补上 `notarize-mac.sh` 的失败关闭，两者已接回 CI。修掉自己写的一条静默失效检查（`grep -E` 不支持负向先行断言 + stderr 被丢），并把两处重叠检查收敛到一处 |
 | rev.13 | 2026-08-08 | **W2 安全收尾。** 新增 §0.5.18：CSP 去掉 `'unsafe-inline'`（出货 renderer 实测不需要，harness 的 `<style>` 一并外置）、DevTools 改为仅 env 显式开启且应用内无法开启、单实例两层实测。契约增至 12 条保证（新增 `devtools-off-by-default`，`containment-headers` 加缺席断言），`uiserver_test.go` 独立复核 |
 | rev.12 | 2026-08-08 | **文档与许可审计链收口。** `desktop/README.md` 逐节重写；顶层 README / RELEASING / THIRD_PARTY_NOTICES 同步；`license-audit.sh` 改指 renderer 的构建期 npm 树，并新增 `desktop/wails` 模块的 go-licenses 审计（此前无任何一遍覆盖真正出货的那个模块）。`make bootstrap` / `make test-shell` / `make build-desktop` 取代原 Electron 目标 |

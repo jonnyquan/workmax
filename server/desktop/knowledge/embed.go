@@ -23,9 +23,9 @@ import (
 	"path/filepath"
 	"runtime"
 
-	ort "github.com/yalue/onnxruntime_go"
 	"github.com/sugarme/tokenizer"
 	"github.com/sugarme/tokenizer/pretrained"
+	ort "github.com/yalue/onnxruntime_go"
 )
 
 // EmbeddingDim is the dimensionality of the all-MiniLM-L6-v2 sentence

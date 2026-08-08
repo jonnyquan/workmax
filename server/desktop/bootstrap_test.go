@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // newTrimmedBoot builds the minimum Boot that Shutdown can operate on. The
@@ -83,5 +84,39 @@ func TestCancelClosesDone(t *testing.T) {
 	case <-b.Done():
 	default:
 		t.Fatal("Done should close once Cancel has run")
+	}
+}
+
+// The knowledge stack is torn down on a path the caller does not control:
+// background indexing runs after a turn is answered, and shutdown can arrive
+// while it is inside native code. These pin the two rules that keep that from
+// crashing the process on exit — see lazyKnowledge in bootstrap_cgo.go.
+func TestShutdownWaitsForCloseBeforeReturning(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	release := make(chan struct{})
+	closed := make(chan struct{})
+	b := &Boot{ctx: ctx, cancel: cancel, closeEmbedder: func() error {
+		<-release // stand in for draining an in-flight native call
+		close(closed)
+		return nil
+	}}
+
+	done := make(chan error, 1)
+	go func() { done <- b.Shutdown(context.Background()) }()
+
+	select {
+	case <-done:
+		t.Fatal("Shutdown returned before the embedder finished closing; a caller that exits on this would tear down native code mid-call")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	select {
+	case <-closed:
+	default:
+		t.Fatal("the embedder close never ran")
 	}
 }
