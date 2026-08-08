@@ -71,12 +71,21 @@ const PROXY_ERROR_KINDS = new Set([
 ]);
 const AGENT_EVENT_TYPES = new Set([
   "text_delta",
+  "retrieval",
   "unknown",
   "done",
   "proxy_error",
   "canceled",
   "protocol_error",
 ]);
+// Bounds for the retrieval provenance list. The shim already applies its own;
+// these are not a duplicate of that check but the same check at the other end
+// of the bridge, which is the boundary this file is responsible for. The
+// renderer trusts no bridge — that is why parseAgentTurnEvent exists at all.
+const MAX_RETRIEVED_SOURCES = 12;
+const MAX_RETRIEVED_LABEL_CHARS = 120;
+const MAX_RETRIEVED_SNIPPET_CHARS = 400;
+const RETRIEVED_SOURCE_KINDS = new Set(["file", "conversation"]);
 const MAX_CHAT_TEXT_BYTES = 65_536;
 const MAX_THREAD_NAME_BYTES = 200;
 const MAX_EVENT_TEXT_BYTES = 262_144;
@@ -653,6 +662,26 @@ function parseSafeDoneResult(value) {
   };
 }
 
+function parseSafeRetrievedSource(value) {
+  if (
+    !hasExactKeys(value, ["kind", "label", "snippet", "score"]) ||
+    !RETRIEVED_SOURCE_KINDS.has(value.kind) ||
+    !isSafeProtocolString(value.label, MAX_RETRIEVED_LABEL_CHARS) ||
+    typeof value.snippet !== "string" ||
+    !hasWellFormedUTF16(value.snippet) ||
+    value.snippet.length > MAX_RETRIEVED_SNIPPET_CHARS ||
+    !(value.score === null || (typeof value.score === "number" && value.score >= 0 && value.score <= 1))
+  ) {
+    throw new Error("Malformed agent turn event");
+  }
+  return {
+    kind: value.kind,
+    label: value.label,
+    snippet: value.snippet,
+    score: value.score,
+  };
+}
+
 function parseAgentTurnEvent(value) {
   if (
     !isRecord(value) ||
@@ -673,6 +702,19 @@ function parseAgentTurnEvent(value) {
         throw new Error("Malformed agent turn event");
       }
       return { type: value.type, turnID: value.turnID, delta: value.delta };
+    case "retrieval":
+      if (
+        !hasExactKeys(value, ["type", "turnID", "sources"]) ||
+        !Array.isArray(value.sources) ||
+        value.sources.length > MAX_RETRIEVED_SOURCES
+      ) {
+        throw new Error("Malformed agent turn event");
+      }
+      return {
+        type: value.type,
+        turnID: value.turnID,
+        sources: value.sources.map(parseSafeRetrievedSource),
+      };
     case "unknown":
       if (
         !hasExactKeys(value, ["type", "turnID", "event"]) ||
@@ -2176,6 +2218,10 @@ function submitChat(event) {
   }
 
   state.turnGeneration += 1;
+  // The previous turn's provenance stops being true the moment a new question
+  // is asked. Cleared here rather than when the next retrieval event arrives,
+  // because a turn that retrieves nothing sends no event at all.
+  contextState.retrieved = [];
   const optimistic = appendOptimisticTurn(userText);
   const activeTurn = {
     turnID: "",
@@ -2579,6 +2625,13 @@ function handleParsedTurnEvent(activeTurn, event) {
       scrollMessagesToEnd();
       return;
     }
+    case "retrieval":
+      // What the local model was given from the knowledge base, announced
+      // before the first token. Recorded against the turn so a stale event
+      // from a superseded turn cannot repaint the panel — isCurrentTurn above
+      // already fenced that, and this keeps the panel's own copy honest.
+      setRetrievedContext(event.sources);
+      return;
     case "unknown":
       // Preload exposes only the bounded event name for unknown events. There
       // is intentionally no upstream payload to stringify or render.
@@ -3308,7 +3361,22 @@ function ctxEl(id) {
   return document.querySelector(`#${id}`);
 }
 
-const contextState = { sources: [], sourcesThreadUUID: null };
+const contextState = { sources: [], sourcesThreadUUID: null, retrieved: [] };
+
+// Retrieval provenance is per-turn and lives only in memory: the sidecar
+// announces it on the stream and does not persist it, so there is nothing to
+// read back. Clearing on every new turn is therefore not tidiness — leaving
+// the previous turn's list up would attribute this answer to sources it never
+// saw, which is worse than showing nothing.
+function setRetrievedContext(sources) {
+  contextState.retrieved = Array.isArray(sources) ? sources : [];
+  renderTaskContext();
+}
+
+function formatRetrievalScore(score) {
+  if (typeof score !== "number" || !Number.isFinite(score)) return "";
+  return `${Math.round(score * 100)}% match`;
+}
 
 function formatFileSize(bytes) {
   if (!Number.isFinite(bytes) || bytes < 0) return "";
@@ -3439,9 +3507,45 @@ function renderSources() {
   if (ctxEl("context-count")) ctxEl("context-count").textContent = String(items.length);
 }
 
+// What the answer was actually grounded in. Until this existed the retrieval
+// step was invisible: the model answered from indexed documents and the user
+// had no way to tell that from the model inventing it.
+function renderRetrieved() {
+  if (!ctxEl("retrieved-list")) return;
+  const items = contextState.retrieved;
+  ctxEl("retrieved-list").innerHTML = "";
+  for (const source of items) {
+    const item = document.createElement("li");
+    item.className = `context-item is-${source.kind}`;
+
+    const name = document.createElement("span");
+    name.className = "context-item-name";
+    name.textContent = source.label;
+
+    const meta = document.createElement("span");
+    meta.className = "context-item-meta";
+    meta.textContent = formatRetrievalScore(source.score);
+
+    item.append(name, meta);
+
+    // The passage itself, not a summary of it — a summary would be a second
+    // thing that could be wrong about the thing being checked.
+    if (source.snippet) {
+      const snippet = document.createElement("p");
+      snippet.className = "context-item-snippet";
+      snippet.textContent = source.snippet;
+      item.appendChild(snippet);
+    }
+    ctxEl("retrieved-list").appendChild(item);
+  }
+  if (ctxEl("retrieved-empty")) ctxEl("retrieved-empty").hidden = items.length > 0;
+  if (ctxEl("retrieved-meta")) ctxEl("retrieved-meta").textContent = String(items.length);
+}
+
 function renderTaskContext() {
   renderRunOverview();
   renderSources();
+  renderRetrieved();
 }
 
 // Reads the attachments the sidecar has for this thread. Uploads persisted
@@ -3450,6 +3554,10 @@ function renderTaskContext() {
 async function loadThreadSources(threadUUID) {
   contextState.sourcesThreadUUID = threadUUID;
   contextState.sources = [];
+  // Provenance belongs to a turn, and the turn belongs to a thread. Carrying
+  // it across a switch would credit this thread's answer to another one's
+  // documents.
+  contextState.retrieved = [];
   renderTaskContext();
   if (!threadUUID) return;
 

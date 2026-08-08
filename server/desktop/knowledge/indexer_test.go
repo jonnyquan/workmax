@@ -5,6 +5,7 @@ package knowledge
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -44,6 +45,60 @@ func (fakeVectorizer) EmbedBatch(_ context.Context, texts []string) ([][]float32
 		out[i] = basis(i % EmbeddingDim)
 	}
 	return out, nil
+}
+
+// indexerTestUID is the local user these tests index and retrieve as.
+const indexerTestUID uint64 = 42
+
+// Retrieval labels are what the user sees in place of "the model said so".
+// This runs on the fake vectorizer, so unlike the real-embedder test below it
+// executes everywhere, including CI without the native model.
+func TestIndexer_RetrieveLabelsFilesAndScopesNamesToTheOwner(t *testing.T) {
+	db := openIndexerTestDB(t)
+	fileStore := localrender.NewStore(db, t.TempDir())
+	kstore, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	idx := NewIndexer(fileStore, fakeVectorizer{}, kstore)
+	ctx := context.Background()
+
+	mine, err := fileStore.SaveThreadFile(indexerTestUID, 7, "thr-1", "q3-plan.txt", strings.NewReader("revenue grew twelve percent"))
+	if err != nil {
+		t.Fatalf("SaveThreadFile: %v", err)
+	}
+	if err := idx.IndexFile(ctx, indexerTestUID, mine.FileID); err != nil {
+		t.Fatalf("IndexFile: %v", err)
+	}
+
+	hits, err := idx.Retrieve(ctx, indexerTestUID, "revenue", 5)
+	if err != nil {
+		t.Fatalf("Retrieve: %v", err)
+	}
+	if len(hits) == 0 {
+		t.Fatal("no hits")
+	}
+	if hits[0].Kind != "file" {
+		t.Errorf("kind = %q, want file", hits[0].Kind)
+	}
+	if hits[0].Label != "q3-plan.txt" {
+		t.Errorf("label = %q, want the name the user uploaded", hits[0].Label)
+	}
+
+	// The same chunks, retrieved as the other local identity. The chunk store
+	// has no uid column so the text is still found — but the name belongs to a
+	// row this uid does not own, and showing it would attribute the passage to
+	// a file this session cannot open.
+	other, err := idx.Retrieve(ctx, indexerTestUID+1, "revenue", 5)
+	if err != nil {
+		t.Fatalf("Retrieve as other uid: %v", err)
+	}
+	if len(other) == 0 {
+		t.Fatal("no hits for the other uid")
+	}
+	if other[0].Label != "Indexed file" {
+		t.Errorf("label = %q, want the generic label when the file row is not this uid's", other[0].Label)
+	}
 }
 
 func TestIndexer_IndexFileAndRemove(t *testing.T) {
@@ -328,15 +383,50 @@ func TestIndexer_Retrieve_RealEmbedder(t *testing.T) {
 		t.Fatalf("index python: %v", err)
 	}
 
-	chunks, err := idx.Retrieve(ctx, "how many hours do cats sleep each day?", 2)
+	chunks, err := idx.Retrieve(ctx, indexerTestUID, "how many hours do cats sleep each day?", 2)
 	if err != nil {
 		t.Fatalf("Retrieve: %v", err)
 	}
 	if len(chunks) == 0 {
 		t.Fatal("no chunks retrieved")
 	}
-	t.Logf("retrieved top: %q", chunks[0])
-	if !strings.Contains(strings.ToLower(chunks[0]), "cat") {
-		t.Errorf("top retrieved chunk not about cats: %q", chunks[0])
+	t.Logf("retrieved top: %q (%s, score %.3f)", chunks[0].Text, chunks[0].Label, chunks[0].Score)
+	if !strings.Contains(strings.ToLower(chunks[0].Text), "cat") {
+		t.Errorf("top retrieved chunk not about cats: %q", chunks[0].Text)
+	}
+	// Provenance is the point of the return type: a hit the caller cannot
+	// attribute is a hit the user cannot check.
+	if chunks[0].Kind != "conversation" {
+		t.Errorf("kind = %q, want conversation for an indexed turn", chunks[0].Kind)
+	}
+	if chunks[0].Score <= 0 || chunks[0].Score > 1 {
+		t.Errorf("score = %v, want a similarity in (0,1]", chunks[0].Score)
+	}
+	if len(chunks) > 1 && chunks[1].Score > chunks[0].Score {
+		t.Errorf("scores not ordered best-first: %v then %v", chunks[0].Score, chunks[1].Score)
+	}
+}
+
+// The store returns L2 distance; the UI shows similarity. Getting the
+// conversion backwards would rank every source upside down while still
+// looking plausible.
+func TestSimilarityFromDistance(t *testing.T) {
+	cases := []struct {
+		name     string
+		distance float64
+		want     float64
+	}{
+		{"identical vectors", 0, 1},
+		{"orthogonal", math.Sqrt2, 0},
+		{"opposite", 2, 0}, // -1 cosine, clamped
+	}
+	for _, c := range cases {
+		if got := similarityFromDistance(c.distance); math.Abs(got-c.want) > 1e-9 {
+			t.Errorf("%s: similarityFromDistance(%v) = %v, want %v", c.name, c.distance, got, c.want)
+		}
+	}
+	near, far := similarityFromDistance(0.4), similarityFromDistance(1.2)
+	if near <= far {
+		t.Errorf("a closer hit scored %v, no better than a distant one at %v", near, far)
 	}
 }

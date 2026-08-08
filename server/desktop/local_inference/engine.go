@@ -44,13 +44,36 @@ type ProfileReader interface {
 
 // KnowledgeHooks bundles the L3c RAG capabilities the local Engine consumes:
 // indexing a completed turn for cross-thread long-term memory (L3c-4), and
-// retrieving relevant context to inject at the start of a turn (L3c-5). It is
-// satisfied structurally by *knowledge.Indexer; defined here as an interface so
-// this package does not depend on the cgo knowledge package. Nil on the Engine
-// → no RAG (turns are not indexed, no context is injected).
+// retrieving relevant context to inject at the start of a turn (L3c-5).
+// Defined here as an interface so this package does not depend on the cgo
+// knowledge package; the adapter that satisfies it lives at the wiring site.
+// Nil on the Engine → no RAG (turns are not indexed, no context is injected).
 type KnowledgeHooks interface {
 	IndexTurn(ctx context.Context, turnUUID, userText, assistantText string) error
-	Retrieve(ctx context.Context, query string, topK int) ([]string, error)
+	Retrieve(ctx context.Context, uid uint64, query string, topK int) ([]RetrievedSource, error)
+}
+
+// RetrievedSource is one piece of stored knowledge selected for a turn.
+//
+// Retrieve used to return bare strings, which was enough to inject but not
+// enough to tell anyone what had happened: the model silently answered from
+// documents the user could not see, could not check, and could not tell apart
+// from the model making something up. Carrying provenance is what turns that
+// into a claim the user can audit.
+type RetrievedSource struct {
+	// Kind is "file" for an uploaded attachment and "conversation" for an
+	// earlier indexed turn.
+	Kind string
+	// Label names it the way the user would: the file name they uploaded, or
+	// a description of the conversation it came from.
+	Label string
+	// Text is the chunk verbatim — what is handed to the model, and what the
+	// snippet shown to the user is cut from. Not a summary: a summary would be
+	// a second thing that could be wrong.
+	Text string
+	// Score is 0..1, higher = closer. Derived from the store's L2 distance
+	// over normalized embeddings, so it is cosine similarity.
+	Score float64
 }
 
 // protocolAdapter 封装 OpenAI / Anthropic 兼容 endpoint 的线路差异：
@@ -174,11 +197,16 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	// 4. 构造请求。L3c-5：若启用 RAG，先检索相关 chunk 注入到 user text 前。
 	userText := req.UserText
 	if e.hooks != nil {
-		if chunks, rerr := e.hooks.Retrieve(ctx, req.UserText, retrievalTopK); rerr != nil {
+		if found, rerr := e.hooks.Retrieve(ctx, req.UID, req.UserText, retrievalTopK); rerr != nil {
 			// 检索失败不阻断 turn，仅记日志、不带 context 继续。
 			log.Printf("knowledge: retrieve for turn %s: %v", req.TurnUUID, rerr)
-		} else if len(chunks) > 0 {
-			userText = prependKnowledgeContext(req.UserText, chunks)
+		} else if len(found) > 0 {
+			var used []RetrievedSource
+			userText, used = prependKnowledgeContext(req.UserText, found)
+			// Announced before the first token, and built from `used` rather
+			// than `found`: the char budget below drops the tail, and a panel
+			// listing sources the model never saw would be a confident lie.
+			emitRetrievalEvent(dst, used)
 		}
 	}
 	body, berr := adapter.requestBody(modelID, userText, atts)
@@ -245,28 +273,94 @@ const (
 	knowledgeContextPreamble = "以下是知识库中可能相关的内容，回答时可参考：\n"
 )
 
-// prependKnowledgeContext packs retrieved chunks (best first) under a char
-// budget and prepends them to the user text as model context.
-func prependKnowledgeContext(userText string, chunks []string) string {
+// prependKnowledgeContext packs retrieved sources (best first) under a char
+// budget and prepends them to the user text as model context. It returns the
+// sources that actually made it in, so the caller can report exactly what the
+// model was given rather than what the search returned.
+func prependKnowledgeContext(userText string, sources []RetrievedSource) (string, []RetrievedSource) {
 	var b strings.Builder
 	b.WriteString(knowledgeContextPreamble)
 	used := 0
-	for _, c := range chunks {
-		c = strings.TrimSpace(c)
-		if c == "" {
+	injected := make([]RetrievedSource, 0, len(sources))
+	for _, s := range sources {
+		text := strings.TrimSpace(s.Text)
+		if text == "" {
 			continue
 		}
-		if used+len(c) > maxRetrievalContextChars {
+		if used+len(text) > maxRetrievalContextChars {
 			break
 		}
 		b.WriteString("- ")
-		b.WriteString(c)
+		b.WriteString(text)
 		b.WriteByte('\n')
-		used += len(c) + 2
+		used += len(text) + 2
+		s.Text = text
+		injected = append(injected, s)
 	}
 	b.WriteString("\n")
 	b.WriteString(strings.TrimSpace(userText))
-	return b.String()
+	if len(injected) == 0 {
+		// Every candidate was blank or over budget: no context was added, so
+		// hand back the untouched prompt rather than a preamble introducing
+		// an empty list.
+		return userText, nil
+	}
+	return b.String(), injected
+}
+
+// retrievalSnippetChars bounds what travels to the renderer per source. The
+// full chunk is what the model reads; the user needs enough to recognise the
+// passage, not the whole document echoed down an SSE frame.
+const retrievalSnippetChars = 240
+
+// emitRetrievalEvent tells the renderer what grounded the answer, before the
+// answer starts arriving.
+//
+// It is a non-terminal event on the same stream the text arrives on, so it
+// cannot race the turn it describes. A renderer that does not know the event
+// name surfaces it as "unknown" and carries on — the shim's unknown-event path
+// exists for exactly this kind of addition.
+func emitRetrievalEvent(dst cloudproxy.SSEWriter, sources []RetrievedSource) {
+	if len(sources) == 0 {
+		return
+	}
+	type wireSource struct {
+		Kind    string  `json:"kind"`
+		Label   string  `json:"label"`
+		Snippet string  `json:"snippet"`
+		Score   float64 `json:"score"`
+	}
+	wire := make([]wireSource, 0, len(sources))
+	for _, s := range sources {
+		wire = append(wire, wireSource{
+			Kind:    s.Kind,
+			Label:   s.Label,
+			Snippet: truncateRunes(s.Text, retrievalSnippetChars),
+			Score:   s.Score,
+		})
+	}
+	payload, err := json.Marshal(map[string]any{"sources": wire})
+	if err != nil {
+		log.Printf("knowledge: marshal retrieval event: %v", err)
+		return
+	}
+	if werr := dst.WriteEvent(cloudproxy.SSEEvent{Type: "retrieval", Data: string(payload)}); werr != nil {
+		// The renderer is gone or the socket is dead. The turn's own writes
+		// will fail the same way and report it; this one is not worth failing
+		// a turn that can still be persisted to the local cache.
+		log.Printf("knowledge: write retrieval event: %v", werr)
+	}
+}
+
+// truncateRunes cuts on a rune boundary. Cutting on bytes would split a
+// multi-byte character and produce invalid UTF-8, which the renderer's SSE
+// decoder is (correctly) fatal about.
+func truncateRunes(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "…"
 }
 
 // pipeLocalSSE 读取上游 SSE 流，按 adapter 解析每帧，归一化成 workmax

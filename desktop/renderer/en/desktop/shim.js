@@ -318,6 +318,36 @@ function parseAgentJSON(raw) {
   }
 }
 
+// Bounds on the provenance list. The sidecar is on the same machine and is
+// trusted to be correct, not trusted to stay within limits forever: these keep
+// a future top-k change from rendering an unbounded list into the panel.
+const MAX_RETRIEVAL_SOURCES = 12;
+const MAX_RETRIEVAL_LABEL_CHARS = 120;
+const MAX_RETRIEVAL_SNIPPET_CHARS = 400;
+
+// parseRetrievalSources returns a normalized list, or null if the payload is
+// not the shape this renderer understands. Every field is re-derived rather
+// than passed through, so nothing reaches the DOM that was not checked here.
+function parseRetrievalSources(raw) {
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  for (const entry of raw.slice(0, MAX_RETRIEVAL_SOURCES)) {
+    if (!isRecord(entry)) return null;
+    if (typeof entry.label !== "string" || entry.label === "") return null;
+    if (entry.kind !== "file" && entry.kind !== "conversation") return null;
+    const score = typeof entry.score === "number" && Number.isFinite(entry.score)
+      ? Math.min(1, Math.max(0, entry.score))
+      : null;
+    out.push({
+      kind: entry.kind,
+      label: entry.label.slice(0, MAX_RETRIEVAL_LABEL_CHARS),
+      snippet: typeof entry.snippet === "string" ? entry.snippet.slice(0, MAX_RETRIEVAL_SNIPPET_CHARS) : "",
+      score,
+    });
+  }
+  return out;
+}
+
 function dispatchAgentSSEFrame(active, eventName, rawData) {
   if (active.terminal) return;
 
@@ -328,6 +358,18 @@ function dispatchAgentSSEFrame(active, eventName, rawData) {
       return;
     }
     emit(active, { type: "text_delta", turnID: active.turnID, delta: parsed.value.delta });
+    return;
+  }
+  if (eventName === "retrieval") {
+    const parsed = parseAgentJSON(rawData);
+    const sources = parsed.ok && isRecord(parsed.value) ? parseRetrievalSources(parsed.value.sources) : null;
+    if (!sources) {
+      // Non-terminal and purely informational: a malformed payload costs the
+      // user the provenance list, not the answer. Failing the turn over it
+      // would trade a working reply for a cosmetic guarantee.
+      return;
+    }
+    emit(active, { type: "retrieval", turnID: active.turnID, sources });
     return;
   }
   if (eventName === "done") {

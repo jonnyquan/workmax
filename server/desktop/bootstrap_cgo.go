@@ -11,6 +11,7 @@ import (
 	"time"
 
 	knowledge "server/desktop/knowledge"
+	localinference "server/desktop/local_inference"
 )
 
 // This file is the only place the non-cgo desktop package touches the cgo
@@ -155,7 +156,12 @@ func (l *lazyKnowledge) IndexTurn(ctx context.Context, turnUUID, userText, assis
 	return l.indexer.IndexTurn(ctx, turnUUID, userText, assistantText)
 }
 
-func (l *lazyKnowledge) Retrieve(ctx context.Context, query string, topK int) ([]string, error) {
+// Retrieve is also the translation point between the two packages' retrieval
+// types. They are deliberately not shared: local_inference must stay free of
+// cgo, so it cannot name knowledge.Retrieved, and knowledge should not import
+// the inference package to borrow a struct. The copy is three fields wide and
+// this is the only file that has to know both.
+func (l *lazyKnowledge) Retrieve(ctx context.Context, uid uint64, query string, topK int) ([]localinference.RetrievedSource, error) {
 	if !l.begin() {
 		return nil, errKnowledgeClosed
 	}
@@ -163,7 +169,20 @@ func (l *lazyKnowledge) Retrieve(ctx context.Context, query string, topK int) ([
 	if err := l.load(); err != nil {
 		return nil, err
 	}
-	return l.indexer.Retrieve(ctx, query, topK)
+	hits, err := l.indexer.Retrieve(ctx, uid, query, topK)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]localinference.RetrievedSource, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, localinference.RetrievedSource{
+			Kind:  h.Kind,
+			Label: h.Label,
+			Text:  h.Text,
+			Score: h.Score,
+		})
+	}
+	return out, nil
 }
 
 // Close stops accepting work, waits for what is already running, and only then

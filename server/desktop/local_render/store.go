@@ -373,3 +373,44 @@ func (s *Store) ListThreadFiles(uid uint64, threadID uint64) ([]ThreadFile, erro
 	}
 	return out, nil
 }
+
+// FileNames maps file ids to the name the user knows them by.
+//
+// Retrieval hands back the ids stored on knowledge chunks; naming them is what
+// lets the answer say which document it drew on. Ids not owned by uid are
+// simply absent from the result — the caller labels those generically, so an
+// id that belongs to another local identity can never surface under a name.
+func (s *Store) FileNames(uid uint64, fileIDs []int64) (map[int64]string, error) {
+	if len(fileIDs) == 0 {
+		return map[int64]string{}, nil
+	}
+	rows, err := s.db.Raw(
+		`SELECT id, file_name, display_name
+		   FROM w_workagent_thread_file
+		  WHERE uid = ? AND id IN ?`,
+		uid, fileIDs,
+	).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("file names: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[int64]string, len(fileIDs))
+	for rows.Next() {
+		var (
+			id                    int64
+			fileName, displayName string
+		)
+		if err := rows.Scan(&id, &fileName, &displayName); err != nil {
+			return nil, fmt.Errorf("scan file name: %w", err)
+		}
+		if displayName != "" {
+			fileName = displayName
+		}
+		out[id] = fileName
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate file names: %w", err)
+	}
+	return out, nil
+}

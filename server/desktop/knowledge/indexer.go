@@ -158,11 +158,28 @@ func (i *Indexer) RemoveTurn(ctx context.Context, turnUUID string) (int, error) 
 	return i.store.DeleteBySource(ctx, SourceTypeMessage, turnSourceID(turnUUID))
 }
 
-// Retrieve returns the text of the topK chunks most relevant to query, best
-// first, for injecting as context into the next turn (L3c-5). Empty query or
-// topK<=0 returns nil. Satisfies the retrieval half of
-// local_inference.KnowledgeHooks.
-func (i *Indexer) Retrieve(ctx context.Context, query string, topK int) ([]string, error) {
+// Retrieved is one retrieval hit with the provenance needed to say where it
+// came from. Label is resolved here rather than by the caller because this is
+// the only layer that knows a source id is a file row id.
+type Retrieved struct {
+	Kind  string // "file" | "conversation"
+	Label string
+	Text  string
+	Score float64 // 0..1, higher = closer
+}
+
+// Retrieve returns the topK chunks most relevant to query, best first, for
+// injecting as context into the next turn (L3c-5). Empty query or topK<=0
+// returns nil.
+//
+// uid scopes only the file-name lookup, not the search. The chunk store has no
+// uid column: it is one index for one machine's single local user. A machine
+// that was used signed-out and then signed in holds chunks under both
+// localSingleUserUID and the cloud uid — the same person's own data either
+// way, which is why they are searched together. It does mean a file whose row
+// belongs to the other identity resolves to no name, so it is labelled
+// generically rather than shown under a name that could be wrong.
+func (i *Indexer) Retrieve(ctx context.Context, uid uint64, query string, topK int) ([]Retrieved, error) {
 	if strings.TrimSpace(query) == "" || topK <= 0 {
 		return nil, nil
 	}
@@ -177,11 +194,71 @@ func (i *Indexer) Retrieve(ctx context.Context, query string, topK int) ([]strin
 	if err != nil {
 		return nil, fmt.Errorf("knowledge: retrieve search: %w", err)
 	}
-	out := make([]string, 0, len(hits))
+
+	names := i.resolveFileNames(uid, hits)
+	out := make([]Retrieved, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, h.Text)
+		r := Retrieved{Text: h.Text, Score: similarityFromDistance(h.Distance)}
+		if h.SourceType == SourceTypeFile {
+			r.Kind = "file"
+			if name, ok := names[h.SourceID]; ok {
+				r.Label = name
+			} else {
+				r.Label = "Indexed file"
+			}
+		} else {
+			r.Kind = "conversation"
+			r.Label = "Earlier conversation"
+		}
+		out = append(out, r)
 	}
 	return out, nil
+}
+
+// resolveFileNames turns the file source ids among the hits into display
+// names. A failure here loses labels, not results: retrieval already
+// succeeded, and answering with unnamed context beats not answering.
+func (i *Indexer) resolveFileNames(uid uint64, hits []ChunkResult) map[string]string {
+	ids := make([]int64, 0, len(hits))
+	seen := make(map[string]bool, len(hits))
+	for _, h := range hits {
+		if h.SourceType != SourceTypeFile || seen[h.SourceID] {
+			continue
+		}
+		seen[h.SourceID] = true
+		id, err := strconv.ParseInt(h.SourceID, 10, 64)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	byID, err := i.files.FileNames(uid, ids)
+	if err != nil {
+		return nil
+	}
+	names := make(map[string]string, len(byID))
+	for id, name := range byID {
+		names[fileSourceID(id)] = name
+	}
+	return names
+}
+
+// similarityFromDistance converts the store's L2 distance to cosine
+// similarity. Embeddings are L2-normalized, so |a-b|² = 2 - 2·cos(a,b) and the
+// inversion is exact rather than a heuristic. Clamped because floating-point
+// error can push a perfect match a hair past 1.
+func similarityFromDistance(distance float64) float64 {
+	sim := 1 - (distance*distance)/2
+	if sim < 0 {
+		return 0
+	}
+	if sim > 1 {
+		return 1
+	}
+	return sim
 }
 
 // fileSourceID is the stable string key under which a file's chunks are stored.

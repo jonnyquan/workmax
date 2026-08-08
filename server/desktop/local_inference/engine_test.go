@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -96,9 +97,11 @@ func newTestEngine(t *testing.T, profile ProfileReader) (*Engine, *gorm.DB, *mem
 // L3c-4 hook can be asserted, and returning canned Retrieve results for the
 // L3c-5 injection test. No cgo knowledge package needed.
 type recordingIndexer struct {
-	mu       sync.Mutex
-	calls    []indexTurnCall
-	retrieve []string
+	mu        sync.Mutex
+	calls     []indexTurnCall
+	retrieve  []RetrievedSource
+	gotUID    uint64
+	retrieved bool
 }
 
 type indexTurnCall struct {
@@ -112,10 +115,12 @@ func (r *recordingIndexer) IndexTurn(_ context.Context, turnUUID, userText, assi
 	return nil
 }
 
-func (r *recordingIndexer) Retrieve(_ context.Context, _ string, _ int) ([]string, error) {
+func (r *recordingIndexer) Retrieve(_ context.Context, uid uint64, _ string, _ int) ([]RetrievedSource, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]string, len(r.retrieve))
+	r.gotUID = uid
+	r.retrieved = true
+	out := make([]RetrievedSource, len(r.retrieve))
 	copy(out, r.retrieve)
 	return out, nil
 }
@@ -222,7 +227,10 @@ func TestEngine_InjectsRetrievedContext(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	db := openLocalTestDB(t)
-	idx := &recordingIndexer{retrieve: []string{"ALPHA-FACT", "BETA-FACT"}}
+	idx := &recordingIndexer{retrieve: []RetrievedSource{
+		{Kind: "file", Label: "alpha.md", Text: "ALPHA-FACT", Score: 0.91},
+		{Kind: "conversation", Label: "Earlier conversation", Text: "BETA-FACT", Score: 0.62},
+	}}
 	engine := NewEngine(
 		stubProfile{protocol: protocolOpenAI, baseURL: upstream.URL, modelID: engineTestModel},
 		db, nil, idx,
@@ -240,6 +248,128 @@ func TestEngine_InjectsRetrievedContext(t *testing.T) {
 	}
 	if !strings.Contains(gotBody, "what is alpha?") {
 		t.Errorf("original user text missing from body: %s", gotBody)
+	}
+	// The uid has to reach the store, or file names resolve against the wrong
+	// owner and every source is labelled generically.
+	if idx.gotUID != engineTestUID {
+		t.Errorf("Retrieve got uid %d, want %d", idx.gotUID, engineTestUID)
+	}
+}
+
+// The renderer cannot show what grounded an answer unless the stream says so.
+// This pins the announcement: emitted before any text, naming both sources,
+// and carrying what the model was actually given.
+func TestEngine_AnnouncesRetrievedSources(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		f := w.(http.Flusher)
+		sseLine(w, `data: {"choices":[{"delta":{"content":"hello"}}]}`)
+		sseLine(w, "")
+		sseLine(w, "data: [DONE]")
+		sseLine(w, "")
+		f.Flush()
+	}))
+	t.Cleanup(upstream.Close)
+
+	db := openLocalTestDB(t)
+	idx := &recordingIndexer{retrieve: []RetrievedSource{
+		{Kind: "file", Label: "q3-plan.md", Text: "Revenue grew 12%.", Score: 0.88},
+		{Kind: "conversation", Label: "Earlier conversation", Text: "We agreed on the Q3 target.", Score: 0.55},
+	}}
+	engine := NewEngine(
+		stubProfile{protocol: protocolOpenAI, baseURL: upstream.URL, modelID: engineTestModel},
+		db, nil, idx,
+	)
+	dst := &memSSEWriter{}
+	if err := engine.Chat(context.Background(), cloudproxy.ChatRequest{
+		ThreadID: 1, ThreadUUID: "thr_1", TurnUUID: engineTestTurnUUID,
+		UID: engineTestUID, UserText: "how did Q3 go?", ChatMode: "general",
+	}, dst); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	events, _ := dst.snapshot()
+	retrievalAt, firstTextAt := -1, -1
+	for i, ev := range events {
+		if ev.Type == "retrieval" && retrievalAt < 0 {
+			retrievalAt = i
+		}
+		if ev.Type == "text_delta" && firstTextAt < 0 {
+			firstTextAt = i
+		}
+	}
+	if retrievalAt < 0 {
+		t.Fatalf("no retrieval event on the stream; events=%+v", events)
+	}
+	if firstTextAt >= 0 && retrievalAt > firstTextAt {
+		t.Errorf("retrieval announced at %d, after the first text at %d; the panel would fill in after the answer had started", retrievalAt, firstTextAt)
+	}
+
+	var payload struct {
+		Sources []struct {
+			Kind    string  `json:"kind"`
+			Label   string  `json:"label"`
+			Snippet string  `json:"snippet"`
+			Score   float64 `json:"score"`
+		} `json:"sources"`
+	}
+	if err := json.Unmarshal([]byte(events[retrievalAt].Data), &payload); err != nil {
+		t.Fatalf("retrieval payload is not JSON: %v (%s)", err, events[retrievalAt].Data)
+	}
+	if len(payload.Sources) != 2 {
+		t.Fatalf("announced %d sources, want 2: %+v", len(payload.Sources), payload.Sources)
+	}
+	if payload.Sources[0].Label != "q3-plan.md" || payload.Sources[0].Kind != "file" {
+		t.Errorf("first source = %+v, want the file that ranked best", payload.Sources[0])
+	}
+	if payload.Sources[0].Snippet != "Revenue grew 12%." {
+		t.Errorf("snippet = %q, want the chunk text the model was given", payload.Sources[0].Snippet)
+	}
+	if payload.Sources[1].Kind != "conversation" {
+		t.Errorf("second source kind = %q, want conversation", payload.Sources[1].Kind)
+	}
+}
+
+// A source dropped by the char budget must not be announced: the panel would
+// credit a document the model never saw.
+func TestPrependKnowledgeContextReportsOnlyWhatFitted(t *testing.T) {
+	big := strings.Repeat("x", maxRetrievalContextChars)
+	text, used := prependKnowledgeContext("question", []RetrievedSource{
+		{Kind: "file", Label: "kept.md", Text: big},
+		{Kind: "file", Label: "dropped.md", Text: "this one is over budget"},
+	})
+	if len(used) != 1 || used[0].Label != "kept.md" {
+		t.Fatalf("reported sources = %+v, want only kept.md", used)
+	}
+	if strings.Contains(text, "this one is over budget") {
+		t.Error("the dropped chunk reached the model after all")
+	}
+}
+
+// Every candidate blank or over budget means no context was added. Returning
+// the preamble with an empty list would tell the model it had sources.
+func TestPrependKnowledgeContextLeavesPromptAloneWhenNothingFits(t *testing.T) {
+	text, used := prependKnowledgeContext("question", []RetrievedSource{
+		{Kind: "file", Label: "blank.md", Text: "   "},
+	})
+	if used != nil {
+		t.Errorf("reported %+v, want nothing", used)
+	}
+	if text != "question" {
+		t.Errorf("prompt = %q, want it untouched", text)
+	}
+}
+
+func TestTruncateRunesCutsOnRuneBoundary(t *testing.T) {
+	// Four-byte runes: a byte-wise cut here produces invalid UTF-8, which the
+	// renderer's fatal TextDecoder turns into a failed turn.
+	got := truncateRunes(strings.Repeat("𝄞", 300), 240)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncation produced invalid UTF-8: %q", got)
+	}
+	if utf8.RuneCountInString(got) != 241 { // 240 runes + the ellipsis
+		t.Errorf("kept %d runes, want 240 plus an ellipsis", utf8.RuneCountInString(got))
 	}
 }
 

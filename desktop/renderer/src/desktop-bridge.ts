@@ -327,8 +327,28 @@ export interface AgentDoneResult {
   is_error: boolean;
 }
 
+/**
+ * One piece of stored knowledge the local route retrieved for a turn.
+ *
+ * `score` is a similarity in 0..1, or null when the shell could not read one —
+ * absent rather than zero, because zero means "no match" and would be a claim
+ * about the source rather than about what is known.
+ */
+export interface AgentRetrievedSource {
+  kind: "file" | "conversation";
+  label: string;
+  snippet: string;
+  score: number | null;
+}
+
 export type AgentTurnEvent =
   | { type: "text_delta"; turnID: string; delta: string }
+  /**
+   * What the local knowledge base contributed to this turn, announced before
+   * the first token. Non-terminal and local-route only: the cloud route never
+   * emits it, so its absence is not evidence that nothing was retrieved.
+   */
+  | { type: "retrieval"; turnID: string; sources: AgentRetrievedSource[] }
   | { type: "unknown"; turnID: string; event: string }
   | { type: "done"; turnID: string; result: AgentDoneResult }
   | { type: "proxy_error"; turnID: string; error: AgentProxyError }

@@ -1357,6 +1357,245 @@ async function testShimInterceptsExternalLinks() {
   assert.equal(prevented, false, "a fragment link must be left to the page");
 }
 
+// The retrieval announcement is the only way the user learns that an answer
+// came out of their own documents rather than out of the model. This drives it
+// the whole way: a turn streams the event, the panel names the sources, and
+// the next turn does not inherit them.
+async function testRetrievedContextIsShownAndResetPerTurn() {
+  let emit = null;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("rag-thread", "Grounded answers")] });
+      }
+      if (pathname === "/agent/threads/rag-thread/messages") return response({ items: [] });
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  let turnSeq = 0;
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input, callback) {
+        turnSeq += 1;
+        const turnID = `rag-turn-${turnSeq}`;
+        emit = (event) => callback({ ...event, turnID });
+        return { turnID };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  assert.equal(
+    document.byId.get("retrieved-empty").hidden,
+    false,
+    "before any turn the section must say nothing has been retrieved",
+  );
+
+  const input = document.byId.get("chat-input");
+  input.value = "How did Q3 go?";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  emit({
+    type: "retrieval",
+    sources: [
+      { kind: "file", label: "q3-plan.md", snippet: "Revenue grew 12%.", score: 0.88 },
+      { kind: "conversation", label: "Earlier conversation", snippet: "We set the Q3 target.", score: 0.51 },
+    ],
+  });
+  emit({ type: "text_delta", delta: "Revenue was up." });
+  await settle();
+
+  assert.equal(document.byId.get("retrieved-meta").textContent, "2");
+  assert.equal(
+    document.byId.get("retrieved-empty").hidden,
+    true,
+    "the empty note must give way once sources arrive",
+  );
+  const listed = document.byId.get("retrieved-list");
+  assert.equal(listed.children.length, 2);
+  assert.match(listed.textContent, /q3-plan\.md/, "the file must be named");
+  assert.match(
+    listed.textContent,
+    /Revenue grew 12%\./,
+    "the passage handed to the model must be shown verbatim, not summarised",
+  );
+  assert.match(listed.textContent, /88% match/, "the score must be rendered as a similarity");
+
+  // A new question invalidates the old provenance. Nothing clears it on the
+  // way in — a turn that retrieves nothing sends no event at all — so if this
+  // is not cleared at turn start the panel credits the new answer to the old
+  // documents.
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  await settle();
+  input.value = "Unrelated question";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  assert.equal(
+    document.byId.get("retrieved-list").children.length,
+    0,
+    "the previous turn's sources must not survive into the next turn",
+  );
+  assert.equal(document.byId.get("retrieved-meta").textContent, "0");
+}
+
+// runShimTurn drives the shipped shim over a canned SSE body: real frame
+// parsing, real validation, real callbacks. The shim is an IIFE, so nothing
+// inside it can be poked at directly — which is the right constraint. What
+// matters is what a turn delivers, and that is observable from here.
+async function runShimTurn(sseText) {
+  const shimPath = path.join(rendererDir, "shim.js");
+  const shimSource = fs.readFileSync(shimPath, "utf8");
+  const encoded = new TextEncoder().encode(sseText);
+  let sent = false;
+
+  const context = {
+    console,
+    URL,
+    Headers,
+    TextEncoder,
+    TextDecoder,
+    AbortController,
+    crypto: { randomUUID: () => "00000000-0000-4000-8000-00000000beef" },
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Map([["content-type", "text/event-stream"]]),
+      body: {
+        getReader: () => ({
+          async read() {
+            if (sent) return { done: true, value: undefined };
+            sent = true;
+            return { done: false, value: encoded };
+          },
+          async cancel() {},
+        }),
+      },
+    }),
+    setTimeout, clearTimeout,
+    location: { origin: "http://127.0.0.1:5000" },
+    document: {
+      baseURI: "http://127.0.0.1:5000/CAPABILITY/",
+      documentElement: { dataset: {} },
+      addEventListener() {},
+    },
+  };
+  context.window = context;
+  // The shim hands its turn functions to the generated bridge factory rather
+  // than putting them on a global, so the factory is where they are reachable
+  // from. Capturing them is not a back door: it is the same object the real
+  // lib/desktop-bridge.js receives.
+  let transport = null;
+  context.window.__workmaxDesktopBridge = {
+    createDesktopBridge: (deps) => {
+      transport = deps;
+      return {};
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(shimSource, context, { filename: shimPath });
+  assert.ok(transport, "shim.js must build the typed bridge");
+
+  const events = [];
+  transport.startAgentTurn({ thread_uuid: "t" }, (event) => events.push(event));
+  await settle();
+  return events;
+}
+
+const SSE_DONE_FRAME = 'event: done\ndata: {"type":"done","result":"OK"}\n\n';
+
+function retrievalFrame(payload) {
+  return `event: retrieval\ndata: ${JSON.stringify(payload)}\n\n`;
+}
+
+// The shim decides whether a payload from the sidecar is allowed to reach the
+// renderer at all. These are the shapes it must refuse — and, just as
+// important, the fact that refusing one must not cost the user the answer.
+async function testShimValidatesRetrievalPayloads() {
+  const good = await runShimTurn(
+    retrievalFrame({
+      sources: [
+        { kind: "file", label: "a.md", snippet: "text", score: 0.5 },
+        { kind: "conversation", label: "Earlier conversation", snippet: "prior", score: 0.25 },
+      ],
+    }) + SSE_DONE_FRAME,
+  );
+  const retrieval = good.find((e) => e.type === "retrieval");
+  assert.ok(retrieval, "a well-formed retrieval frame must be delivered");
+  assert.equal(retrieval.sources.length, 2);
+  assert.equal(retrieval.sources[0].label, "a.md");
+  assert.equal(retrieval.sources[0].score, 0.5);
+  assert.ok(good.some((e) => e.type === "done"), "the turn must still complete");
+
+  // Each of these is malformed in a different way. All must be dropped, and
+  // none may turn into a protocol error: the provenance list is informational,
+  // and failing a delivered answer over it would be a bad trade.
+  const refused = [
+    { sources: "not-an-array" },
+    { sources: [{ kind: "file", label: "" }] },
+    { sources: [{ kind: "deliverable", label: "a.md" }] },
+    { sources: [{ label: "a.md" }] },
+  ];
+  for (const payload of refused) {
+    const events = await runShimTurn(retrievalFrame(payload) + SSE_DONE_FRAME);
+    assert.equal(
+      events.some((e) => e.type === "retrieval"),
+      false,
+      `malformed payload must not be delivered: ${JSON.stringify(payload)}`,
+    );
+    assert.equal(
+      events.some((e) => e.type === "protocol_error"),
+      false,
+      `a malformed provenance list must not fail the turn: ${JSON.stringify(payload)}`,
+    );
+    assert.ok(events.some((e) => e.type === "done"), "the answer must still arrive");
+  }
+
+  // A score outside 0..1 is clamped rather than refused: the source really was
+  // used, and losing that over a rounding artefact would be the worse error.
+  const clamped = await runShimTurn(
+    retrievalFrame({ sources: [
+      { kind: "file", label: "high.md", score: 4 },
+      { kind: "file", label: "low.md", score: -1 },
+      { kind: "file", label: "text.md", score: "high" },
+    ] }) + SSE_DONE_FRAME,
+  ).then((events) => events.find((e) => e.type === "retrieval"));
+  assert.equal(clamped.sources[0].score, 1);
+  assert.equal(clamped.sources[1].score, 0);
+  assert.equal(
+    clamped.sources[2].score,
+    null,
+    "a non-numeric score becomes absent, not zero — zero would read as 'no match'",
+  );
+
+  const bounded = await runShimTurn(
+    retrievalFrame({
+      sources: Array.from({ length: 40 }, () => ({
+        kind: "file",
+        label: "x".repeat(500),
+        snippet: "y".repeat(5000),
+      })),
+    }) + SSE_DONE_FRAME,
+  ).then((events) => events.find((e) => e.type === "retrieval"));
+  assert.equal(bounded.sources.length, 12, "the list must be bounded whatever the sidecar sends");
+  assert.equal(bounded.sources[0].label.length, 120);
+  assert.equal(bounded.sources[0].snippet.length, 400);
+}
+
 async function testStagedAttachmentsAreSentWithTheTurn() {
   let sentFileIDs = null;
   const bridge = {
@@ -3176,6 +3415,8 @@ await testThreadGroupingAndSearch();
 await testThreadSearchIsHiddenWithNothingToFilter();
 await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
+await testRetrievedContextIsShownAndResetPerTurn();
+await testShimValidatesRetrievalPayloads();
 await testStagedAttachmentsAreSentWithTheTurn();
 await testSynchronousTurnCallbacksAreBufferedUntilOpenResult();
 await testAgentTurnStreamsAndReconciles();

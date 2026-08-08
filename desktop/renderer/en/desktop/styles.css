@@ -982,6 +982,28 @@ textarea:focus-visible {
 .context-item.is-missing .context-item-name { color: hsl(var(--muted-foreground)); }
 .context-item.is-missing .context-item-meta { color: hsl(var(--destructive)); }
 
+/* Retrieved context: a label plus the passage the model was actually given.
+   The snippet is clamped rather than scrolled — this is a rail, and four
+   expanded chunks would push everything else off the screen. */
+.context-item-snippet {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* An indexed conversation is not a file the user can open, so it is named in
+   the same voice as the rest of the panel but marked as a different kind of
+   thing. */
+.context-item.is-conversation .context-item-name {
+  color: hsl(var(--muted-foreground));
+  font-style: italic;
+}
+
 .context-empty {
   margin: 0;
   font-size: 11px;
