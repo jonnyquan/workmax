@@ -274,6 +274,10 @@ function parseThread(value) {
     agent_mode: optionalString(value.agent_mode),
     message_count: optionalCount(value.message_count),
     updated_at: optionalString(value.updated_at),
+    // 'local' marks a thread that exists only on this machine — the one kind
+    // the delete affordance is allowed to appear on. Absent or unknown values
+    // are treated as synced, which errs on the side of not offering deletion.
+    cloud_sync_state: optionalString(value.cloud_sync_state),
   };
 }
 
@@ -2475,6 +2479,55 @@ function threadMatchesQuery(thread, query) {
   return (thread.name || "Untitled thread").toLowerCase().includes(query);
 }
 
+// Deleting is offered only where the sidecar would allow it: threads that
+// exist solely on this machine. A synced thread has a cloud copy and a sync
+// worker that would pull it straight back, so showing a delete that undoes
+// itself would be worse than showing none.
+function threadIsDeletable(thread) {
+  return thread.cloud_sync_state === "local";
+}
+
+async function deleteThread(thread) {
+  const agent = window.desktopBridge?.agent;
+  if (!agent || typeof agent.deleteThread !== "function") return;
+  try {
+    const result = parseDesktopBridgeResult(
+      await agent.deleteThread(thread.uuid),
+      "agent delete result"
+    );
+    if (!result.ok) {
+      const code = isRecord(result.error) ? result.error.error : "";
+      setStatus(
+        code === "thread_busy"
+          ? "That conversation still has a response in flight. Stop it first."
+          : "Could not delete the conversation.",
+        "error"
+      );
+      return;
+    }
+  } catch {
+    setStatus("Could not delete the conversation.", "error");
+    return;
+  }
+  state.threads = state.threads.filter((t) => t.uuid !== thread.uuid);
+  state.recoverableTurns = state.recoverableTurns.filter(
+    (turn) => turn.thread_uuid !== thread.uuid
+  );
+  if (state.selectedThreadUUID === thread.uuid) {
+    state.selectionGeneration += 1;
+    state.selectedThreadUUID = null;
+    messageList.textContent = "";
+    emptyState.hidden = false;
+    threadPanel.hidden = true;
+    contextState.sources = [];
+    contextState.retrieved = [];
+  }
+  renderThreads();
+  renderTaskContext();
+  updateComposerState();
+  setStatus("Conversation deleted from this machine.");
+}
+
 function renderThreadButton(thread) {
   const item = document.createElement("li");
   item.className = "thread-item";
@@ -2497,8 +2550,36 @@ function renderThreadButton(thread) {
     selectThread(thread);
   });
   item.appendChild(button);
+  if (threadIsDeletable(thread)) {
+    // Two clicks, one control: the first arms it, the second deletes. A modal
+    // would be heavier machinery for the same guarantee — that no single
+    // misclick destroys a conversation.
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "thread-delete";
+    del.textContent = "Delete";
+    del.setAttribute("aria-label", `Delete ${thread.name || "Untitled thread"}`);
+    del.addEventListener("click", () => {
+      if (!del.classList.contains("armed")) {
+        del.classList.add("armed");
+        del.textContent = "Confirm";
+        setTimeout(() => {
+          del.classList.remove("armed");
+          del.textContent = "Delete";
+        }, DELETE_ARM_MS);
+        return;
+      }
+      del.disabled = true;
+      void deleteThread(thread);
+    });
+    item.appendChild(del);
+  }
   return item;
 }
+
+// Long enough to move the pointer one row down and click again; short enough
+// that an armed Delete does not lie in wait for a later stray click.
+const DELETE_ARM_MS = 4000;
 
 function renderThreads() {
   threadList.textContent = "";

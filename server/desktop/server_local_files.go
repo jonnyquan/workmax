@@ -79,7 +79,7 @@ func (s *Server) handleUploadThreadFile(c *gin.Context) {
 	}
 	// L3c-3: kick off knowledge indexing asynchronously so the upload response
 	// is not blocked by extraction + embedding. Nil when RAG is disabled.
-	if s.cfg.FileIndexer != nil {
+	if s.cfg.KnowledgeIndex != nil {
 		go s.indexUploadedFile(uid, saved.FileID)
 	}
 	c.JSON(http.StatusCreated, threadFileUploadResponse{
@@ -112,7 +112,7 @@ func respondThreadFileUploadError(c *gin.Context, err error) {
 func (s *Server) indexUploadedFile(uid uint64, fileID int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := s.cfg.FileIndexer.IndexFile(ctx, uid, fileID); err != nil {
+	if err := s.cfg.KnowledgeIndex.IndexFile(ctx, uid, fileID); err != nil {
 		log.Printf("knowledge: index file %d (uid %d): %v", fileID, uid, err)
 	}
 }

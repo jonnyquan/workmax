@@ -443,8 +443,31 @@ textarea:focus-visible {
 }
 
 .thread-item {
+  position: relative;
   width: 100%;
   margin: 0;
+}
+
+/* Delete lives on the row, small and quiet, and only on local-only threads.
+   Armed state turns destructive-red so the second click knows what it is. */
+.thread-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  height: auto;
+  padding: 2px 7px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--card));
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.thread-delete.armed {
+  border-color: hsl(var(--destructive) / 0.5);
+  background: hsl(var(--destructive));
+  color: hsl(var(--destructive-foreground));
 }
 
 .thread-button {

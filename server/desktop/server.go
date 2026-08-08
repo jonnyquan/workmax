@@ -23,15 +23,20 @@ import (
 
 // ServerConfig is the runtime configuration the sidecar HTTP server
 // needs at startup. LocalToken and DB are required by NewServer.
-// FileIndexer indexes (and removes) file attachments into the local knowledge
-// store for RAG retrieval (L3c-3). It is satisfied structurally by
-// *knowledge.Indexer. Nil on the config means uploads are not indexed — the
-// sidecar runs without RAG until the onnxruntime resources are packaged and
-// the indexer is constructed (L3c-5). Defined here as an interface so the
-// desktop package does not depend on the cgo knowledge package.
-type FileIndexer interface {
+// KnowledgeIndex is the sidecar's write surface onto the local knowledge
+// store: index an uploaded file, and remove what was indexed when its source
+// goes away. Satisfied structurally by the lazy wiring around
+// *knowledge.Indexer. Nil on the config means the sidecar runs without RAG —
+// uploads still succeed, deletes still delete, nothing is indexed or removed.
+// Defined here as an interface so the desktop package does not depend on the
+// cgo knowledge package.
+//
+// (Named FileIndexer until thread deletion needed turn removal too; the
+// interface covers both source types now, so the file-only name was a lie.)
+type KnowledgeIndex interface {
 	IndexFile(ctx context.Context, uid uint64, fileID int64) error
 	RemoveFile(ctx context.Context, fileID int64) (int, error)
+	RemoveTurn(ctx context.Context, turnUUID string) (int, error)
 }
 
 // Other subsystems are optional at boot and become required only when
@@ -118,10 +123,10 @@ type ServerConfig struct {
 	// for use as model context in local turns (L3b). Nil → upload route returns 503.
 	LocalFiles *localrender.Store
 
-	// FileIndexer indexes uploaded files for local RAG retrieval (L3c-3).
-	// Nil → uploads still succeed but are not indexed (RAG disabled until the
-	// indexer is wired in L3c-5, pending onnxruntime resource packaging).
-	FileIndexer FileIndexer
+	// KnowledgeIndex indexes uploaded files for local RAG retrieval (L3c-3)
+	// and removes indexed content when its source is deleted. Nil → uploads
+	// still succeed but are not indexed, and deletes skip knowledge cleanup.
+	KnowledgeIndex KnowledgeIndex
 }
 
 // Server wraps the sidecar's loopback HTTP server, the listener it's

@@ -1383,6 +1383,82 @@ async function testShimInterceptsExternalLinks() {
   assert.equal(prevented, false, "a fragment link must be left to the page");
 }
 
+// A local-first product must be able to destroy its own data. This drives the
+// renderer's half of thread deletion: the affordance appears only on
+// local-only threads, arms on the first click, deletes on the second, and the
+// deleted conversation leaves the screen without a refresh.
+async function testThreadDeleteIsTwoStepAndLocalOnly() {
+  const deleted = [];
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({
+          items: [
+            { ...thread("00000000-0000-4000-8000-00000000d001", "Local scratch"), cloud_sync_state: "local" },
+            { ...thread("00000000-0000-4000-8000-00000000d002", "Synced deck"), cloud_sync_state: "synced" },
+          ],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      async deleteThread(uuid) {
+        deleted.push(uuid);
+        return typedSuccess({ deleted: true, messages: 2, files: 0, turn_intents: 1, index_cleanups: 0 });
+      },
+      startTurn() { return { turnID: "t" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  const deleteButtons = () =>
+    walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-delete"));
+
+  assert.equal(
+    deleteButtons().length,
+    1,
+    "delete must be offered on the local thread and only there — a synced thread's delete would undo itself",
+  );
+
+  // Select the thread first so the test also proves deletion clears the
+  // selection rather than leaving a workbench pointed at nothing.
+  walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[0].click();
+  await settle();
+
+  // The two clicks and the between-click assertion run in one tick: the VM
+  // maps setTimeout to setImmediate, so the 4-second disarm fires as soon as
+  // the test yields. Synchronous is also the honest reading of the contract —
+  // arming is instantaneous, only DISarming waits.
+  const del = deleteButtons()[0];
+  del.click();
+  assert.equal(deleted.length, 0, "the first click must arm, not delete");
+  assert.equal(del.textContent, "Confirm", "the armed control must say what the next click does");
+  del.click();
+  await settle();
+  assert.deepEqual(Array.from(deleted), ["00000000-0000-4000-8000-00000000d001"]);
+  assert.equal(
+    walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-delete")).length,
+    0,
+    "the deleted thread must leave the list (and the synced one never had a button)",
+  );
+  assert.doesNotMatch(document.byId.get("thread-list").textContent, /Local scratch/);
+  assert.match(document.byId.get("thread-list").textContent, /Synced deck/);
+  assert.equal(
+    document.byId.get("thread-panel").hidden,
+    true,
+    "deleting the selected thread must close its workbench",
+  );
+}
+
 // An answer the user cannot get out of the window is a screenshot. These are
 // the affordances that make the chat column usable as a work surface rather
 // than a transcript viewer.
@@ -3901,6 +3977,7 @@ await testThreadGroupingAndSearch();
 await testThreadSearchIsHiddenWithNothingToFilter();
 await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
+await testThreadDeleteIsTwoStepAndLocalOnly();
 await testMessageActionsCopyAndReuse();
 await testMessageActionsAbsentWithoutAClipboard();
 await testStreamedAnswerGainsActionsWhenReconcileFails();

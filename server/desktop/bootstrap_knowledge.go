@@ -13,7 +13,7 @@ import (
 
 // The L3c knowledge package is cgo-only (it embeds ONNX Runtime), and this
 // package is deliberately not. Both consumers of RAG are already structural
-// interfaces — FileIndexer here, localinference.KnowledgeHooks there — so the
+// interfaces — KnowledgeIndex here, localinference.KnowledgeHooks there — so the
 // only thing missing was a construction seam that itself carries no cgo.
 //
 // That seam is knowledgeProvider: bootstrap_cgo.go installs it from an init
@@ -34,12 +34,12 @@ type KnowledgeDeps struct {
 }
 
 // KnowledgeWiring is the RAG surface the rest of the boot consumes. A zero
-// value is the RAG-off configuration and is valid everywhere: FileIndexer nil
+// value is the RAG-off configuration and is valid everywhere: Index nil
 // means uploads are stored but not indexed, Hooks nil means turns are neither
 // indexed nor retrieved against.
 type KnowledgeWiring struct {
-	FileIndexer FileIndexer
-	Hooks       localinference.KnowledgeHooks
+	Index KnowledgeIndex
+	Hooks localinference.KnowledgeHooks
 
 	// Close releases the ONNX Runtime environment. Nil when RAG is off.
 	// Boot.Shutdown calls it before the process exits — see the ordering

@@ -71,6 +71,10 @@
         "routeId": "agent.thread-put"
       },
       {
+        "bridgeMethod": "agent.deleteThread",
+        "routeId": "agent.thread-delete"
+      },
+      {
         "bridgeMethod": "agent.uploadThreadFile",
         "routeId": "agent.thread-file-upload"
       },
@@ -402,6 +406,18 @@
         "bodyTooLargeError": "thread request body too large"
       },
       "status": "current"
+    },
+    {
+      "id": "agent.thread-delete",
+      "method": "DELETE",
+      "path": "/agent/threads/:uuid",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
     },
     {
       "id": "agent.thread-file-upload",

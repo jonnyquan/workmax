@@ -45,16 +45,16 @@ func buildKnowledgeWiring(deps KnowledgeDeps) (KnowledgeWiring, error) {
 
 	lazy := &lazyKnowledge{deps: deps, res: res}
 	return KnowledgeWiring{
-		FileIndexer: lazy,
-		Hooks:       lazy,
-		Close:       lazy.Close,
-		Dim:         knowledge.EmbeddingDim,
+		Index: lazy,
+		Hooks: lazy,
+		Close: lazy.Close,
+		Dim:   knowledge.EmbeddingDim,
 	}, nil
 }
 
 // lazyKnowledge builds the real indexer on first use and then delegates.
 //
-// It satisfies both consumers — desktop.FileIndexer and
+// It satisfies both consumers — desktop.KnowledgeIndex and
 // localinference.KnowledgeHooks — because both are structural interfaces, so
 // nothing downstream can tell the difference between this and the real thing
 // except in how much memory an idle app uses.
@@ -143,6 +143,19 @@ func (l *lazyKnowledge) RemoveFile(ctx context.Context, fileID int64) (int, erro
 		return 0, nil
 	}
 	return l.indexer.RemoveFile(ctx, fileID)
+}
+
+// RemoveTurn mirrors RemoveFile's shape for conversation chunks: a delete
+// against an index that never built is a no-op, not an error.
+func (l *lazyKnowledge) RemoveTurn(ctx context.Context, turnUUID string) (int, error) {
+	if !l.begin() {
+		return 0, nil
+	}
+	defer l.end()
+	if err := l.load(); err != nil {
+		return 0, nil
+	}
+	return l.indexer.RemoveTurn(ctx, turnUUID)
 }
 
 func (l *lazyKnowledge) IndexTurn(ctx context.Context, turnUUID, userText, assistantText string) error {

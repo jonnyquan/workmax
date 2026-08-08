@@ -9,7 +9,7 @@ import (
 )
 
 // fakeFileIndexer records IndexFile calls for assertion. Implements
-// desktop.FileIndexer (same shape as *knowledge.Indexer).
+// desktop.KnowledgeIndex (same shape as the lazy knowledge wiring).
 type fakeFileIndexer struct {
 	mu    sync.Mutex
 	calls []fakeIndexCall
@@ -29,6 +29,10 @@ func (f *fakeFileIndexer) IndexFile(_ context.Context, uid uint64, fileID int64)
 
 func (f *fakeFileIndexer) RemoveFile(_ context.Context, fileID int64) (int, error) { return 0, nil }
 
+func (f *fakeFileIndexer) RemoveTurn(_ context.Context, turnUUID string) (int, error) {
+	return 0, nil
+}
+
 func (f *fakeFileIndexer) snapshot() []fakeIndexCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -43,7 +47,7 @@ func (f *fakeFileIndexer) snapshot() []fakeIndexCall {
 // when invoked without `go`).
 func TestIndexUploadedFile(t *testing.T) {
 	fi := &fakeFileIndexer{}
-	s := &Server{cfg: ServerConfig{FileIndexer: fi}}
+	s := &Server{cfg: ServerConfig{KnowledgeIndex: fi}}
 
 	s.indexUploadedFile(42, 99)
 
@@ -55,7 +59,7 @@ func TestIndexUploadedFile(t *testing.T) {
 	// Nil FileIndexer on the config is the disabled-RAG state; the handler's
 	// `if FileIndexer != nil` guard (one line above the `go`) keeps this from
 	// being dereferenced. Confirm the guard condition holds.
-	if (&Server{cfg: ServerConfig{}}).cfg.FileIndexer != nil {
+	if (&Server{cfg: ServerConfig{}}).cfg.KnowledgeIndex != nil {
 		t.Fatal("zero-value ServerConfig should have a nil FileIndexer")
 	}
 }

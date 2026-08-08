@@ -378,7 +378,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 		ModelSettings:    modelSettings,
 		LocalInference:   localInference,
 		LocalFiles:       localFiles,
-		FileIndexer:      knowledge.FileIndexer,
+		KnowledgeIndex:   knowledge.Index,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("new server: %w", err)

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -372,6 +373,73 @@ func (s *Store) ListThreadFiles(uid uint64, threadID uint64) ([]ThreadFile, erro
 		return nil, fmt.Errorf("iterate thread files: %w", err)
 	}
 	return out, nil
+}
+
+// DeleteThreadFiles removes a thread's attachments: the bytes on disk and the
+// rows that name them. It returns the ids of every row it deleted, so the
+// caller can clear whatever else was derived from those files (the knowledge
+// index, today).
+//
+// Disk removal is best-effort per file and does not abort the delete: the row
+// is the authority (a row without bytes is already a state this store
+// tolerates — exists_on_disk), and a delete that stops halfway because one
+// file was already gone would strand the rest forever.
+func (s *Store) DeleteThreadFiles(uid uint64, threadID uint64, threadUUID string) ([]int64, error) {
+	rows, err := s.db.Raw(
+		`SELECT id, file_path FROM w_workagent_thread_file
+		  WHERE uid = ? AND thread_id = ?`,
+		uid, threadID,
+	).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("delete thread files: list: %w", err)
+	}
+	var ids []int64
+	var paths []string
+	for rows.Next() {
+		var (
+			id   int64
+			path string
+		)
+		if err := rows.Scan(&id, &path); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("delete thread files: scan: %w", err)
+		}
+		ids = append(ids, id)
+		paths = append(paths, path)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("delete thread files: iterate: %w", err)
+	}
+	rows.Close()
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	// Rows first: if this fails nothing has been touched, and if the disk pass
+	// fails afterwards the worst outcome is orphaned bytes — recoverable by
+	// hand — rather than rows that promise files which are gone.
+	if err := s.db.Exec(
+		`DELETE FROM w_workagent_thread_file WHERE uid = ? AND thread_id = ?`,
+		uid, threadID,
+	).Error; err != nil {
+		return nil, fmt.Errorf("delete thread files: rows: %w", err)
+	}
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		// file_path is stored relative to filesDir — the same join Load uses.
+		if err := os.Remove(filepath.Join(s.filesDir, path)); err != nil && !os.IsNotExist(err) {
+			log.Printf("local files: delete %s: %v", path, err)
+		}
+	}
+	// The per-thread directory, if it is now empty. Not an error if it isn't:
+	// a file that failed to delete above still lives there.
+	if threadUUID != "" {
+		_ = os.Remove(filepath.Join(s.filesDir, threadUUID))
+	}
+	return ids, nil
 }
 
 // FileNames maps file ids to the name the user knows them by.
