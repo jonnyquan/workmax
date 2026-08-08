@@ -25,7 +25,7 @@ require (
 	github.com/natefinch/lumberjack v2.0.0+incompatible
 	github.com/pkoukk/tiktoken-go v0.1.7
 	github.com/robfig/cron v1.2.0
-	github.com/sirupsen/logrus v1.9.3
+	github.com/sirupsen/logrus v1.9.4
 	github.com/songzhibin97/gkit v1.2.13
 	github.com/spf13/viper v1.18.2
 	github.com/stretchr/testify v1.11.1
