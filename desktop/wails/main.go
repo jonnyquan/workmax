@@ -260,9 +260,18 @@ func resolveRendererDir() (string, error) {
 	return "", fmt.Errorf("no bundled renderer found (set %s); looked in %v", RendererDirEnv, candidates)
 }
 
-// resolveResourcesDir locates the packaged native assets. Empty is a valid
-// answer: desktop.Bootstrap falls back to WORKMAX_RESOURCES_DIR and then to a
-// working-directory default, and boots with RAG off if nothing resolves.
+// resolveResourcesDir locates the native assets for the local knowledge index.
+//
+// Returning empty is the normal answer, and it is what makes the app find them
+// at all: Bootstrap then defaults to <DataDir>/resources, which is where the
+// downloader puts them. An earlier version returned the bundle's Resources
+// directory whenever it existed — which is always, in a packaged build — so a
+// packaged app would have downloaded the assets to the data directory and then
+// looked for them inside its own bundle.
+//
+// The bundle is still honoured, but only when it demonstrably contains the
+// assets. That keeps a future "ship them inside" variant working without
+// hijacking the download path in the meantime.
 func resolveResourcesDir() string {
 	if dir := os.Getenv(ResourcesDirEnv); dir != "" {
 		return dir
@@ -271,9 +280,11 @@ func resolveResourcesDir() string {
 	if err != nil {
 		return ""
 	}
-	packaged := filepath.Join(filepath.Dir(exe), "..", "Resources")
-	if entry, err := os.Stat(packaged); err == nil && entry.IsDir() {
-		return filepath.Clean(packaged)
+	packaged := filepath.Clean(filepath.Join(filepath.Dir(exe), "..", "Resources"))
+	for _, name := range []string{"libonnxruntime.dylib", "libonnxruntime.so", "onnxruntime.dll"} {
+		if _, err := os.Stat(filepath.Join(packaged, name)); err == nil {
+			return packaged
+		}
 	}
 	return ""
 }

@@ -167,6 +167,26 @@
 
 **倾向 (c)**：能力路径落地后，它的安全性质与绑定等价甚至更好（凭据只经过我们自己的进程内调用），而且少一个对 beta 框架内部的依赖。W2 开工时定。
 
+### 0.5.20 首个打包产物与性能实测（2026-08-08）
+
+`build-mac.sh` 按 Wails 布局重写（手工组装，无打包框架——这个布局没有需要框架去拦的东西），**每次构建强制过 `inspect-mac-package.sh`**。产出的 arm64 `.app` 端到端可用：`--serve-only` 从 bundle 内起、`/health` 200、SIGTERM 退出码 0，`--verify-shim` 加载 **bundle 内**的 renderer 通过（8 帧/4151 字节）。
+
+**建出真实产物立刻抓到一个不一致**：`resolveResourcesDir()` 在打包构建里总是返回 bundle 的 `Contents/Resources`，而 rev.4 决定 RAG 资源是**下载到 `<DataDir>/resources`** 的——下载到一处、查找在另一处，装完也用不上。已改为"bundle 里确实有资源才用 bundle，否则让 Bootstrap 走 DataDir 默认"，两种分发方式都成立。这类错位只有真的打出包才会显形。
+
+**实测数字（§5 估算 vs 现实）**：
+
+| 指标 | §5 估算 | 实测 | |
+|---|---|---|---|
+| 安装包 | 15–25 MB | **22 MB** | ✅ 命中 |
+| 冷启动 | "单进程直起" | **~48 ms** 到 sidecar 就绪 / **~100 ms** 到 UI 就绪 | ✅ 远好于握手+spawn |
+| 稳态内存 | **40–80 MB** | **~109–126 MB**（app + WebKit 辅助进程，2–3 个进程） | ❌ **估算偏低约 50%** |
+
+内存这条要说清楚：**§5 的 40–80 MB 是错的**。真实值约 110–126 MB。它仍然显著低于 Electron，但不是当初写下的那个量级——`base memory` 里 Go runtime、WebKit 框架映射页、SQLite、gin 都要算。任何引用 §5 内存数字做决策的地方都应改用这里的实测值。
+
+**一个必须承认的流程错误**：§14 把"性能基准（**同机对照**）"列为切换门槛，而 Electron 在基线被采集之前就删掉了。源码仍可从 git 重建（已验证：`git worktree` + `npm ci` 能装出旧 shell），但一次粗测（dev 模式约 650 MB）与 Wails 的打包产物口径不同，反复尝试做干净配对测量都卡在进程归属上。**结论：Wails 的绝对数字可信，"对 Electron 快多少省多少"这个比值目前没有可引用的实测。** 正确顺序应当是"先测旧的，再删"。
+
+> 这条留在文档里不是自责，是给下一个删除动作的清单加一行：**凡是被列为门槛的对照测量，必须在被对照的一方消失之前采集。**
+
 ### 0.5.19 W4 起步：entitlements 重写 + bundle 检查器（2026-08-08）
 
 **entitlements 从 4 条减到 1 条**。去掉 `allow-jit` 与 `allow-unsigned-executable-memory`（Electron 的 V8 才需要；Wails 用系统 WebView，JS 引擎跑在自带授权的系统进程里，我们的二进制既不生成也不执行代码）与 `allow-dyld-environment-variables`（Wails 构建不需要 `DYLD_*`，资源路径由可执行文件位置显式推导）。只留 `network.client`。
@@ -833,7 +853,8 @@ Wails **无 preload 世界**，故 `desktop/electron/src/preload.ts`（`AgentSSE
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | rev.1 | 2026-08-08 | 首版评估 + Part B 落地方案；D1/D4/入口结构三项决策落定（v3 / A2 / 单入口双模式） |
-| **rev.14** | **2026-08-08** | **W4 起步。** 新增 §0.5.19：entitlements 从 4 条减到 1 条（去掉 V8/dyld 三条，`disable-library-validation` 待 RAG 里程碑再加，缺席理由写进 plist）；`inspect-mac-package.sh` 按 Wails 布局重写并配 16 项负向测试，补上 `notarize-mac.sh` 的失败关闭，两者已接回 CI。修掉自己写的一条静默失效检查（`grep -E` 不支持负向先行断言 + stderr 被丢），并把两处重叠检查收敛到一处 |
+| **rev.15** | **2026-08-08** | **首个打包产物 + 性能实测。** 新增 §0.5.20：`build-mac.sh` 按 Wails 布局重写并强制过检查器，arm64 `.app` 端到端可用。修复 `resolveResourcesDir()` 与下载目的地错位（打包后才显形）。实测替换 §5 估算：安装包 22 MB ✅、冷启动 ~48ms/~100ms ✅、**稳态内存 ~109–126 MB（§5 估的 40–80 MB 偏低约 50%）** ❌。记录一个流程错误：同机对照基线未在删除 Electron 前采集，比值暂无可引用实测 |
+| rev.14 | 2026-08-08 | **W4 起步。** 新增 §0.5.19：entitlements 从 4 条减到 1 条（去掉 V8/dyld 三条，`disable-library-validation` 待 RAG 里程碑再加，缺席理由写进 plist）；`inspect-mac-package.sh` 按 Wails 布局重写并配 16 项负向测试，补上 `notarize-mac.sh` 的失败关闭，两者已接回 CI。修掉自己写的一条静默失效检查（`grep -E` 不支持负向先行断言 + stderr 被丢），并把两处重叠检查收敛到一处 |
 | rev.13 | 2026-08-08 | **W2 安全收尾。** 新增 §0.5.18：CSP 去掉 `'unsafe-inline'`（出货 renderer 实测不需要，harness 的 `<style>` 一并外置）、DevTools 改为仅 env 显式开启且应用内无法开启、单实例两层实测。契约增至 12 条保证（新增 `devtools-off-by-default`，`containment-headers` 加缺席断言），`uiserver_test.go` 独立复核 |
 | rev.12 | 2026-08-08 | **文档与许可审计链收口。** `desktop/README.md` 逐节重写；顶层 README / RELEASING / THIRD_PARTY_NOTICES 同步；`license-audit.sh` 改指 renderer 的构建期 npm 树，并新增 `desktop/wails` 模块的 go-licenses 审计（此前无任何一遍覆盖真正出货的那个模块）。`make bootstrap` / `make test-shell` / `make build-desktop` 取代原 Electron 目标 |
 | rev.11 | 2026-08-08 | **修好行为闸门，并因此抓到一个真实缺陷。** 新增 §0.5.17。`check-bundled-renderer-behavior.mjs` 的假 DOM 改为从 `index.html` 派生（元素集合、tag 名、初始 hidden 全部读真实标记），结构上杜绝再次漂移；补齐 22 个 agent mock 的 `uploadThreadFile`。修复 L3b 缺陷：`state.pendingFiles` 在 `startTurn` 读取前被清空，导致附件 `fileIDs` 恒为空、文件静默丢失；已加回归测试并做负向验证 |
