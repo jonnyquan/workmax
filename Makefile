@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := help
 
-.PHONY: help doctor source-baseline-self-test source-baseline-audit secret-audit license-audit baseline-audit bootstrap test-boundaries test-config test-go test-go-desktop test-agent-platform test-agent-platform-mysql check-agent-worker-db test-electron test-desktop verify-core fmt-audit build-server build-sidecar package-preflight
+.PHONY: help doctor source-baseline-self-test source-baseline-audit secret-audit license-audit baseline-audit bootstrap test-boundaries test-config test-go test-go-desktop test-agent-platform test-agent-platform-mysql check-agent-worker-db test-shell test-desktop verify-core fmt-audit build-server build-desktop
 
 AGENT_WORKER_CONFIG ?= $(abspath server/config.yaml)
 HOST_GOOS := $(shell go env GOHOSTOS)
@@ -18,15 +18,14 @@ help:
 	@echo "  secret-audit       scan source candidates without printing secret values"
 	@echo "  license-audit      verify project and distributable dependency licenses"
 	@echo "  baseline-audit     run path policy and known-pattern secret gates"
-	@echo "  bootstrap          restore Electron dependencies with npm ci"
-	@echo "  verify-core        Server, Desktop Go, Electron and boundary tests"
+	@echo "  bootstrap          install the renderer's build-time npm dependency"
+	@echo "  verify-core        Server, Desktop Go, shell and boundary tests"
 	@echo "  test-desktop       unified Desktop verification"
 	@echo "  test-config        parse and validate sanitized Server examples"
 	@echo "  test-agent-platform  focused credential, Durable Turn and migration contracts"
 	@echo "  test-agent-platform-mysql  opt-in SQL contract; writes/cleans owned rows, never migrates"
 	@echo "  check-agent-worker-db  Worker DB/schema preflight (no persistent mutation or Worker start)"
 	@echo "  fmt-audit          report imported Go formatting debt"
-	@echo "  package-preflight  validate macOS packaging inputs without packaging"
 
 doctor:
 	@./scripts/doctor.sh
@@ -46,7 +45,7 @@ license-audit:
 baseline-audit: source-baseline-audit secret-audit
 
 bootstrap:
-	@cd desktop/electron && npm ci
+	@cd desktop/renderer && npm install
 
 test-boundaries:
 	@node desktop/scripts/check-desktop-boundaries.mjs
@@ -59,7 +58,8 @@ test-go:
 	@cd server && $(HERMETIC_TEST_ENV) $(HOST_GO_ENV) go test ./...
 
 test-go-desktop:
-	@cd server && $(HERMETIC_TEST_ENV) $(HOST_GO_ENV) CGO_ENABLED=1 go test -tags desktop ./desktop/... ./api/desktop/... ./service/desktop/... ./router/desktop/... ./middleware/... ./cmd/workagent-desktop
+	@cd server && $(HERMETIC_TEST_ENV) $(HOST_GO_ENV) CGO_ENABLED=1 go test -tags desktop ./desktop/... ./api/desktop/... ./service/desktop/... ./router/desktop/... ./middleware/...
+	@cd server && $(HOST_GO_ENV) CGO_ENABLED=0 go build -tags desktop ./...
 
 test-agent-platform:
 	@cd server && $(HERMETIC_TEST_ENV) $(HOST_GO_ENV) go test ./contracts/agent/v1 ./contracts/credential/v1 ./service/agentturn ./api/agent/v1 ./cmd/agent-worker ./service/desktop/oauth ./api/desktop/oauth ./middleware ./config ./migrations ./scripts/guard
@@ -70,13 +70,15 @@ test-agent-platform-mysql:
 check-agent-worker-db:
 	@cd server && GOOS="$(HOST_GOOS)" GOARCH="$(HOST_GOARCH)" go run ./cmd/agent-worker -check-database -c "$(AGENT_WORKER_CONFIG)"
 
-test-electron:
-	@cd desktop/electron && npm test
+# The desktop shell's own tests: UI origin capability, privileged-route
+# refusal, containment headers. Replaced the Electron npm suite.
+test-shell:
+	@cd desktop/wails && $(HOST_GO_ENV) CGO_ENABLED=1 go test -tags desktop ./...
 
 test-desktop:
 	@./desktop/scripts/test-desktop.sh
 
-verify-core: baseline-audit test-boundaries test-config test-go test-go-desktop test-electron
+verify-core: baseline-audit test-boundaries test-config test-go test-go-desktop test-shell
 
 fmt-audit:
 	@cd server && gofmt -l .
@@ -84,8 +86,5 @@ fmt-audit:
 build-server:
 	@cd server && go build ./...
 
-build-sidecar:
-	@cd server && CGO_ENABLED=1 go build -tags desktop -o /private/tmp/workmax-desktop-sidecar ./cmd/workagent-desktop
-
-package-preflight:
-	@./desktop/scripts/build-mac.sh --preflight-only
+build-desktop:
+	@cd desktop/wails && CGO_ENABLED=1 go build -tags desktop -o /private/tmp/workmax-desktop .

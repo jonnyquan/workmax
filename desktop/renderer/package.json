@@ -1,0 +1,13 @@
+{
+  "name": "workmax-renderer-build",
+  "private": true,
+  "description": "Build-time only: compiles src/desktop-bridge.ts into the checked-in en/desktop/lib/ bundle. The renderer itself ships as plain JS and needs none of this at runtime.",
+  "scripts": {
+    "build:lib": "../scripts/build-renderer-lib.sh"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  },
+  "license": "AGPL-3.0-only",
+  "version": "0.1.0-p1-ea"
+}

@@ -244,6 +244,12 @@
         </div>
       </section>
     </main>
+    <!-- Wails shell only: the typed bridge library and the shim that installs
+         window.workmaxLocal / window.desktopBridge from same-origin requests.
+         Under Electron the preload has already installed both and shim.js
+         stands down, so the order below is safe in either shell. -->
+    <script src="./lib/desktop-bridge.js"></script>
+    <script src="./shim.js"></script>
     <script src="./renderer.js"></script>
   </body>
 </html>

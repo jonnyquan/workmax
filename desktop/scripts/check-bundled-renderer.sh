@@ -22,7 +22,17 @@ node - "$renderer_dir" <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 const rendererDir = process.argv[2];
-const allowed = new Set(["index.html", "styles.css", "renderer.js"]);
+// The bundled renderer is an allowlist, not a directory copy: an unexpected
+// file here would be shipped and served to the webview. shim.js and its
+// generated bridge library are the Wails shell's replacement for the Electron
+// preload — see desktop/renderer/en/desktop/shim.js.
+const allowed = new Set([
+  "index.html",
+  "styles.css",
+  "renderer.js",
+  "shim.js",
+  "lib/desktop-bridge.js",
+]);
 const unexpected = [];
 
 function walk(dir) {

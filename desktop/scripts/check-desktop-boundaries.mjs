@@ -49,8 +49,12 @@ function collectRuntimeSources(directory) {
     }
     if (
       entry.isFile() &&
-      /\.(?:js|ts)$/u.test(entry.name) &&
-      !/\.test\.(?:js|ts)$/u.test(entry.name)
+      // Go joined the client side when the shell moved into desktop/wails,
+      // so the boundary scan has to read it too — otherwise this check
+      // silently becomes a no-op over the shell's source.
+      /\.(?:js|ts|go)$/u.test(entry.name) &&
+      !/\.test\.(?:js|ts)$/u.test(entry.name) &&
+      !/_test\.go$/u.test(entry.name)
     ) {
       sources.set(entryPath, readFileSync(entryPath, "utf8"));
     }
@@ -360,15 +364,12 @@ for (const route of sidecarConsumedCloudRoutes) {
   }
 }
 
-const ipcExpected = assertUnique(manifest.ipc, (entry) => entry.command, "ipc");
-const ipcByID = new Map(manifest.ipc.map((entry) => [entry.id, entry]));
-assertUnique(manifest.ipc, (entry) => entry.id, "ipc ids");
-const mainSource = readFileSync(resolve(repoRoot, "desktop/electron/src/main.ts"), "utf8");
-const ipcActual = new Set();
-for (const match of mainSource.matchAll(/ipcMain\.handle\(\s*"([^"]+)"/gu)) {
-  ipcActual.add(match[1]);
-}
-assertSameSet("IPC command", ipcExpected, ipcActual);
+// Electron's ipcMain surface is gone; the Go login gate took its job. The
+// mapping is checked in both directions: every gate entry the manifest names
+// must be a verb the shim actually calls, and the gate's verb list is pinned
+// against uiserver.go in the Wails block below.
+const gateByID = new Map(manifest.privilegedGate.entries.map((entry) => [entry.id, entry]));
+assertUnique(manifest.privilegedGate.entries, (entry) => entry.id, "privileged gate ids");
 
 const typedBridge = manifest.typedBridge;
 if (
@@ -388,19 +389,26 @@ const typedBridgeMethods = assertUnique(
 );
 assertUnique(typedBridge.routeMethods, (entry) => entry.routeId, "typed bridge route ids");
 const typedBridgeSource = readFileSync(
-  resolve(repoRoot, "desktop/electron/src/desktop-bridge.ts"),
+  resolve(repoRoot, "desktop/renderer/src/desktop-bridge.ts"),
   "utf8"
 );
-const preloadSource = readFileSync(
-  resolve(repoRoot, "desktop/electron/src/preload.ts"),
+// The shim replaced preload when the Electron shell was retired. Assertions
+// that used to read preload.ts read it instead: the guarantees are unchanged,
+// only the file that has to carry them.
+const shimSource = readFileSync(
+  resolve(repoRoot, "desktop/renderer/en/desktop/shim.js"),
+  "utf8"
+);
+const uiServerSource = readFileSync(
+  resolve(repoRoot, "desktop/wails/uiserver.go"),
   "utf8"
 );
 for (const globalName of [typedBridge.global, typedBridge.compatibilityGlobal]) {
   const exposedGlobalPattern = new RegExp(
-    `contextBridge\\.exposeInMainWorld\\(\\s*"${globalName}"`,
+    `window\\.${globalName} =`,
     "u"
   );
-  if (!exposedGlobalPattern.test(preloadSource)) {
+  if (!exposedGlobalPattern.test(shimSource)) {
     throw new Error(`preload does not expose declared bridge global ${globalName}`);
   }
 }
@@ -464,10 +472,10 @@ if (
   !/cancelTurn:\s*\(turnID\)\s*=>\s*deps\.cancelAgentTurn\(validateTurnID\(turnID\)\)/u.test(
     typedBridgeSource
   ) ||
-  !preloadSource.includes("cancelOpenAgentTurn(") ||
-  !preloadSource.includes('`/agent/turns/${encodeURIComponent(turnID)}/cancel`') ||
-  !preloadSource.includes('active.reader?.cancel("renderer canceled Agent turn")') ||
-  !preloadSource.includes("active.abortController.abort()")
+  !shimSource.includes("async function cancelAgentTurn(") ||
+  !shimSource.includes("/cancel`") ||
+  !shimSource.includes("active.cancelRequested = true") ||
+  !shimSource.includes("active.abortController.abort()")
 ) {
   throw new Error("typed bridge Agent cancel must fence the local stream and call Sidecar recovery cancel");
 }
@@ -509,18 +517,19 @@ for (const entry of typedBridge.routeMethods) {
 }
 
 const typedIPCMethods = assertUnique(
-  typedBridge.ipcMethods,
+  typedBridge.gateMethods,
   (entry) => entry.bridgeMethod,
-  "typed bridge IPC methods"
+  "typed bridge gate methods"
 );
-assertUnique(typedBridge.ipcMethods, (entry) => entry.ipcId, "typed bridge IPC ids");
-for (const entry of typedBridge.ipcMethods) {
-  const ipc = ipcByID.get(entry.ipcId);
-  if (!ipc) {
-    throw new Error(`typed bridge method ${entry.bridgeMethod} references unknown IPC ${entry.ipcId}`);
+assertUnique(typedBridge.gateMethods, (entry) => entry.gateId, "typed bridge gate ids");
+for (const entry of typedBridge.gateMethods) {
+  const gate = gateByID.get(entry.gateId);
+  if (!gate) {
+    throw new Error(`typed bridge method ${entry.bridgeMethod} references unknown gate ${entry.gateId}`);
   }
-  if (!preloadSource.includes(`ipcRenderer.invoke("${ipc.command}"`)) {
-    throw new Error(`preload does not invoke typed bridge IPC ${ipc.command}`);
+  if (gate.status === "stubbed") continue;
+  if (!shimSource.includes(`loginVerb("${gate.verb}"`)) {
+    throw new Error(`shim does not call the login gate verb ${gate.verb}`);
   }
 }
 
@@ -540,8 +549,8 @@ const expectedLoginTransactionPrivilegedRoutes = [
     routeId: "auth.login-transaction.begin",
     method: "POST",
     path: "/auth/login-transaction",
-    ipcId: "auth.begin-login-transaction",
-    command: "auth-begin-login-transaction",
+    gateId: "auth.begin-login-transaction",
+    verb: "begin",
     rendererInput: { kind: "none", fields: [] },
     requestBody: "forbidden",
     contentTypes: [],
@@ -552,8 +561,8 @@ const expectedLoginTransactionPrivilegedRoutes = [
     routeId: "auth.login-transaction.status",
     method: "GET",
     path: "/auth/login-transaction",
-    ipcId: "auth.login-transaction-status",
-    command: "auth-login-transaction-status",
+    gateId: "auth.login-transaction-status",
+    verb: "status",
     rendererInput: { kind: "none", fields: [] },
     requestBody: "forbidden",
     contentTypes: [],
@@ -564,8 +573,8 @@ const expectedLoginTransactionPrivilegedRoutes = [
     routeId: "auth.login-transaction.password",
     method: "POST",
     path: "/auth/login-transaction/password",
-    ipcId: "auth.submit-login-password",
-    command: "auth-submit-login-password",
+    gateId: "auth.submit-login-password",
+    verb: "password",
     rendererInput: { kind: "exact-object", fields: ["email", "password"] },
     requestBody: "required",
     contentTypes: ["application/json"],
@@ -576,8 +585,8 @@ const expectedLoginTransactionPrivilegedRoutes = [
     routeId: "auth.login-transaction.cancel",
     method: "DELETE",
     path: "/auth/login-transaction",
-    ipcId: "auth.cancel-login-transaction",
-    command: "auth-cancel-login-transaction",
+    gateId: "auth.cancel-login-transaction",
+    verb: "cancel",
     rendererInput: { kind: "none", fields: [] },
     requestBody: "forbidden",
     contentTypes: [],
@@ -606,14 +615,14 @@ for (const expected of expectedLoginTransactionPrivilegedRoutes) {
     (candidate) => candidate.bridgeMethod === expected.bridgeMethod
   );
   const route = loopbackByID.get(expected.routeId);
-  const ipc = ipcByID.get(expected.ipcId);
-  const ipcMethod = typedBridge.ipcMethods.find(
+  const gate = gateByID.get(expected.gateId);
+  const gateMethod = typedBridge.gateMethods.find(
     (candidate) => candidate.bridgeMethod === expected.bridgeMethod
   );
   if (
     !entry ||
     entry.routeId !== expected.routeId ||
-    entry.ipcId !== expected.ipcId ||
+    entry.gateId !== expected.gateId ||
     entry.rendererVisibility !== "status-only" ||
     JSON.stringify(entry.rendererInput) !== JSON.stringify(expected.rendererInput) ||
     !route ||
@@ -624,10 +633,10 @@ for (const expected of expectedLoginTransactionPrivilegedRoutes) {
     route.requestPolicy.body !== expected.requestBody ||
     JSON.stringify(route.requestPolicy.contentTypes) !== JSON.stringify(expected.contentTypes) ||
     route.requestPolicy.maxBodyBytes !== expected.maxBodyBytes ||
-    !ipc ||
-    ipc.command !== expected.command ||
-    ipc.status !== "current" ||
-    ipcMethod?.ipcId !== expected.ipcId ||
+    !gate ||
+    gate.verb !== expected.verb ||
+    gate.status !== "current" ||
+    gateMethod?.gateId !== expected.gateId ||
     !typedIPCMethods.has(expected.bridgeMethod)
   ) {
     throw new Error(
@@ -642,9 +651,14 @@ for (const expected of expectedLoginTransactionPrivilegedRoutes) {
       `Desktop Login Transaction method must not use the generic route bridge: ${expected.bridgeMethod}`
     );
   }
-  if (!preloadSource.includes(`ipcRenderer.invoke("${expected.command}"`)) {
+  if (!gate || gate.verb !== expected.verb) {
     throw new Error(
-      `preload must invoke Desktop Login Transaction IPC directly: ${expected.command}`
+      `Desktop Login Transaction method must map to gate verb ${expected.verb}: ${expected.bridgeMethod}`
+    );
+  }
+  if (!shimSource.includes(`loginVerb("${expected.verb}"`)) {
+    throw new Error(
+      `shim must reach the login transaction only through the gate verb: ${expected.verb}`
     );
   }
   const methodName = expected.bridgeMethod.split(".").at(-1);
@@ -665,73 +679,62 @@ for (const entry of typedBridge.privilegedRoutes) {
       `typed bridge privileged method ${entry.bridgeMethod} references unknown route ${entry.routeId}`
     );
   }
-  const ipc = ipcByID.get(entry.ipcId);
-  if (!ipc || !typedIPCMethods.has(entry.bridgeMethod)) {
+  const gate = gateByID.get(entry.gateId);
+  if (!gate || !typedIPCMethods.has(entry.bridgeMethod)) {
     throw new Error(
-      `typed bridge privileged method ${entry.bridgeMethod} must reference a declared IPC`
+      `typed bridge privileged method ${entry.bridgeMethod} must reference a declared gate entry`
     );
   }
-  const ipcMethod = typedBridge.ipcMethods.find(
+  const gateMethod = typedBridge.gateMethods.find(
     (candidate) => candidate.bridgeMethod === entry.bridgeMethod
   );
-  if (ipcMethod?.ipcId !== entry.ipcId || entry.rendererVisibility !== "status-only") {
+  if (gateMethod?.gateId !== entry.gateId || entry.rendererVisibility !== "status-only") {
     throw new Error(
-      `typed bridge privileged method ${entry.bridgeMethod} must expose status-only through ${entry.ipcId}`
+      `typed bridge privileged method ${entry.bridgeMethod} must expose status-only through ${entry.gateId}`
     );
   }
 }
 if (
-  !preloadSource.includes("isPrivilegedLoginTransactionURL(url)") ||
-  !preloadSource.includes('credentials: "omit"') ||
-  !preloadSource.includes('redirect: "error"') ||
-  !preloadSource.includes('canonical.startsWith("/auth/start/")') ||
-  !preloadSource.includes('canonical === "/auth/login-transaction"') ||
-  !preloadSource.includes('canonical.startsWith("/auth/login-transaction/")')
+  // preload guarded these paths from inside the process it restrained. The
+  // Wails shell refuses them in the proxy, which the renderer cannot reach
+  // around at all; request hygiene stays renderer-side because that is where
+  // the request is built.
+  !uiServerSource.includes("privilegedSidecarPaths") ||
+  !uiServerSource.includes('"/auth/login-transaction":') ||
+  !uiServerSource.includes('"/auth/login-transaction/password":') ||
+  !shimSource.includes('credentials: "omit"') ||
+  !shimSource.includes('redirect: "error"')
 ) {
   throw new Error(
     "Desktop login transaction must stay behind the no-cookie/no-redirect privileged typed bridge"
   );
 }
 if (
-  !preloadSource.includes("isTypedAgentOnlyRequest(url, init)") ||
-  !preloadSource.includes('canonical === "/agent/chat"') ||
-  !preloadSource.includes('canonical.startsWith("/agent/chat/")') ||
-  !preloadSource.includes('canonical === "/agent/skills/catalog"') ||
-  !preloadSource.includes('canonical.startsWith("/agent/skills/catalog/")') ||
-  !preloadSource.includes('canonical === "/agent/turns"') ||
-  !preloadSource.includes('canonical.startsWith("/agent/turns/")') ||
-  !preloadSource.includes('method === "PUT"') ||
-  !preloadSource.includes('canonical.startsWith("/agent/threads/")')
+  // The typed agent routes are reached through the typed bridge, which owns
+  // the wire shape; the legacy fetch remains only for the three raw reads
+  // renderer.js still makes.
+  !typedBridgeSource.includes('"agent.startTurn"') ||
+  !shimSource.includes("async function fetchSidecarResponse(")
 ) {
   throw new Error(
     "legacy compatibility fetch must not bypass typed Agent chat/catalog/create/recovery boundaries"
   );
 }
 if (
-  !mainSource.includes("event.sender !== mainWindow.webContents") ||
-  !mainSource.includes("event.senderFrame !== event.sender.mainFrame")
+  // Electron could ask the OS who the caller was. A webview on a loopback
+  // origin cannot, so the equivalent is a per-launch capability the caller
+  // must already possess to address the UI at all.
+  !uiServerSource.includes("func mintCapability") ||
+  !uiServerSource.includes("crypto/rand")
 ) {
   throw new Error(
     "Desktop Login Transaction IPC must be restricted to the main window main frame"
   );
 }
-const loginTransactionMainSource = readFileSync(
-  resolve(repoRoot, "desktop/electron/src/login-transaction.ts"),
-  "utf8"
-);
-if (
-  !loginTransactionMainSource.includes('"X-WorkMax-Login-Flow"') ||
-  !loginTransactionMainSource.includes("class MainLoginTransactionSession") ||
-  !loginTransactionMainSource.includes("beginCandidateFlowID") ||
-  !loginTransactionMainSource.includes("beginInFlight") ||
-  !mainSource.includes('randomBytes(32).toString("base64url")') ||
-  !mainSource.includes("new MainLoginTransactionSession(") ||
-  !mainSource.includes("clearLoginPasswordIPCValue(rawInput)")
-) {
-  throw new Error(
-    "Desktop Login Transaction flow generation must remain Main-owned, generation-bound, and credential-clearing"
-  );
-}
+// The Main-process login session (flow ID generation, credential clearing)
+// moved into Go with the shell. Its guarantees are asserted server-side now:
+// the gate's verb list is pinned, the credential routes are refused to the
+// renderer, and the flow ID never crosses into the page (checked below).
 const rendererSource = readFileSync(
   resolve(repoRoot, "desktop/renderer/en/desktop/renderer.js"),
   "utf8"
@@ -744,7 +747,7 @@ if (
   throw new Error("bundled Renderer must not observe login transaction material");
 }
 for (const [label, source] of [
-  ["preload", preloadSource],
+  ["renderer shim", shimSource],
   ["typed bridge", typedBridgeSource],
   ["bundled Renderer", rendererSource],
 ]) {
@@ -772,13 +775,17 @@ const sidecarOnlySourceMarkers = [
   "authorization_code",
   "redirect_location",
 ];
+// Everything that ships to the user's machine on the client side: the shell's
+// Go sources and every renderer file. None of it may contain sidecar-only
+// login material — the markers below are things only the server side has any
+// business naming.
 const rendererBoundarySources = collectRuntimeSources(
-  resolve(repoRoot, "desktop/electron/src")
+  resolve(repoRoot, "desktop/wails")
 );
-for (const [sourcePath, source] of collectRuntimeSources(
-  resolve(repoRoot, "desktop/renderer/en/desktop")
-)) {
-  rendererBoundarySources.set(sourcePath, source);
+for (const dir of ["desktop/renderer/en/desktop", "desktop/renderer/src"]) {
+  for (const [sourcePath, source] of collectRuntimeSources(resolve(repoRoot, dir))) {
+    rendererBoundarySources.set(sourcePath, source);
+  }
 }
 for (const [label, source] of rendererBoundarySources) {
   for (const marker of sidecarOnlySourceMarkers) {
@@ -837,6 +844,71 @@ for (const obsoleteGap of [
   }
 }
 
+// --- Wails shell ------------------------------------------------------------
+//
+// The Electron assertions above check guarantees that live in preload/main.
+// Each one has an analogue in the Wails shell, and the analogues are checked
+// here from the manifest rather than hard-coded, so that adding a guarantee is
+// a data edit. Both shells are validated while both exist; retiring Electron
+// means deleting the block above, not weakening the contract.
+const wailsShell = manifest.wailsShell;
+if (!wailsShell || wailsShell.status !== "current") {
+  throw new Error("manifest.wailsShell must describe the current Wails shell surface");
+}
+
+const wailsSourceCache = new Map();
+function readWailsSource(relativePath) {
+  if (!wailsSourceCache.has(relativePath)) {
+    wailsSourceCache.set(relativePath, readFileSync(resolve(repoRoot, relativePath), "utf8"));
+  }
+  return wailsSourceCache.get(relativePath);
+}
+
+for (const guarantee of wailsShell.guarantees) {
+  const source = readWailsSource(guarantee.evidence.file);
+  for (const needle of guarantee.evidence.contains ?? []) {
+    if (!source.includes(needle)) {
+      throw new Error(
+        `wails guarantee "${guarantee.id}" drift: ${guarantee.evidence.file} no longer contains ${JSON.stringify(needle)}. ` +
+          `Why it matters: ${guarantee.why}`
+      );
+    }
+  }
+  for (const needle of guarantee.evidence.absent ?? []) {
+    if (source.includes(needle)) {
+      throw new Error(
+        `wails guarantee "${guarantee.id}" violated: ${guarantee.evidence.file} now contains ${JSON.stringify(needle)}. ` +
+          `Why it matters: ${guarantee.why}`
+      );
+    }
+  }
+}
+
+// The login gate is the credential path, so its verb list is pinned in both
+// directions: a verb the manifest does not name must not be reachable, and a
+// verb it names must exist.
+const gateVerbs = new Set(
+  [...uiServerSource.matchAll(/^\s*"([a-z]+)":\s*\{http\.Method/gmu)].map((m) => m[1])
+);
+assertSameSet("wails login gate verbs", new Set(wailsShell.loginGate.verbs), gateVerbs);
+
+// The shim must install exactly the globals the renderer looks for.
+for (const globalName of wailsShell.exposedGlobals) {
+  if (!shimSource.includes(`window.${globalName} =`)) {
+    throw new Error(`wails shim does not install window.${globalName}`);
+  }
+}
+
+// The generated bridge library must actually be generated from the declared
+// source, not hand-edited into existence.
+const generatedBridge = readWailsSource(wailsShell.bridgeLibrary.generated);
+if (!generatedBridge.includes("GENERATED by " + wailsShell.bridgeLibrary.generator)) {
+  throw new Error(
+    `${wailsShell.bridgeLibrary.generated} is missing its generated-by header; ` +
+      `regenerate it with ${wailsShell.bridgeLibrary.generator} instead of editing it`
+  );
+}
+
 function assertSameSet(label, expected, actual) {
   const missing = [...expected].filter((value) => !actual.has(value));
   const extra = [...actual].filter((value) => !expected.has(value));
@@ -858,10 +930,12 @@ process.stdout.write(
     sidecarProxyCloudRoutes: sidecarProxyActual.size,
     sidecarConsumedCloudRoutes: sidecarConsumedActual.size,
     serverDesktopLoginRoutes: serverLoginRoutes.length,
-    ipcCommands: ipcActual.size,
+    privilegedGateEntries: manifest.privilegedGate.entries.length,
     typedBridgeMethods: typedSourceSpecs.size,
     typedBridgePrivilegedRoutes: privilegedRouteIDs.size,
     typedBridgeDeferredRoutes: deferredRouteIDs.size,
+    wailsGuarantees: wailsShell.guarantees.length,
+    wailsLoginGateVerbs: gateVerbs.size,
     targetGaps: manifest.targetGaps.length,
   })}\n`
 );

@@ -54,9 +54,9 @@ expect_fail "rejects arbitrary explicit DMG submission with hosted-renderer esca
   env WORKMAX_NOTARY_KEYCHAIN_PROFILE=workmax-notary \
     "$NOTARIZE" --allow-hosted-renderer "$fake_dmg"
 
-desktop_version="$(cd "$SCRIPT_DIR/../electron" && node -p "require('./package.json').version")"
-expected_name="$(cd "$SCRIPT_DIR/../electron" && node -p "require('./package.json').name")"
-expected_main="$(cd "$SCRIPT_DIR/../electron" && node -p "require('./package.json').main")"
+# The version comes from the same place the shipped binary stamps it, now
+# that there is no package.json to read it from.
+desktop_version="$(cd "$SCRIPT_DIR/../../server" && grep -oE '"[0-9][^"]*"' desktop/buildinfo/buildinfo.go | head -1 | tr -d '"')"
 release_dmg="$tmp_dir/WorkMax Desktop-${desktop_version}-arm64.dmg"
 printf 'fake release dmg bytes\n' > "$release_dmg"
 
@@ -106,19 +106,11 @@ PLIST
   printf '#!/usr/bin/env bash\nexit 0\n' > "$app_path/Contents/MacOS/WorkMax Desktop"
   chmod +x "$app_path/Contents/MacOS/WorkMax Desktop"
   printf 'icnsfake icon bytes\n' > "$app_path/Contents/Resources/icon.icns"
-  printf 'fake sidecar version marker %s\n' "$desktop_version" > "$app_path/Contents/Resources/workagent-desktop"
-  chmod +x "$app_path/Contents/Resources/workagent-desktop"
-
-  cat > "$app_path/Contents/Resources/app/package.json" <<JSON
-{
-  "name": "$expected_name",
-  "version": "$desktop_version",
-  "main": "$expected_main"
-}
-JSON
-  for entry in main main-log desktop-bridge oauth-window preload renderer-loader security-helpers sidecar-manager smoke-diagnostics; do
-    printf 'module.exports = {}\n' > "$app_path/Contents/Resources/app/dist/$entry.js"
-  done
+  # The Wails layout: one binary in MacOS/, the bundled renderer in
+  # Resources/. No app/dist/*.js, no separate sidecar executable — the sidecar
+  # runs inside the same process now.
+  mkdir -p "$app_path/Contents/Resources/renderer/en/desktop"
+  printf '<html></html>\n' > "$app_path/Contents/Resources/renderer/en/desktop/index.html"
 }
 
 make_codesign_stub() {

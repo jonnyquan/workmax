@@ -5,7 +5,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 cd "$repo_root"
 
-for required_file in LICENSE THIRD_PARTY_NOTICES.md server/go.mod server/go.sum desktop/electron/package.json desktop/electron/package-lock.json; do
+for required_file in LICENSE THIRD_PARTY_NOTICES.md server/go.mod server/go.sum desktop/renderer/package.json desktop/renderer/package-lock.json; do
   if [ ! -s "$required_file" ]; then
     echo "license-audit: missing or empty required file: $required_file" >&2
     exit 1
@@ -19,8 +19,8 @@ fi
 
 node <<'NODE'
 const fs = require("node:fs");
-const packageJSON = JSON.parse(fs.readFileSync("desktop/electron/package.json", "utf8"));
-const lock = JSON.parse(fs.readFileSync("desktop/electron/package-lock.json", "utf8"));
+const packageJSON = JSON.parse(fs.readFileSync("desktop/renderer/package.json", "utf8"));
+const lock = JSON.parse(fs.readFileSync("desktop/renderer/package-lock.json", "utf8"));
 
 if (packageJSON.license !== "AGPL-3.0-only") {
   throw new Error(`desktop package license is ${packageJSON.license || "missing"}, want AGPL-3.0-only`);
@@ -29,8 +29,9 @@ if (lock.packages?.[""]?.license !== packageJSON.license) {
   throw new Error("desktop package-lock root license does not match package.json");
 }
 
-// These are the reviewed license expressions currently present in the
-// build-only Electron dependency tree. Any new expression requires review.
+// Reviewed license expressions present in the desktop's only npm tree, which
+// since the Electron retirement is build-time TypeScript and nothing else —
+// none of it ships. Any new expression requires review.
 const allowed = new Set([
   "(MIT OR CC0-1.0)",
   "(WTFPL OR MIT)",
@@ -54,9 +55,9 @@ for (const [name, metadata] of Object.entries(lock.packages ?? {})) {
   }
 }
 if (failures.length > 0) {
-  throw new Error(`Electron dependency license review failed:\n${failures.join("\n")}`);
+  throw new Error(`Desktop npm dependency license review failed:\n${failures.join("\n")}`);
 }
-console.log(`license-audit: reviewed ${Object.keys(lock.packages ?? {}).length - 1} Electron dependency entries`);
+console.log(`license-audit: reviewed ${Object.keys(lock.packages ?? {}).length - 1} desktop npm dependency entries`);
 NODE
 
 xdb_path="server/resource/ip2region/ip2region.xdb"
@@ -81,7 +82,15 @@ fi
 (
   cd server
   GOFLAGS="-tags=desktop" go run github.com/google/go-licenses/v2@v2.0.1 \
-    check --ignore server ./cmd/workagent-desktop ./cmd/agent-worker
+    check --ignore server ./cmd/agent-worker
+)
+
+# The desktop shell is its own Go module, so it needs its own pass. It is what
+# actually ships to a user's machine, which is why it is audited at all.
+(
+  cd desktop/wails
+  GOFLAGS="-tags=desktop" CGO_ENABLED=1 go run github.com/google/go-licenses/v2@v2.0.1 \
+    check --ignore server --ignore workmax/desktop/wails .
 )
 
 echo "license-audit: WorkMax and distributable dependency checks passed"

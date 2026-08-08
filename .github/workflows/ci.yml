@@ -29,16 +29,13 @@ jobs:
           go-version: 1.25.4
           cache-dependency-path: server/go.sum
 
+      # Node is still needed for the boundary/renderer checkers, but the
+      # desktop shell no longer has npm dependencies: the renderer ships as
+      # plain JS with its bridge library checked in.
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: desktop/electron/package-lock.json
-
-      - name: Install Electron dependencies
-        run: npm ci
-        working-directory: desktop/electron
 
       - name: Run core verification
         run: make verify-core
@@ -60,18 +57,14 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: desktop/electron/package-lock.json
 
-      - name: Install Electron dependencies
-        run: npm ci
-        working-directory: desktop/electron
-
+      # The electron-builder-specific packaging tests went with the Electron
+      # shell. What survives is the pipeline that is not shell-specific:
+      # the bundled-renderer allowlist and the notarization plumbing. Wails
+      # packaging tests land with W4.
       - name: Run packaging policy tests
         run: |
-          ./desktop/scripts/build-mac.test.sh
           ./desktop/scripts/check-bundled-renderer.test.sh
-          ./desktop/scripts/inspect-mac-package.test.sh
           ./desktop/scripts/notarize-mac.test.sh
 
   secrets:

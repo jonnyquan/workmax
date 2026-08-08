@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# Smoke-test a running workagent-desktop sidecar over its loopback API.
+# Smoke-test a running WorkMax Desktop sidecar over its loopback API.
+#
+# Start one with:  ./desktop/scripts/dev.sh --serve-only
 #
 # Usage:
 #   WORKMAX_LOCAL_TOKEN=<token> ./desktop/scripts/smoke-local.sh --port <port>
@@ -46,7 +48,7 @@ Options:
                   Launch a second sidecar against the same diagnostics data_dir
                   and verify it exits before opening SQLite.
   --sidecar-binary
-                  Path to workagent-desktop for --check-pid-lock.
+                  Path to workmax-desktop for --check-pid-lock.
   --trigger-sync  POST /system/trigger-sync as part of the smoke. Requires an
                   active desktop session when the sidecar has TokenStore wired.
   --with-userinfo GET /auth/userinfo. Requires an authenticated sidecar.

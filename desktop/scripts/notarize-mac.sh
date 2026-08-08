@@ -94,16 +94,27 @@ if [ -z "$target" ]; then
   esac
 fi
 
-desktop_version="$(cd "$REPO_ROOT/desktop/electron" && node -p "require('./package.json').version")"
+# Where the packaged app lands is the packaging step's business, not this
+# script's. The codesign / notarytool / stapler / spctl pipeline below is the
+# part worth keeping across a shell migration, so the layout it operated on is
+# now an input rather than a hardcoded electron-builder path.
+#
+# W4 (Wails packaging) sets these; until then, pass them explicitly or hand
+# this script a .dmg path directly.
+release_dir="${WORKMAX_DESKTOP_RELEASE_DIR:-$REPO_ROOT/desktop/wails/release}"
+desktop_version="${WORKMAX_DESKTOP_VERSION:-}"
+if [ -z "$desktop_version" ]; then
+  desktop_version="$(cd "$REPO_ROOT/server" && grep -oE '"[0-9][^"]*"' desktop/buildinfo/buildinfo.go | head -1 | tr -d '"')"
+fi
 
 case "$target" in
   arm64)
-    dmg_path="$REPO_ROOT/desktop/electron/release/WorkMax Desktop-${desktop_version}-arm64.dmg"
-    app_path="$REPO_ROOT/desktop/electron/release/mac-arm64/WorkMax Desktop.app"
+    dmg_path="$release_dir/WorkMax Desktop-${desktop_version}-arm64.dmg"
+    app_path="$release_dir/mac-arm64/WorkMax Desktop.app"
     ;;
   x64)
-    dmg_path="$REPO_ROOT/desktop/electron/release/WorkMax Desktop-${desktop_version}-x64.dmg"
-    app_path="$REPO_ROOT/desktop/electron/release/mac/WorkMax Desktop.app"
+    dmg_path="$release_dir/WorkMax Desktop-${desktop_version}-x64.dmg"
+    app_path="$release_dir/mac/WorkMax Desktop.app"
     ;;
   *.dmg)
     dmg_path="$target"
@@ -139,15 +150,31 @@ fi
 if [ -n "$app_path" ]; then
   if [ ! -d "$app_path" ]; then
     echo "notarize-mac.sh: missing app bundle for inspection: $app_path" >&2
-    echo "  Run desktop/scripts/build-mac.sh $target first." >&2
+    echo "  Package the app first (Wails packaging lands in W4)." >&2
     exit 1
   fi
-  inspect_args=()
-  if [ "$allow_hosted_renderer" -eq 0 ]; then
-    inspect_args+=(--require-bundled-renderer)
+
+  # The bundle inspector was electron-builder-layout-specific and went with
+  # the Electron shell. Its gate — do not notarize a build whose renderer is
+  # not actually bundled — is a real property, so this fails closed rather
+  # than quietly dropping it: signature checks below still run, but a real
+  # submission is refused until a Wails-layout inspector exists.
+  inspector="$REPO_ROOT/desktop/scripts/inspect-mac-package.sh"
+  if [ -x "$inspector" ]; then
+    inspect_args=()
+    if [ "$allow_hosted_renderer" -eq 0 ]; then
+      inspect_args+=(--require-bundled-renderer)
+    fi
+    inspect_args+=(--require-app-icon --require-developer-id-signature)
+    "$inspector" "${inspect_args[@]}" "$app_path" >/dev/null
+  elif [ "$dry_run" -eq 0 ]; then
+    echo "notarize-mac.sh: no bundle inspector for the Wails layout yet" >&2
+    echo "  Refusing to notarize a bundle nothing has checked. Write" >&2
+    echo "  desktop/scripts/inspect-mac-package.sh for the Wails layout (W4) first." >&2
+    exit 1
+  else
+    echo "notarize-mac.sh: skipping bundle inspection (no inspector for the Wails layout yet)" >&2
   fi
-  inspect_args+=(--require-app-icon --require-developer-id-signature)
-  "$REPO_ROOT/desktop/scripts/inspect-mac-package.sh" "${inspect_args[@]}" "$app_path" >/dev/null
 
   if ! codesign_output="$(codesign -dv --verbose=4 "$app_path" 2>&1)"; then
     echo "notarize-mac.sh: app is not codesigned strongly enough for notarization" >&2

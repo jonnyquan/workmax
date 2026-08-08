@@ -1,87 +1,45 @@
 #!/usr/bin/env bash
+# Build and run WorkMax Desktop from source.
 #
-# Local dev orchestrator for WorkMax Desktop.
+#   ./desktop/scripts/dev.sh                 launch the app (webview + embedded sidecar)
+#   ./desktop/scripts/dev.sh --serve-only    sidecar only: no window, prints its loopback URL
+#   ./desktop/scripts/dev.sh --kill-check    the W1 SSE transport check
+#   ./desktop/scripts/dev.sh --verify-shim   load the shipped renderer shim and check its contract
 #
-# What this does:
-#   1. Builds the Go sidecar (workagent-desktop) for the host platform,
-#      placing the binary at desktop/electron/bin/workagent-desktop
-#   2. Restores Electron npm deps when required local binaries are missing
-#   3. Compiles desktop/electron/src/*.ts → dist/
-#   4. Selects an explicit trusted Desktop Renderer
-#   5. Launches Electron, which spawns the sidecar and opens the window
+# One binary, one build. The Electron shell and its separate sidecar process
+# are gone; --serve-only is what replaced "run the sidecar by hand", and it is
+# what the smoke scripts drive.
 #
-# Repo go env defaults to GOOS=linux GOARCH=amd64 for production
-# cross-compile, so this script detects the host platform and overrides
-# both vars explicitly (see desktop/README.md "Heads-up for local dev").
+# CGO is required on macOS: Wails binds Cocoa/WebKit through it, and the local
+# knowledge index (ONNX Runtime) needs it too.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && cd .. && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BIN_DIR="$REPO_ROOT/desktop/wails/bin"
+BINARY="$BIN_DIR/workmax-desktop"
 
-# Detect host platform → GOOS/GOARCH for the sidecar build.
-host_signature="$(uname -sm)"
-case "$host_signature" in
-  "Darwin arm64")   target_goos="darwin"; target_goarch="arm64" ;;
-  "Darwin x86_64")  target_goos="darwin"; target_goarch="amd64" ;;
-  "Linux x86_64")   target_goos="linux";  target_goarch="amd64" ;;
-  "Linux aarch64")  target_goos="linux";  target_goarch="arm64" ;;
-  *)
-    echo "dev.sh: unsupported host platform '$host_signature'" >&2
-    echo "  add a case for it above, then rerun." >&2
-    exit 1
-    ;;
-esac
+target_goos="$(go env GOHOSTOS)"
+target_goarch="$(go env GOHOSTARCH)"
 
-bin_dir="$REPO_ROOT/desktop/electron/bin"
-binary_path="$bin_dir/workagent-desktop"
-desktop_version="$(cd "$REPO_ROOT/desktop/electron" && node -p "require('./package.json').version")"
-
-# Development never inherits an implicit hosted Renderer. Default to the
-# repository-bundled Desktop shell so this workspace is self-contained. To use
-# a live development server, explicitly set WORKMAX_DESKTOP_RENDERER_URL to a
-# loopback /desktop route. Remote development renderers additionally require a
-# comma-separated bare HTTPS allowlist in
-# WORKMAX_DESKTOP_TRUSTED_RENDERER_ORIGINS.
-if [ "${WORKMAX_DESKTOP_RENDERER_URL+x}" != "x" ]; then
-  bundled_renderer_entry="$REPO_ROOT/desktop/renderer/en/desktop/index.html"
-  if [ ! -s "$bundled_renderer_entry" ]; then
-    echo "dev.sh: bundled Desktop renderer is missing: $bundled_renderer_entry" >&2
-    exit 1
-  fi
-  WORKMAX_DESKTOP_RENDERER_URL="$(node -e 'const { pathToFileURL } = require("node:url"); console.log(pathToFileURL(process.argv[1]).toString())' "$bundled_renderer_entry")"
-  export WORKMAX_DESKTOP_RENDERER_URL
-  echo "==> renderer: bundled development shell"
-elif [ -z "$WORKMAX_DESKTOP_RENDERER_URL" ]; then
-  echo "dev.sh: WORKMAX_DESKTOP_RENDERER_URL must not be empty" >&2
-  exit 1
-else
-  echo "==> renderer: explicitly configured Desktop URL"
+# The renderer's generated bridge library is checked in, so a normal dev run
+# needs no TypeScript toolchain. Regenerate only when the source is newer.
+lib="$REPO_ROOT/desktop/renderer/en/desktop/lib/desktop-bridge.js"
+src="$REPO_ROOT/desktop/renderer/src/desktop-bridge.ts"
+if [ ! -f "$lib" ] || [ "$src" -nt "$lib" ]; then
+  echo "==> regenerating renderer bridge library"
+  "$REPO_ROOT/desktop/scripts/build-renderer-lib.sh"
 fi
 
-echo "==> building Go sidecar for $target_goos/$target_goarch (version=$desktop_version)"
-mkdir -p "$bin_dir"
-( cd "$REPO_ROOT/server" \
+echo "==> building workmax-desktop for $target_goos/$target_goarch"
+mkdir -p "$BIN_DIR"
+( cd "$REPO_ROOT/desktop/wails" \
   && GOOS="$target_goos" GOARCH="$target_goarch" CGO_ENABLED=1 \
-     go build -tags desktop \
-     -ldflags "-X server/desktop/buildinfo.Version=$desktop_version" \
-     -o "$binary_path" ./cmd/workagent-desktop )
-echo "    built: $binary_path"
-sidecar_version="$("$binary_path" --version)"
-if [ "$sidecar_version" != "$desktop_version" ]; then
-  echo "dev.sh: sidecar version mismatch: binary=$sidecar_version package=$desktop_version" >&2
-  exit 1
-fi
-echo "    verified sidecar version: $sidecar_version"
+     go build -tags desktop -o "$BINARY" . )
+echo "    built: $BINARY"
 
-cd "$REPO_ROOT/desktop/electron"
+# Point the app at the working tree's renderer so edits appear on relaunch
+# without a packaging step. Packaged builds resolve this from the bundle.
+export WORKMAX_DESKTOP_RENDERER_DIR="${WORKMAX_DESKTOP_RENDERER_DIR:-$REPO_ROOT/desktop/renderer/en/desktop}"
+echo "==> renderer: $WORKMAX_DESKTOP_RENDERER_DIR"
 
-if [ ! -d node_modules ] || [ ! -x node_modules/.bin/tsc ] || [ ! -x node_modules/.bin/electron ]; then
-  echo "==> installing Electron npm deps"
-  npm ci
-fi
-
-echo "==> compiling Electron TypeScript"
-npm run build --silent
-
-echo "==> launching Electron"
-exec npm start
+exec "$BINARY" "$@"

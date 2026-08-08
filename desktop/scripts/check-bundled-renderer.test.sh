@@ -2,7 +2,7 @@
 #
 # Regression tests for check-bundled-renderer.sh using disposable renderer
 # fixtures. These cover source/package preflight failures before build-mac.sh
-# invokes electron-builder.
+# packages the app.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
