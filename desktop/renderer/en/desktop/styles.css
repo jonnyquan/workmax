@@ -64,10 +64,24 @@ textarea:focus-visible {
 
 .shell {
   display: grid;
-  grid-template-columns: 340px minmax(0, 1fr);
+  /* Three columns: conversations, the conversation itself, and the context of
+     the run. The middle one is the only one that flexes — the rails carry
+     fixed-width lists and reading them is easier at a stable width. */
+  grid-template-columns: 340px minmax(0, 1fr) 340px;
   width: 100vw;
   height: 100vh;
   overflow: hidden;
+}
+
+/* Below this the third column costs more than it explains, so it folds away
+   rather than squeezing the conversation. */
+@media (max-width: 1180px) {
+  .shell {
+    grid-template-columns: 300px minmax(0, 1fr);
+  }
+  .context-panel {
+    display: none;
+  }
 }
 
 .sidebar {
@@ -753,4 +767,146 @@ textarea:focus-visible {
   .turn-recovery-card {
     width: calc(100% - 44px);
   }
+}
+
+
+/* ---------------------------------------------------------------------------
+   Task context panel
+   ---------------------------------------------------------------------------
+   The right rail answers "what is this run made of": which steps have run,
+   what it was given, what it produced. Everything here is derived from state
+   the renderer already holds or reads back from the sidecar — nothing is
+   displayed that the desktop cannot actually supply.
+*/
+
+.context-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-y: auto;
+  border-left: 1px solid #20242d;
+  background: #101116;
+}
+
+.context-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid #20242d;
+}
+
+.context-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #e5e7eb;
+}
+
+.context-count {
+  font-size: 12px;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+
+.context-section {
+  padding: 14px 16px;
+  border-bottom: 1px solid #191c24;
+}
+
+.context-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #9ca3af;
+}
+
+.context-section-meta {
+  font-size: 11px;
+  font-weight: 400;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+
+.run-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.run-step {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: #d1d5db;
+}
+
+/* The marker carries the state, so it must not rely on colour alone. */
+.run-step-mark {
+  font-size: 12px;
+  line-height: 1.4;
+  color: #6b7280;
+}
+
+.run-step.is-complete .run-step-mark { color: #34d399; }
+.run-step.is-active .run-step-mark { color: #60a5fa; }
+.run-step.is-failed .run-step-mark { color: #f87171; }
+
+.run-step.is-pending .run-step-label { color: #6b7280; }
+
+.run-step-detail {
+  font-size: 11px;
+  color: #6b7280;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.context-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.context-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid #20242d;
+  border-radius: 8px;
+  background: #14161c;
+}
+
+.context-item-name {
+  font-size: 12px;
+  color: #e5e7eb;
+  word-break: break-all;
+}
+
+.context-item-meta {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.context-item.is-missing .context-item-name { color: #9ca3af; }
+.context-item.is-missing .context-item-meta { color: #f87171; }
+
+.context-empty {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #6b7280;
 }

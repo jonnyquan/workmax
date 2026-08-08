@@ -243,6 +243,41 @@
           </form>
         </div>
       </section>
+      <aside class="context-panel" id="context-panel">
+        <header class="context-header">
+          <h2 class="context-title">Task context</h2>
+          <span class="context-count" id="context-count">0</span>
+        </header>
+
+        <section class="context-section" id="context-run">
+          <h3 class="context-section-title">
+            Run overview
+            <span class="context-section-meta" id="run-overview-meta">0/4</span>
+          </h3>
+          <ol class="run-steps" id="run-overview-list"></ol>
+        </section>
+
+        <section class="context-section" id="context-sources">
+          <h3 class="context-section-title">
+            Sources
+            <span class="context-section-meta" id="sources-meta">0</span>
+          </h3>
+          <ul class="context-list" id="sources-list"></ul>
+          <p class="context-empty" id="sources-empty">No source files yet.</p>
+        </section>
+
+        <section class="context-section" id="context-deliverables">
+          <h3 class="context-section-title">
+            Deliverables
+            <span class="context-section-meta" id="deliverables-meta">0</span>
+          </h3>
+          <ul class="context-list" id="deliverables-list"></ul>
+          <p class="context-empty" id="deliverables-empty">
+            Local turns produce text, not files. Agent-generated deliverables
+            arrive with the cloud route.
+          </p>
+        </section>
+      </aside>
     </main>
     <!-- Wails shell only: the typed bridge library and the shim that installs
          window.workmaxLocal / window.desktopBridge from same-origin requests.

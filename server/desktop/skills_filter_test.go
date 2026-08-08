@@ -6,13 +6,13 @@ import "testing"
 
 func TestIsAgentModeAllowed(t *testing.T) {
 	cases := map[string]bool{
-		"ppt":             true,
-		"":                true, // empty = sidecar normalizes to DefaultDesktopAgentMode
-		"flashCard":       false,
-		"character":       false,
-		"marketingPoster": false,
+		"ppt":                true,
+		"":                   true, // empty = sidecar normalizes to DefaultDesktopAgentMode
+		"flashCard":          false,
+		"character":          false,
+		"marketingPoster":    false,
 		"ai.workmax.ppt.svc": false, // future namespaced form is not the same string
-		"PPT":             false, // case-sensitive on purpose; the cloud is too
+		"PPT":                false, // case-sensitive on purpose; the cloud is too
 	}
 	for in, want := range cases {
 		if got := IsAgentModeAllowed(in); got != want {

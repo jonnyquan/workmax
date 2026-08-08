@@ -116,3 +116,53 @@ func (s *Server) indexUploadedFile(uid uint64, fileID int64) {
 		log.Printf("knowledge: index file %d (uid %d): %v", fileID, uid, err)
 	}
 }
+
+// threadFileListResponse mirrors the shape of the other local-history list
+// routes: a bounded items array and its count, so the renderer never has to
+// guess whether an empty list means "none" or "not loaded".
+type threadFileListResponse struct {
+	Items []localrender.ThreadFile `json:"items"`
+	Count int                      `json:"count"`
+}
+
+// handleListThreadFiles handles GET /agent/threads/:uuid/files.
+//
+// The upload route has always persisted these rows, but nothing could read
+// them back: the renderer knew only about files it had uploaded during the
+// current session, so reopening a thread showed no attachments even though
+// they were still on disk and still usable as model context. This is what the
+// right-hand Sources panel reads.
+func (s *Server) handleListThreadFiles(c *gin.Context) {
+	if s.cfg.LocalFiles == nil || s.cfg.DB == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "file_list_unavailable"})
+		return
+	}
+	threadUUID, err := canonicalDesktopThreadUUID(c.Param("uuid"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_thread_uuid"})
+		return
+	}
+	uid, _, err := s.currentAgentTurnSession()
+	if err != nil {
+		s.writeAgentTurnSessionError(c, err)
+		return
+	}
+
+	var threadID uint64
+	if err := s.cfg.DB.Raw(
+		`SELECT id FROM w_workagent_thread WHERE uuid = ? AND uid = ?`,
+		threadUUID, uid,
+	).Row().Scan(&threadID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "thread_not_found"})
+		return
+	}
+
+	files, err := s.cfg.LocalFiles.ListThreadFiles(uid, threadID)
+	if err != nil {
+		log.Printf("list thread files: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "file_list_failed"})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, threadFileListResponse{Items: files, Count: len(files)})
+}

@@ -74,7 +74,7 @@ type protocolAdapter interface {
 type Engine struct {
 	profile    ProfileReader
 	db         *gorm.DB
-	httpClient *http.Client  // Timeout: 0（SSE turn 可持续数分钟）
+	httpClient *http.Client     // Timeout: 0（SSE turn 可持续数分钟）
 	loader     AttachmentLoader // 可 nil（无附件场景）
 	hooks      KnowledgeHooks   // 可 nil（L3c-4/5 RAG：索引 turn + 检索注入；nil=关闭）
 }
@@ -240,7 +240,7 @@ func (e *Engine) indexCompletedTurn(turnUUID, userText, assistantText string) {
 // retrievalTopK / maxRetrievalContextChars cap how much knowledge context is
 // injected per turn (plan L3c-5: "控制注入量 top-k + token 上限").
 const (
-	retrievalTopK         = 4
+	retrievalTopK            = 4
 	maxRetrievalContextChars = 1500
 	knowledgeContextPreamble = "以下是知识库中可能相关的内容，回答时可参考：\n"
 )

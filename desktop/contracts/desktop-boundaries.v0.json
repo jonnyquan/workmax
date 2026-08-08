@@ -71,6 +71,10 @@
         "routeId": "agent.thread-file-upload"
       },
       {
+        "bridgeMethod": "agent.listThreadFiles",
+        "routeId": "agent.thread-file-list"
+      },
+      {
         "bridgeMethod": "agent.listRecoverableTurns",
         "routeId": "agent.turns-recoverable"
       },
@@ -410,6 +414,18 @@
         "bodyTooLargeError": "request body too large"
       },
       "status": "current"
+    },
+    {
+      "id": "agent.thread-file-list",
+      "method": "GET",
+      "path": "/agent/threads/:uuid/files",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
     },
     {
       "id": "agent.skills.catalog",

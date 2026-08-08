@@ -12,8 +12,8 @@ import (
 	"strings"
 	"unsafe"
 
-	_ "modernc.org/sqlite/vec" // auto-register sqlite-vec (vec0) on every modernc connection
 	"gorm.io/gorm"
+	_ "modernc.org/sqlite/vec" // auto-register sqlite-vec (vec0) on every modernc connection
 )
 
 // SourceTypeFile and SourceTypeMessage identify where a chunk originated.

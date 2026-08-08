@@ -481,7 +481,7 @@ func TestSyncWorker_StuckWarnResetsOnSuccess(t *testing.T) {
 	stub := &stubJob{
 		errs: []error{
 			errors.New("e1"), errors.New("e2"), errors.New("e3"), // trip 1
-			nil,                                                   // recover
+			nil,                                                  // recover
 			errors.New("e5"), errors.New("e6"), errors.New("e7"), // trip 2
 		},
 	}

@@ -127,7 +127,7 @@ type keepaliveCountingWriter struct {
 	returnErr bool
 }
 
-func (w *keepaliveCountingWriter) WriteEvent(_ cloudproxy.SSEEvent) error    { return nil }
+func (w *keepaliveCountingWriter) WriteEvent(_ cloudproxy.SSEEvent) error        { return nil }
 func (w *keepaliveCountingWriter) WriteProxyError(_ cloudproxy.ProxyError) error { return nil }
 func (w *keepaliveCountingWriter) WriteKeepalive() error {
 	w.n++

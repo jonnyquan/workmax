@@ -1113,6 +1113,33 @@ async function testCachedStreamingStatesRenderPartialAndRejectUnknown() {
 // navigates and the app is replaced by a remote page, with no way back on a
 // shell that has no cancellable navigation hook), and the URL is handed to Go
 // rather than opened here.
+// The task context panel must paint on load, not on the first interaction.
+//
+// It sits after the bootstrap call in renderer.js, so an initial render is not
+// implicit — and a panel that never ran is indistinguishable from one that ran
+// and found nothing, because index.html ships plausible-looking static values.
+async function testTaskContextPanelRendersOnLoad() {
+  const { document } = await runRenderer(undefined);
+  const steps = document.byId.get("run-overview-list");
+  assert.ok(steps, "the run overview list must exist");
+  assert.equal(
+    steps.children.length,
+    4,
+    "all four run-overview steps must be rendered on load; static markup would leave this empty",
+  );
+  assert.match(
+    document.byId.get("run-overview-meta").textContent,
+    /^\d\/4$/,
+    "the step counter must be computed, not left at its markup default",
+  );
+  assert.equal(
+    document.byId.get("sources-empty").hidden,
+    false,
+    "with no sources the empty note must be visible",
+  );
+  assert.equal(document.byId.get("sources-meta").textContent, "0");
+}
+
 async function testShimInterceptsExternalLinks() {
   const shimPath = path.join(rendererDir, "shim.js");
   const shimSource = fs.readFileSync(shimPath, "utf8");
@@ -3001,6 +3028,7 @@ await testRejectsMalformedMessageTimestamps();
 await testRejectsMalformedLoginTransactionResult();
 await testRedactsErrorStatusMessages();
 await testCachedStreamingStatesRenderPartialAndRejectUnknown();
+await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
 await testStagedAttachmentsAreSentWithTheTurn();
 await testSynchronousTurnCallbacksAreBufferedUntilOpenResult();

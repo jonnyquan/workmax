@@ -311,3 +311,65 @@ func (s *Store) upsertThreadFileRow(r threadFileRow) (int64, error) {
 	}
 	return id, nil
 }
+
+// ThreadFile is one attachment as the renderer needs to show it.
+//
+// Deliberately not the storage row: file_path stays inside this package. The
+// renderer names a file by id when it attaches one to a turn, and never needs
+// to know where on disk it lives.
+type ThreadFile struct {
+	FileID    int64  `json:"file_id"`
+	FileName  string `json:"file_name"`
+	FileSize  int64  `json:"file_size"`
+	FileType  string `json:"file_type"`
+	MimeType  string `json:"mime_type"`
+	OnDisk    bool   `json:"on_disk"`
+	CreatedAt string `json:"created_at"`
+}
+
+// ListThreadFiles returns the attachments of one thread, newest first.
+//
+// The upload path has always persisted these rows, but nothing could read them
+// back — the renderer only knew about files it had uploaded during the current
+// session, so a reload lost the list while the files stayed on disk. Scoping by
+// uid is what keeps one local user's attachments out of another's, the same
+// filter every other local-history query uses.
+func (s *Store) ListThreadFiles(uid uint64, threadID uint64) ([]ThreadFile, error) {
+	rows, err := s.db.Raw(
+		`SELECT id, file_name, display_name, file_size, file_type, mime_type,
+		        exists_on_disk, created_at
+		   FROM w_workagent_thread_file
+		  WHERE uid = ? AND thread_id = ?
+		  ORDER BY id DESC`,
+		uid, threadID,
+	).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("list thread files: %w", err)
+	}
+	defer rows.Close()
+
+	out := []ThreadFile{}
+	for rows.Next() {
+		var (
+			f           ThreadFile
+			displayName string
+			onDisk      int
+		)
+		if err := rows.Scan(&f.FileID, &f.FileName, &displayName, &f.FileSize,
+			&f.FileType, &f.MimeType, &onDisk, &f.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan thread file: %w", err)
+		}
+		// display_name is what the user saw when they picked the file; fall
+		// back to the stored name so a row written before it was populated
+		// still shows something.
+		if displayName != "" {
+			f.FileName = displayName
+		}
+		f.OnDisk = onDisk == 1
+		out = append(out, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate thread files: %w", err)
+	}
+	return out, nil
+}

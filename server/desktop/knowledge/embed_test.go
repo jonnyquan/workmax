@@ -33,8 +33,8 @@ func TestEmbedder(t *testing.T) {
 	}
 
 	const (
-		anchor   = "A man is playing guitar on a stage."
-		similar  = "Someone performs music with a guitar in front of an audience."
+		anchor    = "A man is playing guitar on a stage."
+		similar   = "Someone performs music with a guitar in front of an audience."
 		unrelated = "The stock market crashed after the earnings report."
 	)
 

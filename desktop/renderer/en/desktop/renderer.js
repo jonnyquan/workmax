@@ -853,6 +853,10 @@ function renderAttachments() {
     attachmentChips.appendChild(chip);
   }
   attachmentChips.hidden = state.pendingFiles.length === 0;
+  // The composer tray and the Sources panel show the same files; refreshing
+  // here keeps them from disagreeing after an upload completes or a turn
+  // clears the tray.
+  renderTaskContext();
 }
 
 function desktopAgentCreateBridge() {
@@ -1262,6 +1266,9 @@ function selectThread(thread) {
   }
   state.selectionGeneration += 1;
   state.selectedThreadUUID = thread.uuid;
+  // The context panel follows the selection: its sources belong to a thread,
+  // not to the session.
+  void loadThreadSources(thread.uuid);
   state.recoveryGeneration += 1;
   state.resumingTurn = false;
   state.dismissingRecovery = false;
@@ -1998,6 +2005,7 @@ async function handleSessionChanged() {
   const generation = state.sessionGeneration;
   clearWorkbenchForSessionChange();
   turnState.textContent = "Session changed";
+  renderTaskContext();
   setStatus(
     "Your signed-in account changed. Select a thread again; the previous prompt was not resent and thread creation was not replayed.",
     "error"
@@ -2064,6 +2072,7 @@ function failTurnOpen(activeTurn, userText, message) {
   activeTurn.assistantBubble.textContent = message;
   chatInput.value = userText;
   turnState.textContent = "Error";
+  renderTaskContext();
   updateComposerState();
   setStatus(message, "error");
 }
@@ -2120,6 +2129,7 @@ function submitChat(event) {
   state.pendingFiles = [];
   renderAttachments();
   turnState.textContent = "Working";
+  renderTaskContext();
   updateComposerState();
 
   try {
@@ -2251,6 +2261,7 @@ function resumeRecoverableTurn() {
   state.recoveryFeedback = "Retrying the interrupted request safely...";
   state.recoveryFeedbackKind = "default";
   turnState.textContent = "Resuming";
+  renderTaskContext();
   updateComposerState();
 
   try {
@@ -2283,6 +2294,7 @@ function resumeRecoverableTurn() {
     }
     activeTurn.turnID = openResult.turnID;
     turnState.textContent = "Working";
+  renderTaskContext();
     const pendingEvents = activeTurn.pendingEvents;
     activeTurn.pendingEvents = [];
     for (const pendingEvent of pendingEvents) {
@@ -2582,6 +2594,7 @@ function finishActiveTurnWithError(activeTurn, message) {
     activeTurn.assistantBubble.textContent = safeMessage;
   }
   turnState.textContent = "Error";
+  renderTaskContext();
   updateComposerState();
   setStatus(safeMessage, "error");
 }
@@ -2683,6 +2696,7 @@ async function stopActiveTurn() {
     }
     activeTurn.stopRequested = false;
     turnState.textContent = "Working";
+  renderTaskContext();
     updateComposerState();
   } catch {
     clearCancelConfirmation(activeTurn);
@@ -2707,6 +2721,7 @@ async function stopActiveTurn() {
     }
     activeTurn.stopRequested = false;
     turnState.textContent = "Working";
+  renderTaskContext();
     updateComposerState();
     setStatus("The Agent turn could not be stopped yet.", "error");
   }
@@ -3196,3 +3211,189 @@ turnRecoveryDismissButton.addEventListener("click", () => {
 });
 
 void refresh();
+
+// ---------------------------------------------------------------------------
+// Task context panel
+// ---------------------------------------------------------------------------
+//
+// The right rail describes the current run: which steps have happened, what
+// the agent was given, and what it produced. Every value here is derived from
+// state this renderer already holds or reads back from the sidecar.
+//
+// Deliverables is deliberately an empty state with a reason rather than a
+// hidden section. A local turn produces text, not files — the panel says so
+// instead of showing an empty box that looks broken.
+
+// Looked up on use rather than bound at module scope. These functions are
+// called from code that runs earlier in the file, and a const initialised down
+// here would be in its temporal dead zone at that point — a ReferenceError
+// that would only appear once an attachment or a turn touched the panel.
+function ctxEl(id) {
+  return document.querySelector(`#${id}`);
+}
+
+const contextState = { sources: [], sourcesThreadUUID: null };
+
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Mirrors the reference implementation's four steps. "Brief captured" is true
+// once the thread has any message or a turn is running, because that is the
+// point at which the agent has actually been told something.
+function buildRunSteps() {
+  const running = Boolean(state.activeTurn);
+  const messageCount = messageList ? messageList.children.length : 0;
+  const sourceCount = contextState.sources.length + state.pendingFiles.length;
+  const failed = turnState && turnState.textContent === "Error";
+
+  const brief = messageCount > 0 || running;
+  return [
+    {
+      label: "Brief captured",
+      state: brief ? "complete" : "pending",
+      detail: brief ? "Complete" : "Waiting",
+    },
+    {
+      label: "Sources",
+      // No sources is a valid way to run, so this is never "pending" —
+      // reporting it as incomplete would imply the run is blocked on it.
+      state: sourceCount > 0 ? "complete" : "neutral",
+      detail: sourceCount > 0
+        ? `${sourceCount} source${sourceCount === 1 ? "" : "s"}`
+        : "None attached",
+    },
+    {
+      label: "Agent execution",
+      state: failed ? "failed" : running ? "active" : brief ? "complete" : "pending",
+      detail: failed ? "Failed" : running ? "In progress" : brief ? "Complete" : "Waiting",
+    },
+    {
+      label: "Deliverables",
+      state: "neutral",
+      detail: "Text only",
+    },
+  ];
+}
+
+const RUN_STEP_MARKS = {
+  complete: "✓",
+  active: "◐",
+  failed: "✕",
+  pending: "○",
+  neutral: "–",
+};
+
+function renderRunOverview() {
+  if (!ctxEl("run-overview-list")) return;
+  const steps = buildRunSteps();
+  ctxEl("run-overview-list").innerHTML = "";
+  for (const step of steps) {
+    const item = document.createElement("li");
+    item.className = `run-step is-${step.state}`;
+
+    const mark = document.createElement("span");
+    mark.className = "run-step-mark";
+    mark.textContent = RUN_STEP_MARKS[step.state] ?? "–";
+
+    const label = document.createElement("span");
+    label.className = "run-step-label";
+    label.textContent = step.label;
+
+    const detail = document.createElement("span");
+    detail.className = "run-step-detail";
+    detail.textContent = step.detail;
+
+    item.append(mark, label, detail);
+    ctxEl("run-overview-list").appendChild(item);
+  }
+  const done = steps.filter((s) => s.state === "complete").length;
+  if (ctxEl("run-overview-meta")) ctxEl("run-overview-meta").textContent = `${done}/${steps.length}`;
+}
+
+function renderSources() {
+  if (!ctxEl("sources-list")) return;
+  // Files uploaded in this session but not yet reloaded from the sidecar are
+  // shown alongside the persisted ones, so a just-attached file appears
+  // immediately rather than after the next refresh.
+  const pending = state.pendingFiles
+    .filter((file) => file.status !== "error")
+    .map((file) => ({
+      file_id: file.id,
+      file_name: file.name,
+      file_size: file.size,
+      on_disk: true,
+      pending: file.status === "uploading",
+    }));
+  const persistedIds = new Set(contextState.sources.map((f) => f.file_id));
+  const items = [
+    ...contextState.sources,
+    ...pending.filter((f) => !f.file_id || !persistedIds.has(f.file_id)),
+  ];
+
+  ctxEl("sources-list").innerHTML = "";
+  for (const file of items) {
+    const item = document.createElement("li");
+    item.className = "context-item" + (file.on_disk === false ? " is-missing" : "");
+
+    const name = document.createElement("span");
+    name.className = "context-item-name";
+    name.textContent = file.file_name;
+
+    const meta = document.createElement("span");
+    meta.className = "context-item-meta";
+    meta.textContent = file.on_disk === false
+      // The row survives but the bytes do not, which is a different problem
+      // from "no attachments" and needs to be visible.
+      ? "Missing on disk"
+      : file.pending
+        ? "Uploading…"
+        : formatFileSize(file.file_size);
+
+    item.append(name, meta);
+    ctxEl("sources-list").appendChild(item);
+  }
+
+  if (ctxEl("sources-empty")) ctxEl("sources-empty").hidden = items.length > 0;
+  if (ctxEl("sources-meta")) ctxEl("sources-meta").textContent = String(items.length);
+  if (ctxEl("deliverables-meta")) ctxEl("deliverables-meta").textContent = "0";
+  if (ctxEl("context-count")) ctxEl("context-count").textContent = String(items.length);
+}
+
+function renderTaskContext() {
+  renderRunOverview();
+  renderSources();
+}
+
+// Reads the attachments the sidecar has for this thread. Uploads persisted
+// before this route existed, but nothing could read them back, so reopening a
+// thread showed an empty Sources panel while the files were still on disk.
+async function loadThreadSources(threadUUID) {
+  contextState.sourcesThreadUUID = threadUUID;
+  contextState.sources = [];
+  renderTaskContext();
+  if (!threadUUID) return;
+
+  const agent = desktopAgentBridge();
+  if (!agent || typeof agent.listThreadFiles !== "function") return;
+  try {
+    const result = await agent.listThreadFiles(threadUUID);
+    // A thread switch mid-flight must not paint the previous thread's files.
+    if (contextState.sourcesThreadUUID !== threadUUID) return;
+    if (result && result.ok && result.data && Array.isArray(result.data.items)) {
+      contextState.sources = result.data.items;
+    }
+  } catch {
+    // The panel degrades to session-only sources; the conversation itself is
+    // unaffected, so this must not surface as a turn error.
+  }
+  renderTaskContext();
+}
+
+// Paint the panel once on load. Without this it keeps whatever static markup
+// index.html shipped with — which looks like a rendered panel that is simply
+// empty, rather than one that never ran.
+renderTaskContext();

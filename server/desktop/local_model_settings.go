@@ -39,9 +39,9 @@ const (
 
 // LocalModelSettingsDTO is the renderer-safe wire shape. It never includes api_key.
 type LocalModelSettingsDTO struct {
-	PreferredRoute string             `json:"preferred_route"`
+	PreferredRoute string               `json:"preferred_route"`
 	Local          LocalModelProfileDTO `json:"local"`
-	UpdatedAt      string             `json:"updated_at"`
+	UpdatedAt      string               `json:"updated_at"`
 }
 
 // LocalModelProfileDTO is non-secret local profile fields.
@@ -54,8 +54,8 @@ type LocalModelProfileDTO struct {
 
 // LocalModelSettingsPut is the PUT body. api_key is write-only.
 type LocalModelSettingsPut struct {
-	PreferredRoute string                  `json:"preferred_route"`
-	Local          *LocalModelProfilePut   `json:"local"`
+	PreferredRoute string                `json:"preferred_route"`
+	Local          *LocalModelProfilePut `json:"local"`
 }
 
 // LocalModelProfilePut carries optional secret write controls.

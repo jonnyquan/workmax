@@ -27,6 +27,7 @@ const ROUTES = {
     settingsGetModelRoute: defineTypedRoute("settings.getModelRoute", "settings.model-route.get", "GET", "/settings/model-route", "none", null),
     settingsPutModelRoute: defineTypedRoute("settings.putModelRoute", "settings.model-route.put", "PUT", "/settings/model-route", "json", "application/json"),
     agentUploadThreadFile: defineTypedRoute("agent.uploadThreadFile", "agent.thread-file-upload", "POST", "/agent/threads/:uuid/files", "multipart", null),
+    agentListThreadFiles: defineTypedRoute("agent.listThreadFiles", "agent.thread-file-list", "GET", "/agent/threads/:uuid/files", "none", null),
 };
 const JSON_BODY_LIMITS = {
     "agent.createThread": 4 << 10,
@@ -76,6 +77,15 @@ function createDesktopBridge(deps) {
                 formData.append("file", file, file.name);
                 const result = await executeMultipart(deps, ROUTES.agentUploadThreadFile, path, formData);
                 return validateAgentThreadFileUploadResult(result);
+            },
+            // The attachments already on a thread. Uploads persist, but until this
+            // existed nothing could read them back, so reopening a thread showed no
+            // sources even though the files were on disk and still usable as model
+            // context.
+            listThreadFiles: async (threadUUID) => {
+                const uuid = validateCanonicalV4UUID(threadUUID, "agent.listThreadFiles threadUUID");
+                const path = ROUTES.agentListThreadFiles.path.replace(":uuid", encodeURIComponent(uuid));
+                return execute(deps, ROUTES.agentListThreadFiles, path);
             },
             listRecoverableTurns: async () => {
                 const result = await execute(deps, ROUTES.agentListRecoverableTurns);

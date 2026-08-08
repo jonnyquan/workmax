@@ -213,6 +213,23 @@ export interface AgentSkill {
   descriptionKey: string;
 }
 
+// One attachment already on a thread. Uploads have always persisted these,
+// but nothing could read them back until agent.listThreadFiles existed.
+export interface AgentThreadFile {
+  file_id: number;
+  file_name: string;
+  file_size: number;
+  file_type: string;
+  mime_type: string;
+  on_disk: boolean;
+  created_at: string;
+}
+
+export interface AgentThreadFileList {
+  items: AgentThreadFile[];
+  count: number;
+}
+
 export interface AgentSkillCatalog {
   items: AgentSkill[];
   count: number;
@@ -376,6 +393,9 @@ export interface DesktopBridge {
     createThread: (
       input: AgentCreateThreadInput
     ) => Promise<DesktopBridgeResult<AgentCreateThreadResult>>;
+    listThreadFiles: (
+      threadUUID: string
+    ) => Promise<DesktopBridgeResult<AgentThreadFileList>>;
     listRecoverableTurns: () => Promise<
       DesktopBridgeResult<AgentRecoverableTurnList>
     >;
@@ -611,6 +631,14 @@ const ROUTES = {
     "multipart",
     null
   ),
+  agentListThreadFiles: defineTypedRoute(
+    "agent.listThreadFiles",
+    "agent.thread-file-list",
+    "GET",
+    "/agent/threads/:uuid/files",
+    "none",
+    null
+  ),
 } as const;
 
 const JSON_BODY_LIMITS = {
@@ -684,6 +712,21 @@ export function createDesktopBridge(
           formData
         );
         return validateAgentThreadFileUploadResult(result);
+      },
+      // The attachments already on a thread. Uploads persist, but until this
+      // existed nothing could read them back, so reopening a thread showed no
+      // sources even though the files were on disk and still usable as model
+      // context.
+      listThreadFiles: async (threadUUID) => {
+        const uuid = validateCanonicalV4UUID(
+          threadUUID,
+          "agent.listThreadFiles threadUUID"
+        );
+        const path = ROUTES.agentListThreadFiles.path.replace(
+          ":uuid",
+          encodeURIComponent(uuid)
+        );
+        return execute<AgentThreadFileList>(deps, ROUTES.agentListThreadFiles, path);
       },
       listRecoverableTurns: async () => {
         const result = await execute<unknown>(
