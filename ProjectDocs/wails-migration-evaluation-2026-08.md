@@ -27,7 +27,7 @@
 
 **rev.2 增量结论（不改变上面的推荐）**：L3c 让 sidecar 变成 cgo 依赖，迁移多了一块**原生资源打包与签名**的工作（§6.1）；L3d 让"未登录也能全本地使用"，扩大了 D4 token 暴露的残余面（§9 D4.1）。两者都**不构成终止条件**。
 
-**rev.3 决策（已拍板）**：**采纳迁移，Wails 转正为主线 shell**，按 §0.5 的最快路径执行——首版 Wails 包**不带 RAG**，把 cgo/native 资源整块移出关键路径，目标 **~4 周出首个签名公证的 EA 包**。Electron 从"唯一出货通道"降级为**回滚热备**，shell 层冻结。
+**rev.3 决策（已拍板）**：**采纳迁移，Wails 转正为主线 shell**，按 §0.5 的最快路径执行——首版 Wails 包**不带 RAG**（rev.16 起已不成立：RAG 可用且懒加载，未使用时零成本），把 cgo/native 资源整块移出关键路径，目标 **~4 周出首个签名公证的 EA 包**。Electron 从"唯一出货通道"降级为**回滚热备**，shell 层冻结。
 
 **rev.5 修订（kill ① 已通过）**：**W1 kill check ① PASS —— WKWebView 能逐字节承载 SSE，迁移继续。** 但实测推翻了 D2 的传输方式并**反转了 D4**：renderer 不能跨源直连 loopback（Origin 被拒 + 无 CORS 预检），也不能走 `wails://` 自定义 scheme（WebKit 的 `WKURLSchemeHandler` **丢弃 POST body**）。可行方案是 **renderer 经真实 loopback HTTP 加载、API 在同源下由 Go 反向代理**——同源、无 CORS、body 完整，且 **token 不再下发 JS**（D4/A2 放弃的机密性回来了）。详见 §0.5.9。
 
@@ -36,6 +36,27 @@
 ---
 
 ## 0.5 最快路径（Fast Track）——rev.3 主线排期
+
+### 0.5.0 当前状态与本节导航
+
+§0.5.1–0.5.6 是**计划**（rev.3–4 定的最快路径与决策）；§0.5.7 起是**实测记录**，按发生顺序排列。计划里凡与实测冲突的，以实测为准，且冲突处都在计划正文里就地标注了。
+
+| 阶段 | 状态 | 依据 |
+|---|---|---|
+| W1 Bootstrap + `--serve-only` | ✅ | §0.5.7 |
+| W1 kill ① SSE 传输 | ✅ PASS | §0.5.9 |
+| W1 kill ② v3 mac 稳定度 | ✅ | §0.5.10 |
+| W1 kill ③ 导航收束 | ✅ PASS（带一条明确降级） | §0.5.10 |
+| W2 安全 | ✅ | §0.5.12/13/18，外链见 §0.5.23 |
+| W3 renderer shim | ✅ 验收通过 | §0.5.14 |
+| Electron 退役 | ✅ 已删除 | §0.5.15/16 |
+| W4 entitlements + bundle 检查器 | ✅ | §0.5.19 |
+| W4 `.app` 组装 + 性能实测 | ✅ | §0.5.20/21 |
+| W4 签名公证实跑 | ⏸ 需 Developer ID 证书 | — |
+| W4 x64 / universal | ⏸ 需 Intel 工具链 | — |
+| RAG 资源托管（模型/分词器 URL） | ⏸ **待决策** | §0.5.8 |
+
+**检查分层**（哪一层保护什么）：契约与边界 `check-desktop-boundaries.mjs`（14 条保证 + 路由表 + 网关动词）· renderer 逻辑 `check-bundled-renderer-behavior.mjs` · shell 单元 `desktop/wails` Go 测试 · 打包 `inspect-mac-package.test.sh` + `notarize-mac.test.sh` —— 以上均在 CI；另有三条**需要真 webview、只能手工跑**：`--kill-check`（传输）、`--verify-shim`（桥接契约）、`--verify-app`（整条用户路径）。
 
 ### 0.5.1 核心杠杆：首版 Wails 二进制不 import `knowledge`，我们这边就没有 cgo 债
 
@@ -52,15 +73,15 @@
 
 | | 内容 |
 |---|---|
-| **In（首版必须）** | 单 Wails v3 二进制（含 `--serve-only`）· `Bootstrap` 抽取 · 21 条 HTTP 路由（D3 移出 login×4）· SSE 直连（D2/A2）· `LoginAPI`/`RuntimeAPI` 绑定 · renderer shim（SSE parser + typed bridge）· 导航收束（embed.FS + CSP + OpenURL）· 单实例 · macOS **arm64** 签名公证 · 契约对等 + smoke + 性能基准 |
-| **Out（明确推迟，不是忘了）** | ~~RAG~~（rev.4 拉回，走首次运行下载，见 §0.5.6）· **native 资源随包**（§6.1 整节，已被下载方案取代）· **x64 / universal**（CGO 交叉编译修复，§13 原 P-1）· Windows / Linux · 自动更新 · 多窗口 / modal OAuth · D2-alt（token 代理）· Option B（路由改绑定）· 画布重构（§1.5.2，与 shell 正交） |
+| **In（首版必须）** | 单 Wails v3 二进制（含 `--serve-only`）· `Bootstrap` 抽取 · 25 条 HTTP 路由（login×4 由反代拒绝）· 同源 SSE（D2 修订）· `/login/` 网关（D3 落地形态）· renderer shim（SSE parser + typed bridge）· 导航收束（能力路径 + CSP + 外链交给系统浏览器）· 单实例 · macOS **arm64** 签名公证 · 契约对等 + smoke + 性能基准 |
+| **Out（明确推迟，不是忘了）** | **native 资源随包**（§6.1 整节，已被下载方案取代）· **x64 / universal**（CGO 交叉编译修复，§13 原 P-1）· Windows / Linux · 自动更新 · 多窗口 / modal OAuth · D2-alt（token 代理）· Option B（路由改绑定）· 画布重构（§1.5.2，与 shell 正交） |
 
 ### 0.5.3 四周排期
 
 | 周 | 内容 | 出口标准（做不到就停下来谈） |
 |---|---|---|
 | **W1** | `Bootstrap` 抽取（双文件 cgo 拆分，见 §10）+ 最小 Wails v3 binary + `--serve-only` + **三条 kill 检查** | ① WKWebView 下 `/agent/chat` SSE 完整一轮 `text_delta→done`；② v3 mac 无 beta-blocker，原生 server build 可用；③ embed.FS bundle-only 导航收束成立 + 外链走系统浏览器。**任一不过 → 停，回 Electron** |
-| **W2** | 安全：`LoginAPI` 绑定 + `DropLoginTransactionHTTP` + `RuntimeAPI` token 下发 + 单实例 + CSP 落地 | 登录全流程过；token 不入日志；契约 checker 对 21 条路由绿 |
+| **W2** | 安全：`/login/` 网关 + 能力路径 + 反代拒绝凭据路由 + CSP + 单实例 | 契约 checker 全绿；`uiserver_test.go` 覆盖 |
 | **W3** | renderer shim（SSE parser + typed bridge + fetch 包装 + helper 重指向）· 与 W2 可并行 | 与 Electron 版行为对等（§14 全套 smoke） |
 | **W4** | 打包：entitlements 重写 + preflight 重写 + Developer ID 签名 + notarytool + stapler + spctl · 性能基准落数字 | 出 1 个可分发 arm64 EA 包；§5 估算区间被实测替换 |
 
@@ -121,224 +142,6 @@
 
 **W1 三条 kill 检查全部通过。** 按 §18-8 的决策，Electron 删除的前置条件已满足。
 
-### 0.5.10 kill check ③ 导航收束实测（2026-08-08）
-
-**结论：PASS，但有一条必须写进安全对等清单的降级。**
-
-**降级项：macOS 上没有可取消的导航钩子。** 查证 Wails v3.0.0-beta.5 源码：`decidePolicyForNavigationAction` **只在 iOS 实现**（`webview_window_ios.m`），mac 侧没有；`pkg/events` 里 mac 的导航事件（`WebViewDidStartProvisionalNavigation` 等）**全是通知，不可取消**。也没有 `WKUIDelegate.createWebViewWithConfiguration`。所以 Electron `will-navigate` + `setWindowOpenHandler` 那种**阻止式**收束在 mac 上无法复刻——这正是 §11 标注的"最大残余风险"，答案是：钩子不存在。
-
-**补偿控制（实测全部生效）**：
-
-| 控制 | 实测结果 | 说明 |
-|---|---|---|
-| CSP `connect-src 'self'` | ✅ `cspBlocksForeignOrigin = true` | 探针打的是一个**活着的**本机异源（stub 端点），排除"主机不可达"的假阳性 |
-| 只服 asset FS | ✅ 未知路径 `404` | 无 fall-through |
-| 路径穿越 | ✅ `/../../etc/passwd` → `404` | |
-| `window.open` | ✅ 返回 `null` | 无 `WKUIDelegate` ⇒ WebKit 默认拒绝开新窗 |
-| CSP `script-src 'self'` | ✅ **反向验证**：harness 页第一版用内联 `<script>`，被静默拦下、什么都没执行 | 策略是真的在生效，不是摆设 |
-
-**为什么这个补偿组合是可接受的**：现实注入面是**模型输出渲染进 DOM**，而 `script-src 'self'` 直接阻断其执行——注入脚本跑不起来，也就无从发起导航。导航收束在本仓是 CSP 之后的纵深防御，不是第一道闸。而且 CSP 现在由**我们自己的 Go listener 以响应头下发**，比 Electron 今天只能靠 `file://` 页面里的 meta 标签更强。
-
-已核对现有 renderer（`renderer/en/desktop/index.html`）：单个外部脚本、**零**内联事件处理器、**零**内联 style，且本就带 CSP meta。所以生产 CSP 可以直接收紧，不需要为存量代码开 `'unsafe-inline'`（现 `style-src` 里那条可在 W3 去掉）。
-
-**残余风险（须入安全对等清单）**：顶层导航（`location.href = ...`）在 mac 上无法被阻止，只能通过 `WebViewDidStartProvisionalNavigation` 事后检测并 `SetURL` 回退——存在一个极短的"已开始导航"窗口。前提是攻击者已能执行脚本，而这被 CSP 挡在前面。
-
-### 0.5.12 D3 在同源形态下的强化（W3 开工时落地）
-
-同源反代有一个必须立刻堵上的副作用：**它让所有 sidecar 路由对 renderer 可达**，包括 4 条 login-transaction 路由——正是 preload 当年用 `isPrivilegedLoginTransactionURL` 专门挡掉的那些。
-
-已落地：**反代在服务端拒绝这些路径（403）**，而不是靠 renderer 侧自律。这比 Electron 的做法更强——preload 的守卫和它约束的代码住在同一个进程里，而反代是 renderer 够不到的地方。登录仍按 D3 走 Wails `LoginAPI` 绑定（§0.5.11 已确认可用），凭据路径从不成为 renderer 能命名的 HTTP 面。
-
-连带对齐了一条姿态：**UI listener 拒绝任何非规范化路径**（不做 301 清理重定向），理由与 sidecar 关掉 gin 的 `RedirectTrailingSlash`/`RedirectFixedPath` 完全一致——"重定向之后才做的特权检查"，其结果取决于客户端是否跟随重定向，那就不算检查。`uiserver_test.go` 覆盖：特权路由 403、非规范拼写不被重定向放行、Origin 被剥离、token 由 Go 注入、CSP 头齐全、asset FS 外一律 404。
-
-### 0.5.11 W2 绑定可用性：**不可用**（rev.7 更正）
-
-> **rev.6 曾在此断言"绑定可以照常用"，那是错的。** 当时只观察到 `window.wails` 对象存在，没有真的发起一次调用。补测后结论相反。
-
-实测（`wailsCallApi = undefined`，`wailsCall = "no Call.ByName on this runtime"`）：页面经普通 loopback HTTP 加载时，Wails 运行时对象**被注入**，但**调用能力不可用**。原因在 runtime.js 里写死：它把调用 POST 到 `window.location.origin + "/wails/runtime"`——在采纳的同源形态下，那个 origin 是**我们自己的 UI server**，它没有这个路由。
-
-**对 D3 的影响与选路**：
-
-| 方案 | 说明 |
-|---|---|
-| **(a) 代理 `/wails/*`** | `Assets.Middleware` 会把 Wails 默认 asset handler 作为 `next` 传进来，而它正是服务 `/wails/runtime` 的那个。把它挂到 UI server 上即可。**未验证**，且依赖 beta 框架内部形状 |
-| **(b) `Options.Transport`** | v3 支持自定义 IPC 传输，是为此设计的扩展点。改造面更大 |
-| **(c) UI server 上的能力受保护端点**（倾向） | 登录端点直接挂在 UI server 上，在 Go 内**进程内**调用 `boot.LoginCoordinator`。凭据**不进 sidecar 的路由表**（D3 的实际目标达成），且受 §0.5.13 的能力路径保护——只有页面能到达。不依赖任何 beta 内部形状 |
-
-**倾向 (c)**：能力路径落地后，它的安全性质与绑定等价甚至更好（凭据只经过我们自己的进程内调用），而且少一个对 beta 框架内部的依赖。W2 开工时定。
-
-### 0.5.22 `--verify-app`：第一次跑用户实际走的那条路（2026-08-08）
-
-此前所有检查验的都是**零件**：行为套件在 VM 里用 mock 驱动 `renderer.js`，`--verify-shim` 验桥接面和一次 turn，`--kill-check` 验传输。**没有一个跑过用户实际拿到的组合**——未经修改的 `index.html` + 出货的 shim + 真 sidecar + 真 webview。
-
-`--verify-app` 补上这一条。关键约束是**不能为了观测而改动页面**：一旦往 `index.html` 注入探针，被测的就不再是出货的东西（何况 `script-src 'self'` 也会拒绝）。所以断言从**反代侧**做——`renderer.js` 启动时打了什么，从外面看得见。
-
-**只有一条必需请求，而这不是弱检查**：`GET /auth/status` 能到达，意味着 `shim.js` 装好了全局、`renderer.js` 认可了它、fetch 在能力路径下解析正确、反代注入了 token、sidecar 应答了。这条链之后的东西不构成新种类的证明。
-
-第一次跑就失败了——但**是我的期望写错了**：我把 `/agent/threads` 也列成必需，而 `renderer.js` 只在 `/auth/status` 报 `authenticated` 后才加载 threads/skills/recoverable。harness 没有云会话，所以它们缺席是 renderer 的**正确行为**。改成会话依赖的可选项后两次连过。
-
-> 这个失败本身有价值：它说明"照抄启动时序当断言"是不够的，得知道每一步的**前置条件**。写下来的期望如果不区分"必须发生"和"取决于状态"，红灯就会指向错误的地方。
-
-### 0.5.21 RAG on/off 基准，以及它抓出的两个缺陷（2026-08-08）
-
-§14 要求性能基准**分 RAG on/off 两组**（"否则 ONNX 的体积/内存会污染 shell 瘦身的归因"）。补测之后，这条要求兑现了它的价值——两组数字直接推翻了 §5 的 RAG 说法，并牵出两个缺陷。
-
-**测量（`--serve-only`，仅 sidecar）**：
-
-| | 就绪 | 稳态 RSS |
-|---|---|---|
-| RAG off | ~48 ms | **32 MB** |
-| RAG on（改前） | 136–251 ms | **255 MB** |
-
-§5 写的 RAG 增量是"**+数十 MB**"，实测 **+223 MB**——差一个数量级。而且这是**刚启动、一次检索都没做**的地板值：ONNX Runtime 环境加模型会话本身就这么大。
-
-**缺陷一：急切加载**。embedder 原本在 `Bootstrap` 里直接构造，所以只要用户下载过资源，**哪怕从不使用知识库，每次启动都付这 223 MB**。改为懒加载（`lazyKnowledge`，首次调用时构造）后，资源在场但未使用的成本回到 **32 MB / 48 ms——与 RAG-off 完全相同**。资源是否存在决定检索**可用**，第一次真实调用决定它何时**加载**。
-
-**缺陷二：关闭竞态（真实崩溃，非懒加载引入）**。本地推理引擎在**后台 goroutine** 里索引已完成的 turn（`indexCompletedTurn`），而 `Boot.Shutdown` 同时销毁 ONNX 环境——`session.Run()` 打在已销毁的环境上，**SIGSEGV**。用户侧就是"回答刚出来就关窗 → 退出崩溃"。
-
-这个组合（RAG 在场 + 完成一次 turn + 立即关闭）此前从没被跑过：带资源时只跑过 `--serve-only`（无 turn），跑 kill-check 时又没带资源。**是补这组基准把它逼出来的。**
-
-修法是给 `lazyKnowledge` 记在途调用数，`Close` 先停止接单、再等待、最后才销毁；等待超时则**故意不销毁**——进程马上要退出了，泄漏几毫秒远好于把运行中的原生代码抽掉。复现场景连跑 3 次，退出码全 0、无崩溃迹象。
-
-> 值得记下的模式：这两个缺陷都不是"功能不工作"。一个是**每次启动多付 223 MB 而没人察觉**，一个是**只在特定关闭时序下崩溃**。它们都只能被"照着要求把基准补齐"抓到——而那条要求当时看起来只是个记数字的杂活。
-
-### 0.5.20 首个打包产物与性能实测（2026-08-08）
-
-`build-mac.sh` 按 Wails 布局重写（手工组装，无打包框架——这个布局没有需要框架去拦的东西），**每次构建强制过 `inspect-mac-package.sh`**。产出的 arm64 `.app` 端到端可用：`--serve-only` 从 bundle 内起、`/health` 200、SIGTERM 退出码 0，`--verify-shim` 加载 **bundle 内**的 renderer 通过（8 帧/4151 字节）。
-
-**建出真实产物立刻抓到一个不一致**：`resolveResourcesDir()` 在打包构建里总是返回 bundle 的 `Contents/Resources`，而 rev.4 决定 RAG 资源是**下载到 `<DataDir>/resources`** 的——下载到一处、查找在另一处，装完也用不上。已改为"bundle 里确实有资源才用 bundle，否则让 Bootstrap 走 DataDir 默认"，两种分发方式都成立。这类错位只有真的打出包才会显形。
-
-**实测数字（§5 估算 vs 现实）**：
-
-| 指标 | §5 估算 | 实测 | |
-|---|---|---|---|
-| 安装包 | 15–25 MB | **22 MB** | ✅ 命中 |
-| 冷启动 | "单进程直起" | **~48 ms** 到 sidecar 就绪 / **~100 ms** 到 UI 就绪 | ✅ 远好于握手+spawn |
-| 稳态内存 | **40–80 MB** | **~109–126 MB**（app + WebKit 辅助进程，2–3 个进程） | ❌ **估算偏低约 50%** |
-
-内存这条要说清楚：**§5 的 40–80 MB 是错的**。真实值约 110–126 MB。它仍然显著低于 Electron，但不是当初写下的那个量级——`base memory` 里 Go runtime、WebKit 框架映射页、SQLite、gin 都要算。任何引用 §5 内存数字做决策的地方都应改用这里的实测值。
-
-**一个必须承认的流程错误**：§14 把"性能基准（**同机对照**）"列为切换门槛，而 Electron 在基线被采集之前就删掉了。源码仍可从 git 重建（已验证：`git worktree` + `npm ci` 能装出旧 shell），但一次粗测（dev 模式约 650 MB）与 Wails 的打包产物口径不同，反复尝试做干净配对测量都卡在进程归属上。**结论：Wails 的绝对数字可信，"对 Electron 快多少省多少"这个比值目前没有可引用的实测。** 正确顺序应当是"先测旧的，再删"。
-
-> 这条留在文档里不是自责，是给下一个删除动作的清单加一行：**凡是被列为门槛的对照测量，必须在被对照的一方消失之前采集。**
-
-### 0.5.19 W4 起步：entitlements 重写 + bundle 检查器（2026-08-08）
-
-**entitlements 从 4 条减到 1 条**。去掉 `allow-jit` 与 `allow-unsigned-executable-memory`（Electron 的 V8 才需要；Wails 用系统 WebView，JS 引擎跑在自带授权的系统进程里，我们的二进制既不生成也不执行代码）与 `allow-dyld-environment-variables`（Wails 构建不需要 `DYLD_*`，资源路径由可执行文件位置显式推导）。只留 `network.client`。
-
-**`disable-library-validation` 刻意暂不添加**——它要到 RAG 里程碑才有正当理由（ONNX 库下载到数据目录、由别的团队签名，库验证下加载不了）。提前加等于为一个还没启用的功能削弱每一个构建。plist 里把**每一条缺席的理由也写下来了**，因为公证拒绝的理由通常是"授权与行为不符"，而"当初为什么没加"是最容易丢失的信息。
-
-**`inspect-mac-package.sh` 按 Wails 布局重写**，补上了我上一轮故意留的失败关闭。Wails 布局比 Electron 小得多（一个可执行文件 + 一个 renderer 目录），所以检查是穷举式的：Resources 顶层与 renderer 内部都是白名单，任何未列出的条目即失败。专门检查的项：bundle id 必须是 `ai.workmax.desktop`（它决定能否看见用户已有的 Keychain 会话）、可执行文件必须携带 Info.plist 声明的版本标记（否则是"用新版本号发旧代码"）、**不得存在打包的 sidecar 二进制**（那意味着打包步骤还在按退役的布局走）、CSP 的每个 `connect-src` 源逐个校验、以及 entitlements 集合与 plist 完全一致。
-
-16 项负向测试逐条钉住（`inspect-mac-package.test.sh`），已接回 CI。
-
-> 写这个检查器时自己踩了两次"重叠即死"：① 一条 `connect-src` 规则用了 `grep -E` 不支持的负向先行断言，还把 stderr 丢了 —— **它从写下那天起就什么都没匹配过**，测试是唯一发现方式；② source map 检查与文件白名单重叠、签名检查与 notarize 重叠，两处都删掉了弱的那个。**两条重叠的检查里，总有一条永远不会是构建失败的原因，于是也没人维护它。**
-
-### 0.5.18 W2 安全收尾（2026-08-08）
-
-| 项 | 落地 |
-|---|---|
-| **CSP 去掉 `'unsafe-inline'`** | 出货 renderer 实测零内联脚本、零 style 属性、零运行时 `.style` 改动，所以那条通常"为存量代码"开的口子根本不需要——**开一次就再也收不回来**，所以现在不开。harness 页面自己的 `<style>` 也挪成了外部 CSS，否则它测的就不是生产 CSP |
-| **DevTools 默认关闭** | 原本无条件 `DevToolsEnabled: true`。窗口持有已认证会话，且 API 由反代代为鉴权——出货构建带调试面等于开了一扇别处都不给的门。改为仅 `WORKMAX_DESKTOP_DEVTOOLS=1` 开启，**应用内部无法打开** |
-| **单实例（两层）** | Wails `SingleInstanceOptions` + `<DataDir>/sidecar.pid` 锁。实测同一 data dir 起第二个 `--serve-only`，被明确拒绝（`another sidecar instance is already running (pid ...)`），第一个仍干净退出 |
-| **登录网关** | 已随 §0.5.16 落地并由契约钉死四个动词 |
-
-两条新属性都进了契约（现 **12 条保证**）：`containment-headers` 增加 `'unsafe-inline'` 的**缺席**断言，新增 `devtools-off-by-default`。`uiserver_test.go` 也独立断言 CSP 不含 `unsafe-inline`/`unsafe-eval`——闸门与单测各一遍，因为这是那种"某天为了赶工加一下"的口子。
-
-> 写这条断言时又踩了一次同样的坑：`'unsafe-inline'` 出现在我自己的注释里，把闸门弄红了。上次（token）靠"匹配带引号的字符串字面量"区分代码与散文，这次代码里它本来就带引号，区分不了——所以改了注释措辞。**规则要约束代码，就不能让它顺带约束了描述该规则的句子。**
-
-### 0.5.17 修复行为闸门，并因此抓到一个真实缺陷（2026-08-08）
-
-`check-bundled-renderer-behavior.mjs` 在 main 上长期红着，所以它**什么都没在检查**。修好之后立刻付了回报。
-
-**闸门为什么倒的**：它用一份**硬编码的元素 ID 清单**造假 DOM，而 L1（模型设置）与 L3b（附件）陆续给 `index.html` 加了 20 个元素，清单没跟上 ⇒ `getElementById` 返回空 ⇒ renderer 一进来就抛。修法不是补清单，而是**从 `index.html` 派生**元素集合（连 tag 名与初始 `hidden` 也从真实标记读，而不是从 id 后缀猜）——这样 stub 结构上不可能再落后于出货的标记。
-
-闸门倒下期间**三处独立漂移**无人察觉：① 元素清单；② 22 个 agent mock 缺 `uploadThreadFile`（L3b 收紧了 `desktopAgentBridge()` 守卫）；③ 下面这个真缺陷。
-
-**抓到的缺陷（用户可见，L3b 引入）**：`submitChat` 里 `state.pendingFiles = []` 执行在 `startTurn` 读取它**之前**，所以 `fileIDs` **永远是空数组**——附件 chip 正常显示、上传正常成功、模型从来收不到文件。已修（先取 id 再清托盘），并加了回归测试 `testStagedAttachmentsAreSentWithTheTurn`；把 bug 改回去验证过它确实会红。
-
-> 这条值得记住的地方在于失败模式：功能**看起来**是work 的。没有异常、没有报错，只是模型收到的上下文里少了东西。这类缺陷只有断言"发出去的东西"的测试才抓得到，而那个测试当时正好被一个无关的 DOM 漂移堵在门外。
-
-### 0.5.16 Electron 已退役（2026-08-08）
-
-**已删除**：`desktop/electron/`（22 个源文件 + 3.6G 未跟踪产物）、`server/cmd/workagent-desktop/`、`build-mac.sh`、`inspect-mac-package.sh`、`smoke-packaged-app.sh` 及其三个测试。
-
-**已迁移**：`desktop-bridge.ts` → `desktop/renderer/src/`，它 import 的两个类型抽成 `login-types.ts`（顺带去掉 `NodeJS.Platform`——renderer 是网页，那个值只是信息性的）。renderer 现在有自己的极小 npm 项目，且**只在构建期需要**：生成产物已入库，改 renderer 不需要任何工具链。
-
-**契约 checker 完成迁移**，每条 Electron 断言都换成了同职能的 Wails 断言，而不是删掉：
-
-| 原断言（Electron） | 现断言（Wails） |
-|---|---|
-| `ipcMain.handle(...)` 命令集 | `loginGateRoutes` 动词集（双向钉死） |
-| `contextBridge.exposeInMainWorld("x")` | `shim.js` 里 `window.x =` |
-| `preload` 的 `isPrivilegedLoginTransactionURL` | `uiserver.go` 的 `privilegedSidecarPaths`（**服务端**拒绝，renderer 够不到） |
-| `event.sender !== mainWindow.webContents` | `mintCapability`（Electron 能问 OS 调用者是谁，loopback origin 上不能，等价物是"必须已持有能力才能寻址"） |
-| `preload` 的 `credentials/redirect` 卫生 | `shim.js` 同名断言（请求在哪儿构造，卫生就在哪儿） |
-| Main 的 flow ID / 凭据清理 | 服务端保证 + "flow ID 不得出现在页面" |
-| 边界扫描仅 `.js/.ts` | **加扫 `.go`**——shell 搬进 Go 后不加会静默变成空转（负向验证过） |
-
-契约里 `ipc` 段改名为 `privilegedGate`（`ipcMethods`→`gateMethods`、`ipcId`→`gateId`、`command`→`verb`）——留着 IPC 的名字描述一个不再是 IPC 的东西，是会误导下一个读它的人的那种技术债。
-
-**保留并去耦**：`notarize-mac.sh` 的 codesign/notarytool/stapler/spctl 管道是跨 shell 复用的（§6 早就这么说），已把 electron-builder 的目录布局从硬编码改成输入。它委托的 bundle 检查器随 Electron 删除了，所以改成**失败关闭**：dry-run 仍可用，真实公证在 W4 写出 Wails 布局的检查器之前一律拒绝——不静默丢掉"renderer 未打包就不许公证"这条闸门。
-
-**验证**：契约 checker、`notarize-mac.test.sh`、server（cgo/非 cgo）、云端构建、`desktop/wails` 测试全绿；`dev.sh --serve-only` 与 `dev.sh --verify-shim` 端到端通过。
-
-**文档与审计链已收口**（rev.12）：`desktop/README.md` 逐节重写（Release build 段改为诚实的"打包待 W4 + 哪些事实仍成立"；Version Pins 收敛到 Go 单一真源；Testing 段换成真实可跑的命令，含两条要真 webview 的手工检查）；顶层 `README.md`/`RELEASING.md`/`THIRD_PARTY_NOTICES.md` 同步；`scripts/license-audit.sh` 从 Electron 依赖树改指 renderer 的构建期 npm 树，并**新增 `desktop/wails` 模块的 go-licenses 审计**——它才是真正装到用户机器上的那个模块，之前没有任何一遍审计覆盖它。全仓残留的 "Electron" 只出现在解释某个决定为何如此的对照说明里。
-### 0.5.15 Electron 删除的真实前置：契约 checker 迁移（2026-08-08）
-
-开始执行退役时发现，"删掉 `desktop/electron/`" 不是删一个目录：**`check-desktop-boundaries.mjs` 断言的是 Electron 源码里的字符串**——`ipcMain.handle(...)`、`contextBridge.exposeInMainWorld(...)`、`event.sender !== mainWindow.webContents`、preload 的 `isPrivilegedLoginTransactionURL` 等等。直接删除会把 §14 指定为 parity 真源的那道闸门一起删掉，而那正是迁移期最不该失去的东西。
-
-顺带排除了"先把 `desktop-bridge.ts` 挪进 `renderer/src/`"这条看似安全的中间步：`preload.ts` import 它，一挪 Electron 构建立刻红。**删除是原子操作，前置是 checker 迁移。**
-
-**采用的做法：增量、始终保持绿。** 先给 checker 加上 Wails 侧断言，与 Electron 侧**并存**；退役时只需删掉 Electron 那一半，而不是重写闸门。
-
-契约里新增 `wailsShell` 段，把每条保证写成"**为什么重要 + 哪个文件必须仍然携带它**"，checker 按数据驱动校验（加一条保证是改数据，不是改代码）。当前 **11 条保证 + 4 个登录动词**：
-
-| 保证 | 它挡住什么 |
-|---|---|
-| `capability-path` | 反代替调用方注入 token，没有每次启动新生的能力段，任何本地进程扫到 UI 端口即可全权驱动 sidecar |
-| `privileged-routes-refused-server-side` | renderer 不能命名凭据路由——在 renderer 够不到的地方强制，不像 preload 的同进程守卫 |
-| `origin-stripped-before-sidecar` | 保持 sidecar"拒绝一切 Origin"的规则原样严格，而不是为了适配去放松它 |
-| `no-redirect-based-checks` | 只有在客户端跟随 301 时才成立的特权检查，不算检查 |
-| `sse-streams-unbuffered` | 会缓冲的代理会把分钟级流式变成一个迟到的整包响应 |
-| `containment-headers` | mac 上没有可取消的导航钩子，CSP `script-src 'self'` 是阻止模型输出执行的第一道闸 |
-| `token-never-in-renderer` | D4 反转的验证；按**带引号的字符串字面量**匹配，让规则约束代码而非注释措辞 |
-| `renderer-globals-installed` / `request-hygiene-preserved` / `login-through-gate-only` / `turn-cancel-is-local-and-remote` | 从 preload 逐条继承的行为 |
-
-**闸门经负向验证**（不能只看它变绿）：把 `FlushInterval: -1` 改成 `0`、给登录网关偷加一个动词、在 shim 里直接用 token 头 —— 三次都被精确报出，且错误信息带上"为什么重要"。
-
-### 0.5.14 W3 renderer shim 已落地并通过验收（2026-08-08）
-
-**做法：复用而非重写。** `desktop-bridge.ts` 是 typed facade 契约的唯一真源，且是纯浏览器兼容代码（无 Node/Electron 导入）。renderer 消费的是它的**生成产物** `renderer/en/desktop/lib/desktop-bridge.js`（`desktop/scripts/build-renderer-lib.sh`），不是手抄移植——两套 shell 并存期间契约不可能漂移。生成脚本断言源里恰好 2 个顶层 `export`，多一个就红，不会静默出半成品。
-
-产物是**经典脚本**而非 ES module：renderer 的脚本按序同步加载，module 会被推迟到 `renderer.js` 之后，且 module 在 `file://` 下根本加载不了（Electron 仍在用）。
-
-`shim.js` 提供 `createDesktopBridge` 的依赖：同源 `request` 适配、从 preload 移植的 SSE 消费循环与解析器、经 `/login/` 网关的四个登录动词。**在 Electron 下它检测到 preload 已装好 `window.workmaxLocal` 就直接退场**，所以两套 shell 共用同一个 `index.html` 期间都能跑。
-
-**登录网关（D3 的落地形态）**：renderer 只能说出四个动词之一（begin/status/password/cancel），Go 决定它变成哪条 sidecar 路由、用什么方法。这是 Electron `ipcMain` 网关的直接对应物——凭据仍走 loopback HTTP 到 sidecar（**Electron 今天也是如此**，`login-transaction.ts` 从 Main 发同样两条路径），但 renderer 无法命名那些路径（反代拒绝），服务端的凭据卫生（fresh copy、拒重复键、4KiB 上限）全部照旧生效。更强的 D3（注销路由 + 进程内调 coordinator）仍是严格改进，只是不捆进 shell 迁移。
-
-**验收（`workmax-desktop --verify-shim`，连续三次通过）**：加载**真实 renderer 目录**（即出货的那两个文件）经生产 UI 路由进 WKWebView，断言：
-
-| 检查 | 结果 |
-|---|---|
-| `window.workmaxLocal.fetch` + `window.desktopBridge` 存在，version `1.0.0-alpha.7` | ✅ |
-| renderer.js 守卫函数要求的 **13 个方法**全部为 function | ✅ |
-| **token 未进入页面**（用真实长度随机 token 搜整个桥接对象） | ✅ D4 反转经验证 |
-| `workmaxLocal.fetch("/auth/status")` | ✅ HTTP 200 |
-| `desktopBridge.agent.startTurn` 完整流式 turn | ✅ 8 帧 / 4151 字节 / terminal=done，与 Go 控制组逐字节一致 |
-
-> 验收过程本身抓到一次契约执行：给 `startTurn` 传线上形状（`thread_uuid`/`payload`）被 `assertAllowedKeys` 拒绝——typed bridge 要求调用方只说意图（`threadUUID`/`userText`/`chatMode`），线上形状由它自己构造。契约在干活。
-
-**既有问题（非本次引入）**：`check-bundled-renderer.sh` 的行为检查子脚本在 main 上就是红的（`renderer.js:3152` 拿不到 `attachButton`，DOM stub 与 renderer 已漂移）。文件白名单那一关已补上 `shim.js` 与 `lib/desktop-bridge.js`。
-
-### 0.5.13 UI origin 必须有自己的凭据（rev.7，修一个我引入的回归）
-
-同源反代有一个我一开始漏掉的后果：**反代替调用方注入 token**，所以只要 UI 端口没有自己的门禁，**任何本地进程扫到这个端口就能全权驱动 sidecar**——token 周界被整个绕过。这与附录 C 的威胁模型直接冲突（"loopback 端口本身可被本地其他进程连，**token 才是真保护**"）。
-
-我自己写的第一版代理测试就演示了这一点：一个不带任何凭据的请求拿到 200。已加回归测试 `TestUIOriginRequiresItsOwnCapability` 钉死。
-
-**修法：能力路径（capability URL）**。每次启动新生 32 字节随机段，整个 UI 面（资产 + `/api/*`）挂在它下面，其余一律 404 且不给任何"换个路径就行"的暗示。选路径段而非请求头，是因为**第一个请求是顶层导航，带不了头**；renderer 全用相对 URL，所以"知道能力"等同于"知道自己的 URL"，无需任何特殊处理。
-
 ### 0.5.9 kill check ① 实测结果（2026-08-08）
 
 **结论：PASS。SSE 通过 WKWebView 的 `fetch` + `ReadableStream` 逐字节还原，迁移继续。**
@@ -375,6 +178,244 @@ WKWebView ──加载──> http://127.0.0.1:<uiPort>/          （Go 服务 e
 
 **kill ③ 导航收束的新形态**：不再是"embed.FS + 自定义 scheme ⇒ 无处可导航"，而是"**Go 的 UI listener 只服 embed.FS 里的资产**，且 sidecar 周界继续拒绝一切 Origin"。等价强度，但要重新论证并补上：UI listener 也需绑 `127.0.0.1:0` + 严格 CSP + 外链走 `browser.OpenURL`。这条仍需 W1 收尾验证。
 - **待决：模型与分词器托管在哪**。ONNX Runtime 钉微软官方 release 即可；模型/分词器需要我们自己发一个 GitHub Release 承载（可控、许可可标注），或改 `embed.go` 去适配 HF 公开导出（要在 Go 里自己做 pooling+normalize）。`manifest.json` 现为空 platforms，`Current()` 返回 `ErrUnsupportedPlatform`，RAG 干净降级——**填数据即可启用，无需改代码**。
+
+---
+### 0.5.10 kill check ③ 导航收束实测（2026-08-08）
+
+**结论：PASS，但有一条必须写进安全对等清单的降级。**
+
+**降级项：macOS 上没有可取消的导航钩子。** 查证 Wails v3.0.0-beta.5 源码：`decidePolicyForNavigationAction` **只在 iOS 实现**（`webview_window_ios.m`），mac 侧没有；`pkg/events` 里 mac 的导航事件（`WebViewDidStartProvisionalNavigation` 等）**全是通知，不可取消**。也没有 `WKUIDelegate.createWebViewWithConfiguration`。所以 Electron `will-navigate` + `setWindowOpenHandler` 那种**阻止式**收束在 mac 上无法复刻——这正是 §11 标注的"最大残余风险"，答案是：钩子不存在。
+
+**补偿控制（实测全部生效）**：
+
+| 控制 | 实测结果 | 说明 |
+|---|---|---|
+| CSP `connect-src 'self'` | ✅ `cspBlocksForeignOrigin = true` | 探针打的是一个**活着的**本机异源（stub 端点），排除"主机不可达"的假阳性 |
+| 只服 asset FS | ✅ 未知路径 `404` | 无 fall-through |
+| 路径穿越 | ✅ `/../../etc/passwd` → `404` | |
+| `window.open` | ✅ 返回 `null` | 无 `WKUIDelegate` ⇒ WebKit 默认拒绝开新窗 |
+| CSP `script-src 'self'` | ✅ **反向验证**：harness 页第一版用内联 `<script>`，被静默拦下、什么都没执行 | 策略是真的在生效，不是摆设 |
+
+**为什么这个补偿组合是可接受的**：现实注入面是**模型输出渲染进 DOM**，而 `script-src 'self'` 直接阻断其执行——注入脚本跑不起来，也就无从发起导航。导航收束在本仓是 CSP 之后的纵深防御，不是第一道闸。而且 CSP 现在由**我们自己的 Go listener 以响应头下发**，比 Electron 今天只能靠 `file://` 页面里的 meta 标签更强。
+
+已核对现有 renderer（`renderer/en/desktop/index.html`）：单个外部脚本、**零**内联事件处理器、**零**内联 style，且本就带 CSP meta。所以生产 CSP 可以直接收紧，不需要为存量代码开 `'unsafe-inline'`（现 `style-src` 里那条可在 W3 去掉）。
+
+**残余风险（须入安全对等清单）**：顶层导航（`location.href = ...`）在 mac 上无法被阻止，只能通过 `WebViewDidStartProvisionalNavigation` 事后检测并 `SetURL` 回退——存在一个极短的"已开始导航"窗口。前提是攻击者已能执行脚本，而这被 CSP 挡在前面。
+
+### 0.5.11 W2 绑定可用性：**不可用**（rev.7 更正）
+
+> **rev.6 曾在此断言"绑定可以照常用"，那是错的。** 当时只观察到 `window.wails` 对象存在，没有真的发起一次调用。补测后结论相反。
+
+实测（`wailsCallApi = undefined`，`wailsCall = "no Call.ByName on this runtime"`）：页面经普通 loopback HTTP 加载时，Wails 运行时对象**被注入**，但**调用能力不可用**。原因在 runtime.js 里写死：它把调用 POST 到 `window.location.origin + "/wails/runtime"`——在采纳的同源形态下，那个 origin 是**我们自己的 UI server**，它没有这个路由。
+
+**对 D3 的影响与选路**：
+
+| 方案 | 说明 |
+|---|---|
+| **(a) 代理 `/wails/*`** | `Assets.Middleware` 会把 Wails 默认 asset handler 作为 `next` 传进来，而它正是服务 `/wails/runtime` 的那个。把它挂到 UI server 上即可。**未验证**，且依赖 beta 框架内部形状 |
+| **(b) `Options.Transport`** | v3 支持自定义 IPC 传输，是为此设计的扩展点。改造面更大 |
+| **(c) UI server 上的能力受保护端点**（倾向） | 登录端点直接挂在 UI server 上，在 Go 内**进程内**调用 `boot.LoginCoordinator`。凭据**不进 sidecar 的路由表**（D3 的实际目标达成），且受 §0.5.13 的能力路径保护——只有页面能到达。不依赖任何 beta 内部形状 |
+
+**倾向 (c)**：能力路径落地后，它的安全性质与绑定等价甚至更好（凭据只经过我们自己的进程内调用），而且少一个对 beta 框架内部的依赖。W2 开工时定。
+
+### 0.5.12 D3 在同源形态下的强化（W3 开工时落地）
+
+同源反代有一个必须立刻堵上的副作用：**它让所有 sidecar 路由对 renderer 可达**，包括 4 条 login-transaction 路由——正是 preload 当年用 `isPrivilegedLoginTransactionURL` 专门挡掉的那些。
+
+已落地：**反代在服务端拒绝这些路径（403）**，而不是靠 renderer 侧自律。这比 Electron 的做法更强——preload 的守卫和它约束的代码住在同一个进程里，而反代是 renderer 够不到的地方。登录仍按 D3 走 Wails `LoginAPI` 绑定（§0.5.11 已确认可用），凭据路径从不成为 renderer 能命名的 HTTP 面。
+
+连带对齐了一条姿态：**UI listener 拒绝任何非规范化路径**（不做 301 清理重定向），理由与 sidecar 关掉 gin 的 `RedirectTrailingSlash`/`RedirectFixedPath` 完全一致——"重定向之后才做的特权检查"，其结果取决于客户端是否跟随重定向，那就不算检查。`uiserver_test.go` 覆盖：特权路由 403、非规范拼写不被重定向放行、Origin 被剥离、token 由 Go 注入、CSP 头齐全、asset FS 外一律 404。
+
+### 0.5.13 UI origin 必须有自己的凭据（rev.7，修一个我引入的回归）
+
+同源反代有一个我一开始漏掉的后果：**反代替调用方注入 token**，所以只要 UI 端口没有自己的门禁，**任何本地进程扫到这个端口就能全权驱动 sidecar**——token 周界被整个绕过。这与附录 C 的威胁模型直接冲突（"loopback 端口本身可被本地其他进程连，**token 才是真保护**"）。
+
+我自己写的第一版代理测试就演示了这一点：一个不带任何凭据的请求拿到 200。已加回归测试 `TestUIOriginRequiresItsOwnCapability` 钉死。
+
+**修法：能力路径（capability URL）**。每次启动新生 32 字节随机段，整个 UI 面（资产 + `/api/*`）挂在它下面，其余一律 404 且不给任何"换个路径就行"的暗示。选路径段而非请求头，是因为**第一个请求是顶层导航，带不了头**；renderer 全用相对 URL，所以"知道能力"等同于"知道自己的 URL"，无需任何特殊处理。
+
+### 0.5.14 W3 renderer shim 已落地并通过验收（2026-08-08）
+
+**做法：复用而非重写。** `desktop-bridge.ts` 是 typed facade 契约的唯一真源，且是纯浏览器兼容代码（无 Node/Electron 导入）。renderer 消费的是它的**生成产物** `renderer/en/desktop/lib/desktop-bridge.js`（`desktop/scripts/build-renderer-lib.sh`），不是手抄移植——两套 shell 并存期间契约不可能漂移。生成脚本断言源里恰好 2 个顶层 `export`，多一个就红，不会静默出半成品。
+
+产物是**经典脚本**而非 ES module：renderer 的脚本按序同步加载，module 会被推迟到 `renderer.js` 之后，且 module 在 `file://` 下根本加载不了（Electron 仍在用）。
+
+`shim.js` 提供 `createDesktopBridge` 的依赖：同源 `request` 适配、从 preload 移植的 SSE 消费循环与解析器、经 `/login/` 网关的四个登录动词。**在 Electron 下它检测到 preload 已装好 `window.workmaxLocal` 就直接退场**，所以两套 shell 共用同一个 `index.html` 期间都能跑。
+
+**登录网关（D3 的落地形态）**：renderer 只能说出四个动词之一（begin/status/password/cancel），Go 决定它变成哪条 sidecar 路由、用什么方法。这是 Electron `ipcMain` 网关的直接对应物——凭据仍走 loopback HTTP 到 sidecar（**Electron 今天也是如此**，`login-transaction.ts` 从 Main 发同样两条路径），但 renderer 无法命名那些路径（反代拒绝），服务端的凭据卫生（fresh copy、拒重复键、4KiB 上限）全部照旧生效。更强的 D3（注销路由 + 进程内调 coordinator）仍是严格改进，只是不捆进 shell 迁移。
+
+**验收（`workmax-desktop --verify-shim`，连续三次通过）**：加载**真实 renderer 目录**（即出货的那两个文件）经生产 UI 路由进 WKWebView，断言：
+
+| 检查 | 结果 |
+|---|---|
+| `window.workmaxLocal.fetch` + `window.desktopBridge` 存在，version `1.0.0-alpha.7` | ✅ |
+| renderer.js 守卫函数要求的 **13 个方法**全部为 function | ✅ |
+| **token 未进入页面**（用真实长度随机 token 搜整个桥接对象） | ✅ D4 反转经验证 |
+| `workmaxLocal.fetch("/auth/status")` | ✅ HTTP 200 |
+| `desktopBridge.agent.startTurn` 完整流式 turn | ✅ 8 帧 / 4151 字节 / terminal=done，与 Go 控制组逐字节一致 |
+
+> 验收过程本身抓到一次契约执行：给 `startTurn` 传线上形状（`thread_uuid`/`payload`）被 `assertAllowedKeys` 拒绝——typed bridge 要求调用方只说意图（`threadUUID`/`userText`/`chatMode`），线上形状由它自己构造。契约在干活。
+
+**既有问题（非本次引入）**：`check-bundled-renderer.sh` 的行为检查子脚本在 main 上就是红的（`renderer.js:3152` 拿不到 `attachButton`，DOM stub 与 renderer 已漂移）。文件白名单那一关已补上 `shim.js` 与 `lib/desktop-bridge.js`。
+
+### 0.5.15 Electron 删除的真实前置：契约 checker 迁移（2026-08-08）
+
+开始执行退役时发现，"删掉 `desktop/electron/`" 不是删一个目录：**`check-desktop-boundaries.mjs` 断言的是 Electron 源码里的字符串**——`ipcMain.handle(...)`、`contextBridge.exposeInMainWorld(...)`、`event.sender !== mainWindow.webContents`、preload 的 `isPrivilegedLoginTransactionURL` 等等。直接删除会把 §14 指定为 parity 真源的那道闸门一起删掉，而那正是迁移期最不该失去的东西。
+
+顺带排除了"先把 `desktop-bridge.ts` 挪进 `renderer/src/`"这条看似安全的中间步：`preload.ts` import 它，一挪 Electron 构建立刻红。**删除是原子操作，前置是 checker 迁移。**
+
+**采用的做法：增量、始终保持绿。** 先给 checker 加上 Wails 侧断言，与 Electron 侧**并存**；退役时只需删掉 Electron 那一半，而不是重写闸门。
+
+契约里新增 `wailsShell` 段，把每条保证写成"**为什么重要 + 哪个文件必须仍然携带它**"，checker 按数据驱动校验（加一条保证是改数据，不是改代码）。当前 **14 条保证 + 4 个登录动词**（rev.18 加入外链两条；写下本节时是 11 条）：
+
+| 保证 | 它挡住什么 |
+|---|---|
+| `capability-path` | 反代替调用方注入 token，没有每次启动新生的能力段，任何本地进程扫到 UI 端口即可全权驱动 sidecar |
+| `privileged-routes-refused-server-side` | renderer 不能命名凭据路由——在 renderer 够不到的地方强制，不像 preload 的同进程守卫 |
+| `origin-stripped-before-sidecar` | 保持 sidecar"拒绝一切 Origin"的规则原样严格，而不是为了适配去放松它 |
+| `no-redirect-based-checks` | 只有在客户端跟随 301 时才成立的特权检查，不算检查 |
+| `sse-streams-unbuffered` | 会缓冲的代理会把分钟级流式变成一个迟到的整包响应 |
+| `containment-headers` | mac 上没有可取消的导航钩子，CSP `script-src 'self'` 是阻止模型输出执行的第一道闸 |
+| `token-never-in-renderer` | D4 反转的验证；按**带引号的字符串字面量**匹配，让规则约束代码而非注释措辞 |
+| `renderer-globals-installed` / `request-hygiene-preserved` / `login-through-gate-only` / `turn-cancel-is-local-and-remote` | 从 preload 逐条继承的行为 |
+
+**闸门经负向验证**（不能只看它变绿）：把 `FlushInterval: -1` 改成 `0`、给登录网关偷加一个动词、在 shim 里直接用 token 头 —— 三次都被精确报出，且错误信息带上"为什么重要"。
+
+### 0.5.16 Electron 已退役（2026-08-08）
+
+**已删除**：`desktop/electron/`（22 个源文件 + 3.6G 未跟踪产物）、`server/cmd/workagent-desktop/`、`build-mac.sh`、`inspect-mac-package.sh`、`smoke-packaged-app.sh` 及其三个测试。
+
+**已迁移**：`desktop-bridge.ts` → `desktop/renderer/src/`，它 import 的两个类型抽成 `login-types.ts`（顺带去掉 `NodeJS.Platform`——renderer 是网页，那个值只是信息性的）。renderer 现在有自己的极小 npm 项目，且**只在构建期需要**：生成产物已入库，改 renderer 不需要任何工具链。
+
+**契约 checker 完成迁移**，每条 Electron 断言都换成了同职能的 Wails 断言，而不是删掉：
+
+| 原断言（Electron） | 现断言（Wails） |
+|---|---|
+| `ipcMain.handle(...)` 命令集 | `loginGateRoutes` 动词集（双向钉死） |
+| `contextBridge.exposeInMainWorld("x")` | `shim.js` 里 `window.x =` |
+| `preload` 的 `isPrivilegedLoginTransactionURL` | `uiserver.go` 的 `privilegedSidecarPaths`（**服务端**拒绝，renderer 够不到） |
+| `event.sender !== mainWindow.webContents` | `mintCapability`（Electron 能问 OS 调用者是谁，loopback origin 上不能，等价物是"必须已持有能力才能寻址"） |
+| `preload` 的 `credentials/redirect` 卫生 | `shim.js` 同名断言（请求在哪儿构造，卫生就在哪儿） |
+| Main 的 flow ID / 凭据清理 | 服务端保证 + "flow ID 不得出现在页面" |
+| 边界扫描仅 `.js/.ts` | **加扫 `.go`**——shell 搬进 Go 后不加会静默变成空转（负向验证过） |
+
+契约里 `ipc` 段改名为 `privilegedGate`（`ipcMethods`→`gateMethods`、`ipcId`→`gateId`、`command`→`verb`）——留着 IPC 的名字描述一个不再是 IPC 的东西，是会误导下一个读它的人的那种技术债。
+
+**保留并去耦**：`notarize-mac.sh` 的 codesign/notarytool/stapler/spctl 管道是跨 shell 复用的（§6 早就这么说），已把 electron-builder 的目录布局从硬编码改成输入。它委托的 bundle 检查器随 Electron 删除了，所以改成**失败关闭**：dry-run 仍可用，真实公证在 W4 写出 Wails 布局的检查器之前一律拒绝——不静默丢掉"renderer 未打包就不许公证"这条闸门。
+
+**验证**：契约 checker、`notarize-mac.test.sh`、server（cgo/非 cgo）、云端构建、`desktop/wails` 测试全绿；`dev.sh --serve-only` 与 `dev.sh --verify-shim` 端到端通过。
+
+**文档与审计链已收口**（rev.12）：`desktop/README.md` 逐节重写（Release build 段改为诚实的"打包待 W4 + 哪些事实仍成立"；Version Pins 收敛到 Go 单一真源；Testing 段换成真实可跑的命令，含两条要真 webview 的手工检查）；顶层 `README.md`/`RELEASING.md`/`THIRD_PARTY_NOTICES.md` 同步；`scripts/license-audit.sh` 从 Electron 依赖树改指 renderer 的构建期 npm 树，并**新增 `desktop/wails` 模块的 go-licenses 审计**——它才是真正装到用户机器上的那个模块，之前没有任何一遍审计覆盖它。全仓残留的 "Electron" 只出现在解释某个决定为何如此的对照说明里。
+### 0.5.17 修复行为闸门，并因此抓到一个真实缺陷（2026-08-08）
+
+`check-bundled-renderer-behavior.mjs` 在 main 上长期红着，所以它**什么都没在检查**。修好之后立刻付了回报。
+
+**闸门为什么倒的**：它用一份**硬编码的元素 ID 清单**造假 DOM，而 L1（模型设置）与 L3b（附件）陆续给 `index.html` 加了 20 个元素，清单没跟上 ⇒ `getElementById` 返回空 ⇒ renderer 一进来就抛。修法不是补清单，而是**从 `index.html` 派生**元素集合（连 tag 名与初始 `hidden` 也从真实标记读，而不是从 id 后缀猜）——这样 stub 结构上不可能再落后于出货的标记。
+
+闸门倒下期间**三处独立漂移**无人察觉：① 元素清单；② 22 个 agent mock 缺 `uploadThreadFile`（L3b 收紧了 `desktopAgentBridge()` 守卫）；③ 下面这个真缺陷。
+
+**抓到的缺陷（用户可见，L3b 引入）**：`submitChat` 里 `state.pendingFiles = []` 执行在 `startTurn` 读取它**之前**，所以 `fileIDs` **永远是空数组**——附件 chip 正常显示、上传正常成功、模型从来收不到文件。已修（先取 id 再清托盘），并加了回归测试 `testStagedAttachmentsAreSentWithTheTurn`；把 bug 改回去验证过它确实会红。
+
+> 这条值得记住的地方在于失败模式：功能**看起来**是work 的。没有异常、没有报错，只是模型收到的上下文里少了东西。这类缺陷只有断言"发出去的东西"的测试才抓得到，而那个测试当时正好被一个无关的 DOM 漂移堵在门外。
+
+### 0.5.18 W2 安全收尾（2026-08-08）
+
+| 项 | 落地 |
+|---|---|
+| **CSP 去掉 `'unsafe-inline'`** | 出货 renderer 实测零内联脚本、零 style 属性、零运行时 `.style` 改动，所以那条通常"为存量代码"开的口子根本不需要——**开一次就再也收不回来**，所以现在不开。harness 页面自己的 `<style>` 也挪成了外部 CSS，否则它测的就不是生产 CSP |
+| **DevTools 默认关闭** | 原本无条件 `DevToolsEnabled: true`。窗口持有已认证会话，且 API 由反代代为鉴权——出货构建带调试面等于开了一扇别处都不给的门。改为仅 `WORKMAX_DESKTOP_DEVTOOLS=1` 开启，**应用内部无法打开** |
+| **单实例（两层）** | Wails `SingleInstanceOptions` + `<DataDir>/sidecar.pid` 锁。实测同一 data dir 起第二个 `--serve-only`，被明确拒绝（`another sidecar instance is already running (pid ...)`），第一个仍干净退出 |
+| **登录网关** | 已随 §0.5.16 落地并由契约钉死四个动词 |
+
+两条新属性都进了契约（现 **12 条保证**）：`containment-headers` 增加 `'unsafe-inline'` 的**缺席**断言，新增 `devtools-off-by-default`。`uiserver_test.go` 也独立断言 CSP 不含 `unsafe-inline`/`unsafe-eval`——闸门与单测各一遍，因为这是那种"某天为了赶工加一下"的口子。
+
+> 写这条断言时又踩了一次同样的坑：`'unsafe-inline'` 出现在我自己的注释里，把闸门弄红了。上次（token）靠"匹配带引号的字符串字面量"区分代码与散文，这次代码里它本来就带引号，区分不了——所以改了注释措辞。**规则要约束代码，就不能让它顺带约束了描述该规则的句子。**
+
+### 0.5.19 W4 起步：entitlements 重写 + bundle 检查器（2026-08-08）
+
+**entitlements 从 4 条减到 1 条**。去掉 `allow-jit` 与 `allow-unsigned-executable-memory`（Electron 的 V8 才需要；Wails 用系统 WebView，JS 引擎跑在自带授权的系统进程里，我们的二进制既不生成也不执行代码）与 `allow-dyld-environment-variables`（Wails 构建不需要 `DYLD_*`，资源路径由可执行文件位置显式推导）。只留 `network.client`。
+
+**`disable-library-validation` 刻意暂不添加**——它要到 RAG 里程碑才有正当理由（ONNX 库下载到数据目录、由别的团队签名，库验证下加载不了）。提前加等于为一个还没启用的功能削弱每一个构建。plist 里把**每一条缺席的理由也写下来了**，因为公证拒绝的理由通常是"授权与行为不符"，而"当初为什么没加"是最容易丢失的信息。
+
+**`inspect-mac-package.sh` 按 Wails 布局重写**，补上了我上一轮故意留的失败关闭。Wails 布局比 Electron 小得多（一个可执行文件 + 一个 renderer 目录），所以检查是穷举式的：Resources 顶层与 renderer 内部都是白名单，任何未列出的条目即失败。专门检查的项：bundle id 必须是 `ai.workmax.desktop`（它决定能否看见用户已有的 Keychain 会话）、可执行文件必须携带 Info.plist 声明的版本标记（否则是"用新版本号发旧代码"）、**不得存在打包的 sidecar 二进制**（那意味着打包步骤还在按退役的布局走）、CSP 的每个 `connect-src` 源逐个校验、以及 entitlements 集合与 plist 完全一致。
+
+16 项负向测试逐条钉住（`inspect-mac-package.test.sh`），已接回 CI。
+
+> 写这个检查器时自己踩了两次"重叠即死"：① 一条 `connect-src` 规则用了 `grep -E` 不支持的负向先行断言，还把 stderr 丢了 —— **它从写下那天起就什么都没匹配过**，测试是唯一发现方式；② source map 检查与文件白名单重叠、签名检查与 notarize 重叠，两处都删掉了弱的那个。**两条重叠的检查里，总有一条永远不会是构建失败的原因，于是也没人维护它。**
+
+### 0.5.20 首个打包产物与性能实测（2026-08-08）
+
+`build-mac.sh` 按 Wails 布局重写（手工组装，无打包框架——这个布局没有需要框架去拦的东西），**每次构建强制过 `inspect-mac-package.sh`**。产出的 arm64 `.app` 端到端可用：`--serve-only` 从 bundle 内起、`/health` 200、SIGTERM 退出码 0，`--verify-shim` 加载 **bundle 内**的 renderer 通过（8 帧/4151 字节）。
+
+**建出真实产物立刻抓到一个不一致**：`resolveResourcesDir()` 在打包构建里总是返回 bundle 的 `Contents/Resources`，而 rev.4 决定 RAG 资源是**下载到 `<DataDir>/resources`** 的——下载到一处、查找在另一处，装完也用不上。已改为"bundle 里确实有资源才用 bundle，否则让 Bootstrap 走 DataDir 默认"，两种分发方式都成立。这类错位只有真的打出包才会显形。
+
+**实测数字（§5 估算 vs 现实）**：
+
+| 指标 | §5 估算 | 实测 | |
+|---|---|---|---|
+| 安装包 | 15–25 MB | **22 MB** | ✅ 命中 |
+| 冷启动 | "单进程直起" | **~48 ms** 到 sidecar 就绪 / **~100 ms** 到 UI 就绪 | ✅ 远好于握手+spawn |
+| 稳态内存 | **40–80 MB** | **~109–126 MB**（app + WebKit 辅助进程，2–3 个进程） | ❌ **估算偏低约 50%** |
+
+内存这条要说清楚：**§5 的 40–80 MB 是错的**。真实值约 110–126 MB。它仍然显著低于 Electron，但不是当初写下的那个量级——`base memory` 里 Go runtime、WebKit 框架映射页、SQLite、gin 都要算。任何引用 §5 内存数字做决策的地方都应改用这里的实测值。
+
+**一个必须承认的流程错误**：§14 把"性能基准（**同机对照**）"列为切换门槛，而 Electron 在基线被采集之前就删掉了。源码仍可从 git 重建（已验证：`git worktree` + `npm ci` 能装出旧 shell），但一次粗测（dev 模式约 650 MB）与 Wails 的打包产物口径不同，反复尝试做干净配对测量都卡在进程归属上。**结论：Wails 的绝对数字可信，"对 Electron 快多少省多少"这个比值目前没有可引用的实测。** 正确顺序应当是"先测旧的，再删"。
+
+> 这条留在文档里不是自责，是给下一个删除动作的清单加一行：**凡是被列为门槛的对照测量，必须在被对照的一方消失之前采集。**
+
+### 0.5.21 RAG on/off 基准，以及它抓出的两个缺陷（2026-08-08）
+
+§14 要求性能基准**分 RAG on/off 两组**（"否则 ONNX 的体积/内存会污染 shell 瘦身的归因"）。补测之后，这条要求兑现了它的价值——两组数字直接推翻了 §5 的 RAG 说法，并牵出两个缺陷。
+
+**测量（`--serve-only`，仅 sidecar）**：
+
+| | 就绪 | 稳态 RSS |
+|---|---|---|
+| RAG off | ~48 ms | **32 MB** |
+| RAG on（改前） | 136–251 ms | **255 MB** |
+
+§5 写的 RAG 增量是"**+数十 MB**"，实测 **+223 MB**——差一个数量级。而且这是**刚启动、一次检索都没做**的地板值：ONNX Runtime 环境加模型会话本身就这么大。
+
+**缺陷一：急切加载**。embedder 原本在 `Bootstrap` 里直接构造，所以只要用户下载过资源，**哪怕从不使用知识库，每次启动都付这 223 MB**。改为懒加载（`lazyKnowledge`，首次调用时构造）后，资源在场但未使用的成本回到 **32 MB / 48 ms——与 RAG-off 完全相同**。资源是否存在决定检索**可用**，第一次真实调用决定它何时**加载**。
+
+**缺陷二：关闭竞态（真实崩溃，非懒加载引入）**。本地推理引擎在**后台 goroutine** 里索引已完成的 turn（`indexCompletedTurn`），而 `Boot.Shutdown` 同时销毁 ONNX 环境——`session.Run()` 打在已销毁的环境上，**SIGSEGV**。用户侧就是"回答刚出来就关窗 → 退出崩溃"。
+
+这个组合（RAG 在场 + 完成一次 turn + 立即关闭）此前从没被跑过：带资源时只跑过 `--serve-only`（无 turn），跑 kill-check 时又没带资源。**是补这组基准把它逼出来的。**
+
+修法是给 `lazyKnowledge` 记在途调用数，`Close` 先停止接单、再等待、最后才销毁；等待超时则**故意不销毁**——进程马上要退出了，泄漏几毫秒远好于把运行中的原生代码抽掉。复现场景连跑 3 次，退出码全 0、无崩溃迹象。
+
+> 值得记下的模式：这两个缺陷都不是"功能不工作"。一个是**每次启动多付 223 MB 而没人察觉**，一个是**只在特定关闭时序下崩溃**。它们都只能被"照着要求把基准补齐"抓到——而那条要求当时看起来只是个记数字的杂活。
+
+### 0.5.22 `--verify-app`：第一次跑用户实际走的那条路（2026-08-08）
+
+此前所有检查验的都是**零件**：行为套件在 VM 里用 mock 驱动 `renderer.js`，`--verify-shim` 验桥接面和一次 turn，`--kill-check` 验传输。**没有一个跑过用户实际拿到的组合**——未经修改的 `index.html` + 出货的 shim + 真 sidecar + 真 webview。
+
+`--verify-app` 补上这一条。关键约束是**不能为了观测而改动页面**：一旦往 `index.html` 注入探针，被测的就不再是出货的东西（何况 `script-src 'self'` 也会拒绝）。所以断言从**反代侧**做——`renderer.js` 启动时打了什么，从外面看得见。
+
+**只有一条必需请求，而这不是弱检查**：`GET /auth/status` 能到达，意味着 `shim.js` 装好了全局、`renderer.js` 认可了它、fetch 在能力路径下解析正确、反代注入了 token、sidecar 应答了。这条链之后的东西不构成新种类的证明。
+
+第一次跑就失败了——但**是我的期望写错了**：我把 `/agent/threads` 也列成必需，而 `renderer.js` 只在 `/auth/status` 报 `authenticated` 后才加载 threads/skills/recoverable。harness 没有云会话，所以它们缺席是 renderer 的**正确行为**。改成会话依赖的可选项后两次连过。
+
+> 这个失败本身有价值：它说明"照抄启动时序当断言"是不够的，得知道每一步的**前置条件**。写下来的期望如果不区分"必须发生"和"取决于状态"，红灯就会指向错误的地方。
+
+
+### 0.5.23 复审发现：外链会把 app 导航走（2026-08-08，rev.18）
+
+一次对照代码的完整复审，抓到一个**真实功能缺口**、三处文档与实现不符、一段死代码。
+
+**功能缺口（已修）**：`index.html` 有一个指向 GitHub 的 `<a href>`，而 `renderer.js` 不拦截它，`desktop/wails/` 里也**从没实现过 `OpenURL`**——尽管文档在四处写着"外链拦截 → `browser.OpenURL`"。后果是具体的：点它 → WKWebView 顶层导航走 → 因为 UI origin 只服能力路径下的内容，**app 变成远程页面且回不来**。
+
+这正是 §0.5.10 记录的残余风险落到实处。当时 kill ③ 测的是 `window.open`（返回 null），**同标签页的 `<a>` 导航是另一种形态，没被覆盖**。教训：把"没有可取消的导航钩子"记成风险之后，要把**每一种能触发导航的形态**都列出来逐个验，否则记下来的只是其中一种。
+
+修法两半，缺一不可：renderer 在**捕获阶段**拦截（这样 stopPropagation 也绕不过去）并把 URL 交给 Go；Go **重新校验**后交系统浏览器。校验从已删的 `security-helpers.ts` 移植，规则不变——只允许 http/https、拒绝 URL 内凭据、拒绝一切 local/private/link-local。Go 版用解析后的 IP 判断而非字符串模式（原版最可能漏拼写的就是那部分），15 条拒绝逐条有测试，另有测试证明**没有能力路径就够不到这个端点**。
+
+**文档与实现不符（已对齐）**：① D3 从未实现——`DropLoginTransactionHTTP` 不存在，4 条 login 路由仍注册，实际由反代服务端拒绝；原设计的前提（"D2 暴露 token ⇒ 必须移出路由表"）随 D4 反转而消失，所以不实现是合理的，只是文档没跟上。② 路由数多处写 21，实际 25。③ 保证数写 11，实际已 14。④ 多处仍称"首版 RAG-off"，而 RAG 自 rev.16 起可用（懒加载）。
+
+**死代码（已删）**：`RuntimeAPI` 服务。同源形态下 renderer 用相对 URL，无需被告知坐标；而 Wails 绑定在 loopback origin 上本来也不可用（§0.5.11）。
+
+**一个 31.8 MB 的二进制被误提交**：`desktop/wails/wails`，进入版本库于 `8d889fa`。`go build` 不带 `-o` 会把产物写成与包目录同名的文件，而 `.gitignore` 只挡了 `bin/`、`release/`、`resources/`。已从索引移除并加规则；**blob 仍留在历史里**，除非重写那次提交——是否重写由你定。
+
+**结构（已修）**：§0.5 的小节此前是 `1–8 → 10 → 12 → 11 → 22 → 21 → … → 9` 的倒序穿插——每次往前插新章节的累积后果。已按编号重排，并新增 §0.5.0 作为状态索引。
 
 ---
 
@@ -548,7 +589,7 @@ L3c 之后 sidecar 需要 cgo 与三份 native 资源，这块在 Electron 侧**
 
 **关键去风险点 = P0 spike 里的「WKWebView 下 SSE 是否字节级跑通」**——这是整个迁移唯一可能让你回头的技术未知。W1 第一件事就做它。
 
-> ONNX Runtime 退出析构（§10 生命周期）在 rev.2 里是次高风险；**rev.3 首版 RAG-off 后它不在关键路径上**，推迟到 RAG 里程碑再验。
+> ONNX Runtime 退出析构（§10 生命周期）在 rev.2 里是次高风险。rev.3 曾以"首版 RAG-off"推迟它——**而它在 rev.16 真的发生了**：后台索引与环境销毁并发导致 SIGSEGV，见 §0.5.21。已修。
 
 ---
 
@@ -590,7 +631,7 @@ L3c 之后 sidecar 需要 cgo 与三份 native 资源，这块在 Electron 侧**
 │   │   modelSettings · localFiles · knowledge(cgo) ·         │                           │
 │   │   localInference                                        │  Contents/Resources/      │
 │   │   → desktop.NewServer(ServerConfig{...})                │   ├ libonnxruntime.dylib  │
-│   │   → 绑 127.0.0.1:0 （含 21 条路由，不含 4 条 login HTTP）│   └ knowledge/{model,tok} │
+│   │   → 绑 127.0.0.1:0 （25 条路由；login×4 由反代拒绝）  │   └ knowledge/{model,tok} │
 │   └────────────────────────────────────────────────────────┘                           │
 │            ▲ Wails Go 绑定 (login*)            ▲ 直接 fetch (token)                     │
 └────────────┼──────────────────────────────────┼─────────────────────────────────────────┘
@@ -607,7 +648,7 @@ L3c 之后 sidecar 需要 cgo 与三份 native 资源，这块在 Electron 侧**
 | **D1 shell 版本** | **Wails v3**（已定；P0 spike 验证，v2 作退路） | v3 原生 server build 直接实现 D4 双模式（省手写）；托盘/可取消事件 hook/可定制 Taskfile 构建对齐需求；避免将来 v2→v3 二次迁移。beta 风险由 EA 阶段 + mac 优先（避开 Windows #4559）+ P0 spike 验证兜底 |
 | **D2 传输** | token 暴露给受信 bundled webview，renderer 直接 fetch loopback（含 SSE） | SSE 字节级不变；契约零改动。代价见 D4 |
 | **D2-alt**（退路） | token 留 Go，renderer 经 Wails 绑定 `Fetch()` 代理 | 保住 token-secrecy；但 3 条 SSE 流要改走 `EventsEmit`（Option B 成本渗入）。仅当 secrecy 为硬要求 |
-| **D3 登录交易** | 4 条 `/auth/login-transaction*` **不在嵌入式 server 注册**；登录走 Wails Go 绑定直调 `loginCoordinator` | 忠实移植"Main-only"且更严（凭据不过 HTTP）；D2 下必须，否则 token 暴露=login 路由暴露 |
+| **D3 登录交易**（rev.18 按实现改写） | 4 条 `/auth/login-transaction*` **仍在 sidecar 注册**；反代**服务端拒绝**渲染器访问它们，登录只能走 UI server 上的 `/login/` 网关（四个动词，Go 决定路由与方法） | 原设计是"不注册 + Wails 绑定"，前提是"D2 暴露 token ⇒ 必须移出路由表"。**D4 反转后 token 不再下发，这个前提消失了**，且 §0.5.11 实测绑定在 loopback origin 上不可用。当前形态达成同一目标：renderer 无法命名凭据路由，而服务端拒绝比 preload 的同进程守卫更强。"不注册"仍是可选的严格化，不是欠账 |
 | **D4 token secrecy** | **A2 已接受**：token 下发 renderer（直连 loopback 含 SSE）；由"renderer 物理读不到"降级为"webview 受信（bundle-only/单源/单实例）" | 有界削弱——token 够不到**云凭据/keychain**（那条路经 D3 绑定，不过 HTTP）；缓解：严格 CSP、只服 bundled 资产、模型输出转义。**残余面见 D4.1** |
 | **D4.1 残余面（L3d 后扩大）** | 显式承认：一把 token = 全部**本地**数据面 | L3d 让未登录用户也能用 `localSingleUserUID (1<<62)` 建 thread / chat / 传文件。所以 token 泄漏的后果不再是"只能冒充已登录用户调云代理"，而是**即使从未云登录，也能读写全部本地 thread/message/附件（及 L3c RAG 索引）**。这仍在"本机本地"边界内（攻击者已在本机 = 本来就能读 SQLite 文件），故不推翻 A2；但安全对等清单（§14）必须逐字写上，不能只写"够不到云凭据" |
 | **D5 死面** | 丢弃 `system.*`/`history.*` typed/`revealDataDir`/`capabilities`，保留 raw fetch | renderer 本就没用；少移植、少攻击面 |
@@ -623,7 +664,10 @@ L3c 之后 sidecar 需要 cgo 与三份 native 资源，这块在 Electron 侧**
 package desktop
 
 type BootstrapConfig struct {
-    DropLoginTransactionHTTP bool   // D3：login 不进 HTTP 路由表
+    // 实现说明（rev.18）：原设计有 DropLoginTransactionHTTP，用于把 login 路由移出
+    // HTTP 表。它没有被实现，因为 D4 反转（token 不再下发）之后该开关的前提消失了；
+    // 凭据路由改由 UI 反代在服务端拒绝。下面是实际存在的字段。
+    LocalToken string   // 空 → 继承 env 或新生
     ResourcesDir             string // native 资源根（.app/Contents/Resources）；空 → 回落 env/相对 cwd
     // ...DataDir 覆盖、token 注入等 dev 开关
 }
@@ -672,8 +716,7 @@ package main
 
 func main() {
     boot, err := desktop.Bootstrap(desktop.BootstrapConfig{
-        DropLoginTransactionHTTP: true,          // D3：login 走绑定，不进 HTTP 表
-        // ResourcesDir: appResourcesDir(),      // RAG 里程碑再接（首版留空 ⇒ RAG-off，见 §0.5.1）
+        ResourcesDir: resolveResourcesDir(),     // 空 → <DataDir>/resources（下载目的地）
     })
     if err != nil { log.Fatalf("bootstrap: %v", err) }
     defer boot.Shutdown(context.Background())
@@ -746,7 +789,7 @@ Wails **无 preload 世界**，故 `desktop/electron/src/preload.ts`（`AgentSSE
 | **W1 kill ①** | WKWebView 下 `/agent/chat` SSE 字节级跑通（ReadableStream + parser 移植） | renderer shim SSE | 完整一轮 text_delta→done 到达；**不过则终止迁移** |
 | **W1 kill ②** | v3 在 macOS 稳定度：无 beta-blocker 崩溃；原生 server build 可用并跑通 `/health` | `desktop/wails/` | v3 mac 关键路径稳定；**严重 beta 崩溃→回退 v2（D1 退路）** |
 | **W1 kill ③** | 导航收束可行性：embed.FS bundle-only + 外链 OpenURL + CSP | `desktop/wails/` | 外链走系统浏览器，无任意导航；**强度不足→评估 D2-alt 或保留 Electron** |
-| **W2 安全** | `LoginAPI` 绑定 + `DropLoginTransactionHTTP`；`RuntimeAPI` token 下发；单实例；CSP 落地 | `bootstrap.go`、`desktop/wails/` | login 全流程过；token 不入日志；契约 checker 对 21 条路由绿 |
+| **W2 安全** ✅ | `/login/` 网关（D3 落地形态）；能力路径；反代拒绝凭据路由；CSP 收紧（无 `unsafe-inline`）；DevTools 仅 env 开启；单实例两层 | `desktop/wails/uiserver.go`、`main.go` | 契约 checker 14 条保证绿；`uiserver_test.go` 覆盖 |
 | **W3 renderer shim** | 移植 SSE parser + typed bridge + fetch 包装；renderer helper 重指向（可与 W2 并行） | `renderer/en/desktop/shim.js`(新) | 与 Electron 版行为对等（见 §14） |
 | **W4 打包** | entitlements **纯减法**（去 JIT/unsigned-exec-mem/dyld-env，留 `network.client`）；preflight 校验器按新 bundle 重写；公证流跑通；**保留 `appId ai.workmax.desktop`** | `desktop/wails/build/`、`scripts/` | arm64 包过 Developer ID 签名 + notarytool + stapler + spctl |
 | **W4 资产** | `go-licenses` 重跑；THIRD_PARTY 更新（去 Electron/Chromium，加 Wails/webview 依赖） | `scripts/` | 许可清单完整 |
@@ -888,7 +931,8 @@ Wails **无 preload 世界**，故 `desktop/electron/src/preload.ts`（`AgentSSE
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | rev.1 | 2026-08-08 | 首版评估 + Part B 落地方案；D1/D4/入口结构三项决策落定（v3 / A2 / 单入口双模式） |
-| **rev.17** | **2026-08-08** | **新增 `--verify-app`**（§0.5.22）：第一次运行用户实际走的路径——未经修改的 `index.html` + 出货 shim + 真 sidecar + 真 webview。断言从反代侧做，因为为观测而改页面就等于不再测出货物。唯一必需请求 `/auth/status` 覆盖整条链；其余启动请求是会话依赖的可选项（首次跑因把它们列为必需而误红，已修正） |
+| **rev.18** | **2026-08-08** | **代码/文档对照复审（§0.5.23）。** 修一个真实缺口：外链无人拦截，点击会把 app 导航到远程页且回不来——renderer 捕获阶段拦截 + Go 侧 SSRF 校验后交系统浏览器，15 条拒绝有测试，契约增至 **14 条保证**。删死代码 `RuntimeAPI`。对齐四处文档失真（D3 从未实现、路由 21→25、保证 11→14、"首版 RAG-off"已过时）。§0.5 小节按编号重排并新增 §0.5.0 状态索引 |
+| rev.17 | 2026-08-08 | **新增 `--verify-app`**（§0.5.22）：第一次运行用户实际走的路径——未经修改的 `index.html` + 出货 shim + 真 sidecar + 真 webview。断言从反代侧做，因为为观测而改页面就等于不再测出货物。唯一必需请求 `/auth/status` 覆盖整条链；其余启动请求是会话依赖的可选项（首次跑因把它们列为必需而误红，已修正） |
 | rev.16 | 2026-08-08 | **补齐 RAG on/off 基准，抓出两个缺陷。** 新增 §0.5.21：实测 RAG 增量 **+223 MB**（§5 写的是"+数十 MB"，差一个数量级）。① embedder 改为**懒加载**，资源在场但未使用的成本回到 32 MB/48 ms，与 RAG-off 相同；② 修复**关闭竞态**——后台索引 goroutine 与 ONNX 环境销毁并发导致 SIGSEGV（"回答刚出来就关窗即崩溃"），`Close` 改为停单→等待→销毁，超时则不销毁。另验证 `smoke-local.sh` 核心集对新二进制通过（含 `--check-pid-lock`），两个可选检查依赖云端会话 |
 | rev.15 | 2026-08-08 | **首个打包产物 + 性能实测。** 新增 §0.5.20：`build-mac.sh` 按 Wails 布局重写并强制过检查器，arm64 `.app` 端到端可用。修复 `resolveResourcesDir()` 与下载目的地错位（打包后才显形）。实测替换 §5 估算：安装包 22 MB ✅、冷启动 ~48ms/~100ms ✅、**稳态内存 ~109–126 MB（§5 估的 40–80 MB 偏低约 50%）** ❌。记录一个流程错误：同机对照基线未在删除 Electron 前采集，比值暂无可引用实测 |
 | rev.14 | 2026-08-08 | **W4 起步。** 新增 §0.5.19：entitlements 从 4 条减到 1 条（去掉 V8/dyld 三条，`disable-library-validation` 待 RAG 里程碑再加，缺席理由写进 plist）；`inspect-mac-package.sh` 按 Wails 布局重写并配 16 项负向测试，补上 `notarize-mac.sh` 的失败关闭，两者已接回 CI。修掉自己写的一条静默失效检查（`grep -E` 不支持负向先行断言 + stderr 被丢），并把两处重叠检查收敛到一处 |

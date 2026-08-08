@@ -158,3 +158,97 @@ func sidecarPortOf(t *testing.T, rawURL string) int {
 	}
 	return port
 }
+
+// External links are the one navigation the shell cannot cancel once it
+// starts: macOS Wails has no decidePolicyForNavigationAction, so an anchor
+// that is allowed to proceed replaces the app with a remote page and there is
+// no way back. These pin what the Go side accepts.
+func TestOpenExternalAcceptsOnlyRealExternalHTTPURLs(t *testing.T) {
+	for _, ok := range []string{
+		"https://github.com/jonnyquan/workmax",
+		"http://example.com/path?q=1#frag",
+		"https://example.com:8443/deep/link",
+	} {
+		if _, err := normalizeExternalHTTPURL(ok); err != nil {
+			t.Errorf("normalizeExternalHTTPURL(%q) = %v, want accepted", ok, err)
+		}
+	}
+
+	// Each rejection is a different way "open this link" could become a
+	// request to something it should not reach.
+	for _, bad := range []struct{ url, why string }{
+		{"file:///etc/passwd", "file: reaches the local disk"},
+		{"workmax://internal", "a custom scheme reaches whatever app registered it"},
+		{"javascript:alert(1)", "not a navigation at all"},
+		{"https://user:pw@example.com/", "credentials in the URL"},
+		{"http://localhost:8080/admin", "localhost"},
+		{"http://127.0.0.1:9999/", "loopback"},
+		{"http://[::1]:9999/", "loopback v6"},
+		{"http://10.0.0.5/", "private range"},
+		{"http://192.168.1.1/", "private range"},
+		{"http://172.16.0.1/", "private range"},
+		{"http://169.254.169.254/latest/meta-data/", "link-local, the cloud metadata endpoint"},
+		{"http://0.0.0.0/", "unspecified"},
+		{"https://sub.localhost/", "localhost suffix"},
+		{"  https://example.com", "padded input"},
+		{"", "empty"},
+	} {
+		if got, err := normalizeExternalHTTPURL(bad.url); err == nil {
+			t.Errorf("normalizeExternalHTTPURL(%q) = %q, want refused (%s)", bad.url, got, bad.why)
+		}
+	}
+}
+
+func TestOpenExternalEndpointRefusesWithoutOpening(t *testing.T) {
+	var opened []string
+	handler := newOpenExternalHandler(func(u string) error {
+		opened = append(opened, u)
+		return nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/open-external",
+		strings.NewReader(`{"url":"http://169.254.169.254/latest/meta-data/"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if len(opened) != 0 {
+		t.Fatalf("a refused URL was still handed to the browser: %v", opened)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/open-external",
+		strings.NewReader(`{"url":"https://example.com/"}`))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if len(opened) != 1 || opened[0] != "https://example.com/" {
+		t.Fatalf("opened = %v, want the accepted URL exactly once", opened)
+	}
+}
+
+func TestOpenExternalIsReachableOnlyUnderTheCapability(t *testing.T) {
+	const cap = "test-capability"
+	var opened int
+	handler := UIHandlerWithOpener(fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("ok")}},
+		cap, 1, "tok", func(string) error { opened++; return nil })
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/open-external",
+		strings.NewReader(`{"url":"https://example.com/"}`)))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unauthenticated /open-external = %d, want 404", rec.Code)
+	}
+	if opened != 0 {
+		t.Fatal("a caller without the capability reached the system browser")
+	}
+
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/"+cap+"/open-external",
+		strings.NewReader(`{"url":"https://example.com/"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("capability-bearing /open-external = %d, want 200", rec.Code)
+	}
+}

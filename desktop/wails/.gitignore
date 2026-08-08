@@ -1,3 +1,8 @@
 bin/
 release/
 resources/
+
+# `go build` with no -o writes a binary named after the package directory.
+# One got committed that way in 8d889fa; the blob stays in history unless that
+# is rewritten, but it must not come back.
+/wails

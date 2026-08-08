@@ -44,6 +44,7 @@ if (typeof createDesktopBridge !== "function") {
 
 const API_PREFIX = "api";
 const LOGIN_PREFIX = "login";
+const OPEN_EXTERNAL_PATH = "open-external";
 
 // Streams live for the length of a model turn, so a frame that is merely large
 // must not be mistaken for a stream that has gone wrong. These mirror the
@@ -546,6 +547,55 @@ const runtime = {
 // It is stubbed rather than dropped because the typed bridge's dependency
 // shape requires it; a caller gets an honest refusal, not a broken promise.
 const revealDataDir = async () => ({ ok: false, error: "not supported in this shell" });
+
+// --------------------------------------------------------------------------
+// External links
+// --------------------------------------------------------------------------
+
+// macOS gives this shell no way to cancel a navigation once it starts, so a
+// plain <a href="https://..."> would move the window itself — and because the
+// origin only serves what is under the capability path, the app would be
+// replaced by a remote page with no way back.
+//
+// The click is therefore stopped here, in the capture phase so a handler that
+// stops propagation cannot skip it, and the URL is handed to Go to open in the
+// system browser. Go re-validates: nothing the page sends is trusted to be
+// external just because this code thinks it is.
+function isExternalHref(anchor) {
+  const href = anchor.getAttribute("href") || "";
+  if (href === "" || href.startsWith("#")) return false;
+  let resolved;
+  try {
+    resolved = new URL(href, document.baseURI);
+  } catch {
+    return false;
+  }
+  if (resolved.protocol !== "http:" && resolved.protocol !== "https:") return false;
+  return resolved.origin !== location.origin;
+}
+
+document.addEventListener(
+  "click",
+  (event) => {
+    const anchor = event.target && event.target.closest && event.target.closest("a[href]");
+    if (!anchor || !isExternalHref(anchor)) return;
+    event.preventDefault();
+    const target = new URL(anchor.getAttribute("href"), document.baseURI).toString();
+    // Not resolve(): that helper adds a leading slash to build API paths, and
+    // the trailing form it produces would miss the exact-path route.
+    fetch(new URL(OPEN_EXTERNAL_PATH, document.baseURI).toString(), {
+      method: "POST",
+      credentials: "omit",
+      redirect: "error",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: target }),
+    }).catch(() => {
+      // Nothing to fall back to: opening it here is the navigation this
+      // handler exists to prevent.
+    });
+  },
+  true
+);
 
 window.workmaxLocal = {
   sidecarVersion: runtime.sidecarVersion,

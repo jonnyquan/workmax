@@ -866,8 +866,34 @@
             "DevToolsEnabled: true"
           ]
         }
+      },
+      {
+        "id": "external-links-leave-the-window",
+        "why": "macOS Wails has no cancellable navigation hook, so an anchor allowed to proceed replaces the app with a remote page and there is no way back. The renderer stops the click; Go re-validates and opens the system browser. Neither half is optional: without the renderer half the navigation happens, without the Go half the page decides what counts as external.",
+        "evidence": {
+          "file": "desktop/wails/external.go",
+          "contains": [
+            "func normalizeExternalHTTPURL",
+            "func isLocalOrPrivateHost",
+            "IsPrivate()",
+            "IsLinkLocalUnicast()"
+          ]
+        }
+      },
+      {
+        "id": "renderer-intercepts-external-clicks",
+        "why": "Capture phase, so a handler that stops propagation cannot skip it. The URL is sent to Go rather than opened here, because opening it here is the navigation this exists to prevent.",
+        "evidence": {
+          "file": "desktop/renderer/en/desktop/shim.js",
+          "contains": [
+            "function isExternalHref",
+            "event.preventDefault()",
+            "open-external"
+          ]
+        }
       }
-    ]
+    ],
+    "openExternalPath": "/open-external"
   },
   "privilegedGate": {
     "description": "The one privileged path the renderer cannot reach around. Under Electron this was ipcMain; under Wails it is the Go login gate. The renderer names a verb and never a route or a method.",

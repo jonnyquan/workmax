@@ -139,7 +139,12 @@ func runDesktop(boot *desktop.Boot) {
 	//
 	// W4 swaps os.DirFS for an embed.FS so the "only files we ship" guarantee
 	// survives packaging — a directory can be tampered with after install.
-	ui, err := newUIServer(os.DirFS(rendererDir), boot.Port(), boot.LocalToken)
+	// The opener is wired after the app exists, since it is the Wails app that
+	// owns the browser manager. Until then external links are refused, which
+	// is the right answer for the fraction of a second before the window is up.
+	var openExternal externalURLOpener = func(string) error { return fmt.Errorf("app not ready") }
+	ui, err := newUIServer(os.DirFS(rendererDir), boot.Port(), boot.LocalToken,
+		func(target string) error { return openExternal(target) })
 	if err != nil {
 		shutdownBoot(boot)
 		log.Fatalf("ui server: %v", err)
@@ -150,12 +155,6 @@ func runDesktop(boot *desktop.Boot) {
 	app := application.New(application.Options{
 		Name:        "WorkMax Desktop",
 		Description: "WorkMax local-first desktop agent",
-		Services: []application.Service{
-			application.NewService(&RuntimeAPI{
-				baseURL:   ui.BaseURL(),
-				apiPrefix: uiAPIPrefix,
-			}),
-		},
 		Assets: application.AssetOptions{
 			// The window loads ui.Origin(), not this handler. Wails still
 			// wants an asset handler for its own runtime bits; anything else
@@ -202,40 +201,19 @@ func shutdownBoot(boot *desktop.Boot) {
 	_ = boot.Shutdown(ctx)
 }
 
-// RuntimeAPI tells the renderer where the API lives. Note what it does NOT
-// carry: the local token.
-//
-// Decision D2/A2 had accepted handing the token to JS, because a cross-origin
-// fetch needs the header. The measured same-origin shape removes that need —
-// the Go proxy injects the token — so the renderer is back to being unable to
-// read it, matching the Electron build's guarantee. See uiserver.go.
-type RuntimeAPI struct {
-	baseURL   string
-	apiPrefix string
-}
-
-// LoopbackInfo is the shape the renderer shim expects.
-type LoopbackInfo struct {
-	BaseURL   string `json:"baseURL"`
-	APIPrefix string `json:"apiPrefix"`
-	Version   string `json:"version"`
-}
-
-// Loopback returns the same-origin API coordinates.
-func (r *RuntimeAPI) Loopback() LoopbackInfo {
-	return LoopbackInfo{
-		BaseURL:   r.baseURL,
-		APIPrefix: r.apiPrefix,
-		Version:   buildinfo.Version,
-	}
-}
-
 // DevToolsEnv opts a development run into webview devtools. Absent means off,
 // including in every packaged build — there is deliberately no way to turn it
 // on from inside the app.
 const DevToolsEnv = "WORKMAX_DESKTOP_DEVTOOLS"
 
 func devToolsRequested() bool { return os.Getenv(DevToolsEnv) == "1" }
+
+// There is no bound service. RuntimeAPI used to hand the renderer the API's
+// coordinates, but two measurements removed the need for it: the same-origin
+// shape means the renderer addresses everything relatively (nothing to be
+// told), and Wails bindings do not work on a loopback origin anyway — the
+// runtime posts calls to location.origin + "/wails/runtime", which is our own
+// UI server. See ProjectDocs/wails-migration-evaluation-2026-08.md §0.5.11.
 
 // resolveRendererDir finds the bundled renderer. Packaged builds keep it in
 // Contents/Resources; a dev run finds it in the repo. Both are directories we
@@ -399,12 +377,6 @@ func runKillCheck(boot *desktop.Boot, timeout time.Duration, verifyShim bool) {
 
 	app := application.New(application.Options{
 		Name: "WorkMax kill check",
-		Services: []application.Service{
-			application.NewService(&RuntimeAPI{
-				baseURL:   uiOrigin + "/" + capability + "/",
-				apiPrefix: uiAPIPrefix,
-			}),
-		},
 		Assets: application.AssetOptions{
 			Handler: killCheckAssetHandler(boot),
 		},

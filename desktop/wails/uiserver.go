@@ -96,12 +96,25 @@ const contentSecurityPolicy = "default-src 'none'; " +
 // from newUIServer so the kill-check harness can exercise the real routing
 // with its own page mounted alongside, rather than testing a lookalike.
 func UIHandler(renderer fs.FS, capability string, sidecarPort int, sidecarToken string) http.Handler {
+	return UIHandlerWithOpener(renderer, capability, sidecarPort, sidecarToken, nil)
+}
+
+// UIHandlerWithOpener is UIHandler plus the system-browser opener. A nil
+// opener refuses every external link rather than silently doing nothing: a
+// harness that has no browser to open should fail the request, not appear to
+// succeed.
+func UIHandlerWithOpener(renderer fs.FS, capability string, sidecarPort int, sidecarToken string, open externalURLOpener) http.Handler {
 	base := "/" + capability
 	apiPrefix := base + uiAPIPrefix
+
+	if open == nil {
+		open = func(string) error { return fmt.Errorf("no system browser opener wired") }
+	}
 
 	inner := http.NewServeMux()
 	inner.Handle(apiPrefix, newSidecarProxyAt(apiPrefix, sidecarPort, sidecarToken))
 	inner.Handle(base+uiLoginPrefix, newLoginGate(base+uiLoginPrefix, sidecarPort, sidecarToken))
+	inner.Handle(base+uiOpenExternalPath, newOpenExternalHandler(open))
 	inner.Handle(base+"/", securityHeaders(http.StripPrefix(base, http.FileServer(http.FS(renderer)))))
 
 	outer := http.NewServeMux()
@@ -134,7 +147,7 @@ func rejectNonCanonicalPaths(next http.Handler) http.Handler {
 // newUIServer binds a loopback listener that serves assets from renderer and
 // proxies uiAPIPrefix to the sidecar. Nothing else is reachable: an unmatched
 // path 404s rather than falling through to anything.
-func newUIServer(renderer fs.FS, sidecarPort int, sidecarToken string) (*uiServer, error) {
+func newUIServer(renderer fs.FS, sidecarPort int, sidecarToken string, open externalURLOpener) (*uiServer, error) {
 	capability, err := mintCapability()
 	if err != nil {
 		return nil, err
@@ -144,7 +157,7 @@ func newUIServer(renderer fs.FS, sidecarPort int, sidecarToken string) (*uiServe
 		return nil, fmt.Errorf("ui server listen: %w", err)
 	}
 
-	srv := &http.Server{Handler: UIHandler(renderer, capability, sidecarPort, sidecarToken)}
+	srv := &http.Server{Handler: UIHandlerWithOpener(renderer, capability, sidecarPort, sidecarToken, open)}
 	go func() { _ = srv.Serve(listener) }()
 
 	origin := "http://" + listener.Addr().String()
