@@ -190,6 +190,12 @@ class FakeElement {
     return this.children.length * 100;
   }
 
+  // A stable viewport height so the sticky-scroll math is deterministic in
+  // the stub: near-bottom means scrollTop >= children*100 - 400 - 48.
+  get clientHeight() {
+    return 400;
+  }
+
   focus() {
     this.focused = true;
   }
@@ -1466,6 +1472,173 @@ async function testThreadDeleteIsTwoStepAndLocalOnly() {
     document.byId.get("thread-panel").hidden,
     true,
     "deleting the selected thread must close its workbench",
+  );
+}
+
+// A reader who scrolled up to check an earlier answer must not be yanked
+// back down by every streaming delta — the stream follows only a reader who
+// is already following, and otherwise lights the jump affordance.
+async function testStreamingDoesNotYankAScrolledUpReader() {
+  let emit = null;
+  const manyMessages = Array.from({ length: 12 }, (_, i) => ({
+    uuid: `m${i}`,
+    user_text: `question ${i}`,
+    ai_text: `answer ${i}`,
+    streaming_state: "complete",
+    created_at: "2026-05-21T00:00:00Z",
+    updated_at: "2026-05-21T00:00:00Z",
+  }));
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("scroll-thread", "Long chat")] });
+      }
+      if (pathname === "/agent/threads/scroll-thread/messages") {
+        return response({ items: manyMessages });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input, callback) {
+        emit = (event) => callback({ ...event, turnID: "scroll-turn" });
+        return { turnID: "scroll-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  // The stub's elements are not a connected tree, so the viewport's derived
+  // scrollHeight is useless; pin explicit geometry on this one instance so
+  // the sticky math has something real to chew on.
+  const viewport = document.byId.get("message-viewport");
+  Object.defineProperty(viewport, "scrollHeight", { value: 1200 });
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  assert.equal(viewport.scrollTop, 1200, "opening a thread lands at the newest message");
+
+  const input = document.byId.get("chat-input");
+  input.value = "One more question";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  // The reader scrolls up to re-read something.
+  viewport.scrollTop = 0;
+  viewport.dispatch("scroll");
+
+  const before = viewport.scrollTop;
+  emit({ type: "text_delta", delta: "streaming while they read " });
+  emit({ type: "text_delta", delta: "and more " });
+  await settle();
+  assert.equal(viewport.scrollTop, before, "deltas must not scroll a reader who scrolled away");
+  assert.equal(
+    document.byId.get("jump-latest").hidden,
+    false,
+    "the way back down must be offered instead",
+  );
+
+  document.byId.get("jump-latest").click();
+  await settle();
+  assert.ok(viewport.scrollTop >= viewport.scrollHeight - 500, "jump returns to the newest");
+  assert.equal(document.byId.get("jump-latest").hidden, true, "and retires itself");
+
+  // Scroll up once more, then return by HAND (not via the button, whose
+  // force path sets stickiness itself): the scroll listener alone must
+  // notice the reader is back and retire the jump affordance.
+  viewport.scrollTop = 0;
+  viewport.dispatch("scroll");
+  emit({ type: "text_delta", delta: "light the button again " });
+  await settle();
+  assert.equal(document.byId.get("jump-latest").hidden, false, "precondition: away again");
+  viewport.scrollTop = 1200;
+  viewport.dispatch("scroll");
+  assert.equal(
+    document.byId.get("jump-latest").hidden,
+    true,
+    "scrolling back down by hand must resume following and retire the button",
+  );
+  emit({ type: "text_delta", delta: "now following again" });
+  await settle();
+  assert.equal(viewport.scrollTop, 1200, "a following reader keeps following");
+
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  await settle();
+}
+
+// The pill's colour is its state at a glance; the class must track the label.
+async function testTurnStatePillCarriesItsTone() {
+  let emit = null;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("tone-thread", "Tones")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input, callback) {
+        emit = (event) => callback({ ...event, turnID: "tone-turn" });
+        return { turnID: "tone-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  const pill = document.byId.get("turn-state");
+  const input = document.byId.get("chat-input");
+  input.value = "go";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+  assert.equal(pill.classList.contains("is-busy"), true, "Working must read busy");
+
+  emit({ type: "text_delta", delta: "ok" });
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  await settle();
+  assert.equal(pill.classList.contains("is-ok"), true, "Done must settle green");
+  assert.equal(pill.classList.contains("is-busy"), false, "and stop pulsing");
+}
+
+// The protocol picker answers its own question at the moment of choice.
+async function testModelProtocolHintFollowsTheChoice() {
+  const { document } = await runRenderer(undefined);
+  const protocol = document.byId.get("model-protocol");
+  const hint = document.byId.get("model-protocol-hint");
+  const baseURL = document.byId.get("model-base-url");
+
+  protocol.value = "openai_compatible";
+  protocol.dispatch("change");
+  assert.match(hint.textContent, /Chat only/i, "openai must say what it does not get");
+  assert.match(baseURL.placeholder, /11434/, "and hint at the Ollama-shaped URL");
+
+  protocol.value = "anthropic_compatible";
+  protocol.dispatch("change");
+  assert.match(hint.textContent, /Enables the agent tool loop/i, "anthropic must say what it unlocks");
+  assert.doesNotMatch(
+    hint.textContent,
+    /Chat only/i,
+    "the hint must actually switch — both texts mention the tool loop, so the assertion must key on what only one of them says",
   );
 }
 
@@ -4468,6 +4641,9 @@ await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
 await testThreadDeleteIsTwoStepAndLocalOnly();
 await testThreadRenameFlow();
+await testStreamingDoesNotYankAScrolledUpReader();
+await testTurnStatePillCarriesItsTone();
+await testModelProtocolHintFollowsTheChoice();
 await testToolLoopActivityAndDeliverables();
 await testStarterPromptLandsInTheComposer();
 await testCancelledStarterDropsItsPrompt();

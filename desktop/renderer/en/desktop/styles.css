@@ -742,6 +742,35 @@ textarea:focus-visible {
   color: hsl(var(--muted-foreground));
   font-size: 11px;
   font-weight: 650;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+/* The pill's colour is its state at a glance: busy pulses, done settles
+   green, warnings amber, errors red. Text carries the detail either way. */
+.turn-state.is-busy {
+  border-color: hsl(var(--info) / 0.4);
+  color: hsl(var(--info));
+  animation: turn-busy-pulse 1.6s ease-in-out infinite;
+}
+
+.turn-state.is-ok {
+  border-color: hsl(var(--success) / 0.4);
+  color: hsl(var(--success));
+}
+
+.turn-state.is-warn {
+  border-color: hsl(var(--warning) / 0.5);
+  color: hsl(var(--warning));
+}
+
+.turn-state.is-error {
+  border-color: hsl(var(--destructive) / 0.4);
+  color: hsl(var(--destructive));
+}
+
+@keyframes turn-busy-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
 .turn-state.busy {
@@ -754,7 +783,29 @@ textarea:focus-visible {
   color: hsl(var(--destructive));
 }
 
+/* Floating return-to-newest affordance: appears when the stream moves on
+   without the reader, sits above the composer's shadow. */
+.jump-latest {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  height: auto;
+  padding: 6px 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 12%);
+}
+
+.jump-latest:hover {
+  border-color: hsl(var(--primary) / 0.5);
+}
+
 .message-viewport {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: auto;

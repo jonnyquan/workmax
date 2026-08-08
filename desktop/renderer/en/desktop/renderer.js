@@ -1031,10 +1031,33 @@ function setModelSettingsError(message) {
   modelSettingsError.textContent = message;
 }
 
+// What each protocol actually gets the user — the first-run decision this
+// form exists for, answered where it is made rather than after a failed turn.
+const MODEL_PROTOCOL_HINTS = {
+  openai_compatible: {
+    hint: "Works with Ollama, LM Studio, vLLM and similar. Chat only — the tool loop needs the Anthropic protocol.",
+    placeholder: "http://127.0.0.1:11434/v1",
+  },
+  anthropic_compatible: {
+    hint: "Works with servers speaking the Anthropic Messages API. Enables the agent tool loop when a Claude CLI is available.",
+    placeholder: "http://127.0.0.1:8080",
+  },
+};
+
+function updateModelProtocolHint() {
+  const hintEl = document.querySelector("#model-protocol-hint");
+  const protocolEl = document.querySelector("#model-protocol");
+  if (!protocolEl) return;
+  const info = MODEL_PROTOCOL_HINTS[protocolEl.value];
+  if (hintEl) hintEl.textContent = info ? info.hint : "";
+  if (modelBaseURL && info) modelBaseURL.placeholder = info.placeholder;
+}
+
 function updateModelLocalFieldsVisibility() {
   if (!modelPreferredRoute || !modelLocalFields) return;
   const local = modelPreferredRoute.value === "local";
   modelLocalFields.hidden = !local;
+  updateModelProtocolHint();
 }
 
 function clearModelAPIKeyField() {
@@ -1411,7 +1434,7 @@ function renderCachedMessages(items) {
       );
     }
   }
-  scrollMessagesToEnd();
+  scrollMessagesToEnd(true);
 }
 
 function selectThread(thread) {
@@ -1453,7 +1476,7 @@ function selectThread(thread) {
   chooseModeForThread(thread);
   renderSkillOptions();
   updateComposerState();
-  turnState.textContent = selectedRecoverableTurn() ? "Interrupted" : "Ready";
+  setTurnState(selectedRecoverableTurn() ? "Interrupted" : "Ready");
   messageList.textContent = "";
   messageList.appendChild(renderNotice("Loading cached messages..."));
   void loadMessagesForSelection(thread, context).catch((error) => {
@@ -1935,8 +1958,49 @@ function attachMessageActions(wrapper, role, text) {
   if (actions.children.length > 0) wrapper.appendChild(actions);
 }
 
-function scrollMessagesToEnd() {
-  messageViewport.scrollTop = messageViewport.scrollHeight;
+// Whether the viewport is glued to the newest content. True until the user
+// scrolls away from the bottom; a stream that keeps yanking the reader back
+// down while they are checking an earlier answer is hostile, not helpful.
+let viewportSticky = true;
+
+function viewportNearBottom() {
+  const remaining =
+    messageViewport.scrollHeight -
+    messageViewport.scrollTop -
+    (messageViewport.clientHeight || 0);
+  return remaining < 48;
+}
+
+// force is for the user's own actions — sending a message, opening a thread,
+// jumping — where "take me to the newest" is exactly what they asked for.
+// Streaming deltas pass no force: they follow only a reader who is already
+// following, and otherwise light the jump affordance instead.
+// setTurnState is the one place the pill's text and colour change together.
+// The class is derived from the label so the two can never disagree.
+function setTurnState(label) {
+  turnState.textContent = label;
+  const tone =
+    label === "Working" || label === "Resuming" || label === "Stopping"
+      ? "busy"
+      : label === "Done"
+        ? "ok"
+        : label === "Error"
+          ? "error"
+          : label === "Interrupted" || label === "Stopped" || label === "Stopped locally" || label === "Session changed"
+            ? "warn"
+            : "idle";
+  turnState.className = `turn-state is-${tone}`;
+}
+
+function scrollMessagesToEnd(force = false) {
+  const jump = document.querySelector("#jump-latest");
+  if (force || viewportSticky) {
+    messageViewport.scrollTop = messageViewport.scrollHeight;
+    viewportSticky = true;
+    if (jump) jump.hidden = true;
+    return;
+  }
+  if (jump) jump.hidden = false;
 }
 
 function updateSelectedThreadHeading() {
@@ -2940,7 +3004,7 @@ async function handleSessionChanged() {
   loginOperationGeneration += 1;
   const generation = state.sessionGeneration;
   clearWorkbenchForSessionChange();
-  turnState.textContent = "Session changed";
+  setTurnState("Session changed");
   renderTaskContext();
   setStatus(
     "Your signed-in account changed. Select a thread again; the previous prompt was not resent and thread creation was not replayed.",
@@ -3016,7 +3080,7 @@ function appendOptimisticTurn(userText) {
   // event arrives.
   assistantNode.classList.add("pending");
   messageList.append(userNode, assistantNode);
-  scrollMessagesToEnd();
+  scrollMessagesToEnd(true);
   return { userNode, assistantNode, assistantBubble: assistantNode.children[1] };
 }
 
@@ -3026,7 +3090,7 @@ function failTurnOpen(activeTurn, userText, message) {
   state.turnGeneration += 1;
   activeTurn.assistantBubble.textContent = message;
   chatInput.value = userText;
-  turnState.textContent = "Error";
+  setTurnState("Error");
   renderTaskContext();
   updateComposerState();
   setStatus(message, "error");
@@ -3097,7 +3161,7 @@ function submitChat(event) {
   // Cleared with the tray: the label says "next request", and this was it.
   contextState.selectedFileIDs = new Set();
   renderAttachments();
-  turnState.textContent = "Working";
+  setTurnState("Working");
   renderTaskContext();
   updateComposerState();
 
@@ -3187,7 +3251,7 @@ function appendRecoveredAssistant() {
   }
   const assistantNode = renderMessage("assistant", "", "streaming");
   messageList.appendChild(assistantNode);
-  scrollMessagesToEnd();
+  scrollMessagesToEnd(true);
   return assistantNode.children[1];
 }
 
@@ -3229,7 +3293,7 @@ function resumeRecoverableTurn() {
   state.resumingTurn = true;
   state.recoveryFeedback = "Retrying the interrupted request safely...";
   state.recoveryFeedbackKind = "default";
-  turnState.textContent = "Resuming";
+  setTurnState("Resuming");
   renderTaskContext();
   updateComposerState();
 
@@ -3262,7 +3326,7 @@ function resumeRecoverableTurn() {
       return;
     }
     activeTurn.turnID = openResult.turnID;
-    turnState.textContent = "Working";
+    setTurnState("Working");
   renderTaskContext();
     const pendingEvents = activeTurn.pendingEvents;
     activeTurn.pendingEvents = [];
@@ -3278,7 +3342,7 @@ function resumeRecoverableTurn() {
     state.recoveryFeedback = "Recovery could not connect. Select Resume to try again.";
     state.recoveryFeedbackKind = "error";
     activeTurn.assistantBubble.textContent = "Response recovery is waiting to retry.";
-    turnState.textContent = "Interrupted";
+    setTurnState("Interrupted");
     updateComposerState();
     setStatus("The interrupted response could not be resumed yet.", "error");
     turnRecoveryResumeButton.focus();
@@ -3314,7 +3378,7 @@ async function dismissRecoverableTurn() {
     }
     state.dismissingRecovery = false;
     removeRecoverableTurn(recoverable.turn_uuid);
-    turnState.textContent = "Ready";
+    setTurnState("Ready");
     setStatus(
       result.canceled
         ? "Interrupted response dismissed."
@@ -3355,7 +3419,7 @@ function keepRecoverableTurnForRetry(activeTurn, feedback, statusMessage) {
   if (!activeTurn.assistantText) {
     activeTurn.assistantBubble.textContent = "Response recovery is waiting to retry.";
   }
-  turnState.textContent = "Interrupted";
+  setTurnState("Interrupted");
   updateComposerState();
   setStatus(statusMessage, "error");
   turnRecoveryResumeButton.focus();
@@ -3436,7 +3500,7 @@ function handleInitialTurnBusy(activeTurn) {
     activeTurn.assistantBubble.textContent =
       "Response interrupted before it produced text.";
   }
-  turnState.textContent = "Interrupted";
+  setTurnState("Interrupted");
   setStatus(
     "This request is still busy; no new execution was started. Checking recovery state...",
     "error"
@@ -3584,7 +3648,7 @@ function finishActiveTurn(activeTurn, label, canceled) {
       activeTurn.assistantText
     );
   }
-  turnState.textContent = label;
+  setTurnState(label);
   updateComposerState();
   const context = selectionContext(activeTurn.threadUUID);
   void reconcileCompletedTurn(activeTurn.threadUUID, context);
@@ -3606,7 +3670,7 @@ function finishActiveTurnWithError(activeTurn, message) {
     // look like a different kind of object from a complete one.
     renderMarkdownInto(activeTurn.assistantBubble, activeTurn.assistantText);
   }
-  turnState.textContent = "Error";
+  setTurnState("Error");
   renderTaskContext();
   updateComposerState();
   setStatus(safeMessage, "error");
@@ -3691,7 +3755,7 @@ async function stopActiveTurn() {
   if (!activeTurn || !agent || activeTurn.stopRequested) return;
   activeTurn.stopRequested = true;
   state.cancelConfirmationTurnID = activeTurn.turnID;
-  turnState.textContent = "Stopping";
+  setTurnState("Stopping");
   updateComposerState();
   try {
     const result = parseTurnCancelResult(await agent.cancelTurn(activeTurn.turnID));
@@ -3708,7 +3772,7 @@ async function stopActiveTurn() {
       return;
     }
     activeTurn.stopRequested = false;
-    turnState.textContent = "Working";
+    setTurnState("Working");
   renderTaskContext();
     updateComposerState();
   } catch {
@@ -3718,7 +3782,7 @@ async function stopActiveTurn() {
       activeTurn.sessionGeneration === state.sessionGeneration
     ) {
       if (isTurnContextCurrent(activeTurn)) {
-        turnState.textContent = "Stopped locally";
+        setTurnState("Stopped locally");
         setStatus(
           "The stream stopped locally, but persistent dismissal was not confirmed. Checking interrupted responses...",
           "error"
@@ -3733,7 +3797,7 @@ async function stopActiveTurn() {
       return;
     }
     activeTurn.stopRequested = false;
-    turnState.textContent = "Working";
+    setTurnState("Working");
   renderTaskContext();
     updateComposerState();
     setStatus("The Agent turn could not be stopped yet.", "error");
@@ -4082,7 +4146,7 @@ async function refresh() {
   renderSkillOptions();
   emptyState.hidden = false;
   threadPanel.hidden = true;
-  turnState.textContent = "Ready";
+  setTurnState("Ready");
   updateComposerState();
   runtimeLabel.textContent = `sidecar ${api.sidecarVersion || "unknown"} · app ${api.appVersion || "unknown"}`;
   setStatus("Checking auth status...");
@@ -4149,6 +4213,11 @@ if (modelsButton) {
 if (modelPreferredRoute) {
   modelPreferredRoute.addEventListener("change", () => {
     updateModelLocalFieldsVisibility();
+  });
+}
+if (modelProtocol) {
+  modelProtocol.addEventListener("change", () => {
+    updateModelProtocolHint();
   });
 }
 if (modelSettingsForm) {
@@ -4661,6 +4730,21 @@ const renameThreadCancel = document.querySelector("#rename-thread-cancel");
 if (renameThreadCancel) {
   renameThreadCancel.addEventListener("click", () => {
     closeRenameForm();
+  });
+}
+
+messageViewport.addEventListener("scroll", () => {
+  const wasSticky = viewportSticky;
+  viewportSticky = viewportNearBottom();
+  if (viewportSticky && !wasSticky) {
+    const jump = document.querySelector("#jump-latest");
+    if (jump) jump.hidden = true;
+  }
+});
+const jumpLatestButton = document.querySelector("#jump-latest");
+if (jumpLatestButton) {
+  jumpLatestButton.addEventListener("click", () => {
+    scrollMessagesToEnd(true);
   });
 }
 

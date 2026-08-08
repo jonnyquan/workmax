@@ -46,6 +46,7 @@
                 <option value="anthropic_compatible">Anthropic-compatible</option>
               </select>
             </label>
+            <p id="model-protocol-hint" class="model-key-status" role="note"></p>
             <label class="sidebar-field" for="model-base-url">
               <span>Base URL</span>
               <input
@@ -220,6 +221,9 @@
           </header>
           <div id="message-viewport" class="message-viewport">
             <div id="message-list" class="message-list"></div>
+            <button id="jump-latest" class="jump-latest" type="button" hidden>
+              ↓ Jump to latest
+            </button>
           </div>
           <section
             id="turn-recovery-card"
