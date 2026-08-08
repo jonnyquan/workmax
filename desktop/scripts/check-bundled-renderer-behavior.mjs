@@ -497,6 +497,16 @@ async function testAuthenticatedCacheRead() {
   assert.equal(document.byId.get("thread-panel").hidden, false);
   assert.match(document.byId.get("message-list").textContent, /make a shot list/);
   assert.match(document.byId.get("message-list").textContent, /cached assistant answer/);
+  {
+    const times = walk(
+      document.byId.get("message-list"),
+      (n) => n.classList?.contains("message-time"),
+    );
+    assert.equal(times.length, 2, "cached messages must show their stored times");
+    for (const t of times) {
+      assert.notEqual(t.textContent, "", "a timestamp must render as text, not sit empty");
+    }
+  }
   assert.equal(document.byId.get("chat-input").disabled, true);
   assert.equal(document.byId.get("send-button").disabled, true);
   assert.match(document.byId.get("composer-status").textContent, /streaming is unavailable/i);
@@ -2219,6 +2229,11 @@ async function testAssistantMarkdownIsRenderedAsElements() {
   assert.equal(pre.length, 1, "a fenced block must become a code block");
   assert.equal(pre[0].textContent, "SELECT 1;", "the code must be the code, without the fence");
   assert.equal(walk(pre[0], (n) => n.tagName === "CODE")[0].className, "language-sql");
+  const lang = walk(bubble, (n) => n.classList?.contains("md-code-lang"));
+  assert.equal(lang.length, 1, "the fence's language must be named, not only classed");
+  assert.equal(lang[0].textContent, "sql");
+  assert.doesNotMatch(pre[0].textContent, /sql.*SELECT/su,
+    "the label must live outside the block's selectable text");
 
   const links = tags("A");
   assert.equal(links.length, 1, "only the http link may become an anchor");

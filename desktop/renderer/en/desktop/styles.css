@@ -848,6 +848,17 @@ textarea:focus-visible {
   text-transform: uppercase;
 }
 
+.message-time {
+  margin-left: 2px;
+  color: hsl(var(--muted-foreground) / 0.75);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+.message.user .message-role {
+  justify-content: flex-end;
+}
+
 /* The assistant signs its answers with the same mark the sidebar wears. */
 .message-avatar {
   display: grid;
@@ -1037,24 +1048,35 @@ textarea:focus-visible {
   box-shadow: 0 0 0 2px hsl(var(--ring) / 0.35);
 }
 
-/* The code block's button is positioned against a wrapper rather than the
-   <pre> itself, so it never becomes part of the block's text. */
+/* Code chrome lives in a header strip above the <pre>, never inside it — a
+   label or button inside the block becomes part of its selectable text. */
 .md-code-wrap {
-  position: relative;
+  margin: 0 0 10px;
 }
 
-/* Only inside a wrapper, which only exists when there is a button: the first
-   line of code must not run underneath it. */
+.md-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px 5px 12px;
+  border: 1px solid hsl(var(--border));
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  background: hsl(var(--secondary) / 0.6);
+}
+
 .md-code-wrap > .md-code {
-  padding-right: 92px;
+  margin: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
-.md-code-wrap > .message-action {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 1;
-  background: hsl(var(--card));
+.md-code-lang {
+  color: hsl(var(--muted-foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.03em;
 }
 
 .message.partial .message-role::after {

@@ -366,6 +366,9 @@ function parseMessage(value) {
     user_text: optionalString(value.user_text),
     ai_text: optionalString(value.ai_text),
     streaming_state: value.streaming_state,
+    // Validated above; carried so the transcript can date its rows.
+    created_at: optionalString(value.created_at),
+    updated_at: optionalString(value.updated_at),
   };
 }
 
@@ -1369,14 +1372,15 @@ function renderCachedMessages(items) {
   }
   for (const item of items) {
     if (item.user_text) {
-      messageList.appendChild(renderMessage("user", item.user_text));
+      messageList.appendChild(renderMessage("user", item.user_text, "complete", item.created_at));
     }
     if (item.ai_text || item.streaming_state !== "complete") {
       messageList.appendChild(
         renderMessage(
           "assistant",
           item.ai_text || "Response interrupted before text was cached.",
-          item.streaming_state
+          item.streaming_state,
+          item.updated_at || item.created_at
         )
       );
     }
@@ -1610,11 +1614,28 @@ function buildCodeBlock(code, language) {
   // code. The button is a sibling of <pre>, not a child: inside it, its label
   // would become part of the block's own text — so selecting the code by hand,
   // or copying it, would pick up the word "Copy".
+  // The language rides in the fence ("```sql") and until now was recorded
+  // only as a class. Naming it answers "what am I looking at" before the
+  // reader parses a line.
+  const tag = language
+    ? (() => {
+        const badge = document.createElement("span");
+        badge.className = "md-code-lang";
+        badge.textContent = language.toLowerCase();
+        return badge;
+      })()
+    : null;
   const copy = buildCopyButton(code, "Copy code");
-  if (!copy) return pre;
+  if (!copy && !tag) return pre;
+  // A header strip, the shape every reader already knows from code hosts:
+  // what it is on the left, what you can do with it on the right.
   const wrap = document.createElement("div");
   wrap.className = "md-code-wrap";
-  wrap.append(copy, pre);
+  const head = document.createElement("div");
+  head.className = "md-code-head";
+  head.appendChild(tag || document.createElement("span"));
+  if (copy) head.appendChild(copy);
+  wrap.append(head, pre);
   return wrap;
 }
 
@@ -1790,7 +1811,21 @@ function buildCopyButton(text, label) {
   return button;
 }
 
-function renderMessage(role, text, streamingState = "complete") {
+// formatMessageTime keeps timestamps quiet: today's messages show only the
+// clock, older ones add the date. A full locale string on every row is noise
+// that says the same day twenty times.
+function formatMessageTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const sameDay =
+    localCalendarDay(date) === localCalendarDay(new Date());
+  return sameDay
+    ? date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function renderMessage(role, text, streamingState = "complete", timestamp = "") {
   const wrapper = document.createElement("article");
   wrapper.className = `message ${role}`;
   wrapper.classList.toggle(
@@ -1811,6 +1846,16 @@ function renderMessage(role, text, streamingState = "complete") {
     label.appendChild(document.createTextNode("WorkMax"));
   } else {
     label.textContent = role === "user" ? "You" : role;
+  }
+  // Cached messages carry their stored time; a streaming message shows none
+  // until the post-turn reconcile repaints it from cache — which is when a
+  // real timestamp exists to show.
+  const time = formatMessageTime(timestamp);
+  if (time) {
+    const when = document.createElement("span");
+    when.className = "message-time";
+    when.textContent = time;
+    label.appendChild(when);
   }
   const bubble = document.createElement("div");
   bubble.className = "bubble";
