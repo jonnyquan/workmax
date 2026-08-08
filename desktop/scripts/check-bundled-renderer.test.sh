@@ -13,12 +13,18 @@ SOURCE_RENDERER="$REPO_ROOT/desktop/renderer/en/desktop"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/workmax-check-bundled-renderer-test.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT
 
+# A fixture is a whole renderer directory, not the three files the CSP cases
+# happen to touch.
+#
+# It used to copy only index.html, styles.css and renderer.js. That was enough
+# until the behaviour suite began reading shim.js and lib/desktop-bridge.js,
+# after which the very first case — "accepts current bundled renderer fixture"
+# — failed on a missing file, and had been failing ever since. The check under
+# test was fine; its fixture was not a renderer.
 make_fixture() {
   local fixture="$1"
   mkdir -p "$fixture"
-  cp "$SOURCE_RENDERER/index.html" "$fixture/index.html"
-  cp "$SOURCE_RENDERER/styles.css" "$fixture/styles.css"
-  cp "$SOURCE_RENDERER/renderer.js" "$fixture/renderer.js"
+  cp -R "$SOURCE_RENDERER/." "$fixture/"
 }
 
 expect_pass() {

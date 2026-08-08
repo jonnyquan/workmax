@@ -667,6 +667,89 @@ textarea:focus-visible {
   white-space: pre-wrap;
 }
 
+/* Rendered Markdown ------------------------------------------------------- */
+
+/* pre-wrap is right for the raw text of a streaming answer and wrong once the
+   answer has been parsed into blocks, which carry their own spacing. */
+.bubble.markdown {
+  white-space: normal;
+}
+
+.bubble.markdown > *:first-child { margin-top: 0; }
+.bubble.markdown > *:last-child { margin-bottom: 0; }
+
+.md-paragraph {
+  margin: 0 0 10px;
+}
+
+.md-heading {
+  margin: 14px 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: hsl(var(--foreground));
+}
+
+.md-list {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.md-list li {
+  margin-bottom: 3px;
+}
+
+.bubble.markdown blockquote {
+  margin: 0 0 10px;
+  padding-left: 10px;
+  border-left: 2px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+}
+
+.bubble.markdown hr {
+  margin: 12px 0;
+  border: none;
+  border-top: 1px solid hsl(var(--border));
+}
+
+.md-code {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--muted));
+  /* The one place horizontal scrolling belongs: a long line of code must not
+     widen the message column. */
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.md-code code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.md-code-inline {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: hsl(var(--muted));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.md-link {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* A link the renderer would not follow is shown as the literal text the model
+   wrote, so the user can see what was proposed rather than a dead anchor. */
+.md-link-refused {
+  color: hsl(var(--muted-foreground));
+}
+
 .message.user .bubble {
   margin-left: auto;
   background: hsl(var(--foreground));

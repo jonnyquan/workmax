@@ -1340,6 +1340,305 @@ function renderNotice(text) {
   return node;
 }
 
+// Models answer in Markdown. Until this existed the renderer put that string
+// straight into textContent, so every list arrived as "- item", every code
+// block as three backticks, and every heading as "###". The content was right
+// and unreadable.
+//
+// Everything below builds DOM nodes. There is no innerHTML on this path and no
+// HTML parsing of model output at any point: a document fragment assembled
+// from createElement and createTextNode cannot execute anything, whatever the
+// model was talked into writing. That is the whole security argument, and it
+// is structural rather than a matter of escaping correctly.
+
+// Above this the text is rendered plain. A wall this large is not made
+// readable by formatting, and it keeps a single parse bounded.
+const MARKDOWN_MAX_CHARS = 200_000;
+
+const MARKDOWN_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*([A-Za-z0-9_+-]*)\s*$/u;
+const MARKDOWN_HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/u;
+const MARKDOWN_RULE = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/u;
+const MARKDOWN_BULLET = /^(\s*)[-*+]\s+(.*)$/u;
+const MARKDOWN_ORDERED = /^(\s*)(\d{1,9})[.)]\s+(.*)$/u;
+const MARKDOWN_QUOTE = /^\s{0,3}>\s?(.*)$/u;
+const INLINE_ESCAPABLE = "\\`*_~[]()#-";
+
+// The class goes on here rather than at bubble creation because it is what
+// switches the bubble from pre-wrap (right for the raw text arriving during a
+// stream) to normal flow (right once blocks own their own spacing). Setting it
+// early would collapse the newlines of a streaming answer.
+function renderMarkdownInto(container, text) {
+  container.textContent = "";
+  container.classList.remove("markdown");
+  if (typeof text !== "string" || text === "") return;
+  if (text.length > MARKDOWN_MAX_CHARS) {
+    container.textContent = text;
+    return;
+  }
+  container.classList.add("markdown");
+  for (const block of parseMarkdownBlocks(text.split(/\r\n|\r|\n/u))) {
+    container.appendChild(block);
+  }
+}
+
+function parseMarkdownBlocks(lines) {
+  const blocks = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (line.trim() === "") {
+      index += 1;
+      continue;
+    }
+
+    const fence = MARKDOWN_FENCE.exec(line);
+    if (fence) {
+      const [, marker, language] = fence;
+      const body = [];
+      index += 1;
+      // An unterminated fence runs to the end rather than falling back to
+      // paragraphs: while a turn is still streaming that is the normal state,
+      // and reflowing it as prose would make the block flicker between two
+      // shapes as the closing fence arrives.
+      while (index < lines.length && !isClosingFence(lines[index], marker)) {
+        body.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push(buildCodeBlock(body.join("\n"), language));
+      continue;
+    }
+
+    const heading = MARKDOWN_HEADING.exec(line);
+    if (heading) {
+      // Clamped to h4-h6 so a model-authored "#" can never outrank the
+      // application's own headings in the document outline.
+      const level = Math.min(6, heading[1].length + 3);
+      const node = document.createElement(`h${level}`);
+      node.className = "md-heading";
+      parseInlineInto(node, heading[2].trim());
+      blocks.push(node);
+      index += 1;
+      continue;
+    }
+
+    if (MARKDOWN_RULE.test(line)) {
+      blocks.push(document.createElement("hr"));
+      index += 1;
+      continue;
+    }
+
+    if (MARKDOWN_QUOTE.test(line)) {
+      const quoted = [];
+      while (index < lines.length && MARKDOWN_QUOTE.test(lines[index])) {
+        quoted.push(MARKDOWN_QUOTE.exec(lines[index])[1]);
+        index += 1;
+      }
+      const node = document.createElement("blockquote");
+      for (const child of parseMarkdownBlocks(quoted)) node.appendChild(child);
+      blocks.push(node);
+      continue;
+    }
+
+    const listStart = matchListItem(line);
+    if (listStart) {
+      const node = document.createElement(listStart.ordered ? "ol" : "ul");
+      node.className = "md-list";
+      while (index < lines.length) {
+        const item = matchListItem(lines[index]);
+        if (!item || item.ordered !== listStart.ordered) break;
+        const li = document.createElement("li");
+        parseInlineInto(li, item.text);
+        node.appendChild(li);
+        index += 1;
+      }
+      blocks.push(node);
+      continue;
+    }
+
+    // A paragraph runs until a blank line or the start of another block.
+    const paragraph = [];
+    while (index < lines.length && lines[index].trim() !== "" && !startsBlock(lines[index])) {
+      paragraph.push(lines[index].trim());
+      index += 1;
+    }
+    const node = document.createElement("p");
+    node.className = "md-paragraph";
+    parseInlineInto(node, paragraph.join("\n"));
+    blocks.push(node);
+  }
+  return blocks;
+}
+
+function isClosingFence(line, marker) {
+  const trimmed = line.trim();
+  return trimmed.startsWith(marker[0].repeat(3)) && trimmed === marker[0].repeat(trimmed.length);
+}
+
+function startsBlock(line) {
+  return (
+    MARKDOWN_FENCE.test(line) ||
+    MARKDOWN_HEADING.test(line) ||
+    MARKDOWN_RULE.test(line) ||
+    MARKDOWN_QUOTE.test(line) ||
+    matchListItem(line) !== null
+  );
+}
+
+function matchListItem(line) {
+  const ordered = MARKDOWN_ORDERED.exec(line);
+  if (ordered) return { ordered: true, text: ordered[3] };
+  const bullet = MARKDOWN_BULLET.exec(line);
+  // A rule ("---") also matches the bullet pattern; rules are checked first by
+  // the caller, but matchListItem is used for lookahead too.
+  if (bullet && !MARKDOWN_RULE.test(line)) return { ordered: false, text: bullet[2] };
+  return null;
+}
+
+function buildCodeBlock(code, language) {
+  const pre = document.createElement("pre");
+  pre.className = "md-code";
+  const node = document.createElement("code");
+  if (language) {
+    // Recorded for styling only; nothing reads it back to decide behaviour, so
+    // an unknown language is inert rather than something to validate against a
+    // list that would go stale.
+    node.className = `language-${language.toLowerCase()}`;
+  }
+  node.textContent = code;
+  pre.appendChild(node);
+  return pre;
+}
+
+// Inline scanning. Written as a scanner rather than a chain of replacements
+// because replacements operate on a string, and a string is exactly the thing
+// that must never come back as markup.
+function parseInlineInto(parent, text) {
+  let buffer = "";
+  const flush = () => {
+    if (buffer !== "") {
+      parent.appendChild(document.createTextNode(buffer));
+      buffer = "";
+    }
+  };
+
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+
+    if (char === "\\" && index + 1 < text.length && INLINE_ESCAPABLE.includes(text[index + 1])) {
+      buffer += text[index + 1];
+      index += 2;
+      continue;
+    }
+    if (char === "\n") {
+      flush();
+      parent.appendChild(document.createElement("br"));
+      index += 1;
+      continue;
+    }
+    if (char === "`") {
+      const span = matchCodeSpan(text, index);
+      if (span) {
+        flush();
+        const node = document.createElement("code");
+        node.className = "md-code-inline";
+        node.textContent = span.content;
+        parent.appendChild(node);
+        index = span.end;
+        continue;
+      }
+    }
+    if (char === "[") {
+      const link = matchLink(text, index);
+      if (link) {
+        flush();
+        parent.appendChild(buildLink(link));
+        index = link.end;
+        continue;
+      }
+    }
+    if (char === "*" || char === "_" || char === "~") {
+      const emphasis = matchEmphasis(text, index);
+      if (emphasis) {
+        flush();
+        const node = document.createElement(emphasis.tag);
+        parseInlineInto(node, emphasis.content);
+        parent.appendChild(node);
+        index = emphasis.end;
+        continue;
+      }
+    }
+    buffer += char;
+    index += 1;
+  }
+  flush();
+}
+
+function matchCodeSpan(text, start) {
+  let run = 0;
+  while (text[start + run] === "`") run += 1;
+  const fence = "`".repeat(run);
+  const close = text.indexOf(fence, start + run);
+  if (close < 0) return null;
+  return { content: text.slice(start + run, close), end: close + run };
+}
+
+function matchEmphasis(text, start) {
+  const char = text[start];
+  const double = text.slice(start, start + 2);
+  const candidates = char === "~"
+    ? [{ marker: "~~", tag: "del" }]
+    : [
+        { marker: double === char + char ? double : null, tag: "strong" },
+        { marker: char, tag: "em" },
+      ];
+  for (const candidate of candidates) {
+    if (!candidate.marker) continue;
+    if (text.slice(start, start + candidate.marker.length) !== candidate.marker) continue;
+    const from = start + candidate.marker.length;
+    const close = text.indexOf(candidate.marker, from);
+    // Empty emphasis is not emphasis; leaving it as literal text is what a
+    // reader would expect from "**" typed on its own.
+    if (close < 0 || close === from) continue;
+    return { tag: candidate.tag, content: text.slice(from, close), end: close + candidate.marker.length };
+  }
+  return null;
+}
+
+function matchLink(text, start) {
+  const labelEnd = text.indexOf("]", start + 1);
+  if (labelEnd < 0 || text[labelEnd + 1] !== "(") return null;
+  const urlEnd = text.indexOf(")", labelEnd + 2);
+  if (urlEnd < 0) return null;
+  const label = text.slice(start + 1, labelEnd);
+  const href = text.slice(labelEnd + 2, urlEnd).trim();
+  if (label === "" || href === "" || /\s/u.test(href)) return null;
+  return { label, href, end: urlEnd + 1 };
+}
+
+// Only http and https become links. Anything else — javascript:, data:, a
+// custom scheme another installed app registered — is rendered as the literal
+// text the model wrote, so the user can see exactly what was proposed without
+// the renderer offering to follow it.
+function buildLink(link) {
+  const safe = /^https?:\/\//iu.test(link.href);
+  if (!safe) {
+    const fallback = document.createElement("span");
+    fallback.className = "md-link-refused";
+    fallback.textContent = `[${link.label}](${link.href})`;
+    return fallback;
+  }
+  const anchor = document.createElement("a");
+  anchor.className = "md-link";
+  anchor.setAttribute("href", link.href);
+  // rel is belt-and-braces: the shim intercepts the click and hands the URL to
+  // Go before any navigation happens, so the window is never handed over.
+  anchor.setAttribute("rel", "noopener noreferrer");
+  parseInlineInto(anchor, link.label);
+  return anchor;
+}
+
 function renderMessage(role, text, streamingState = "complete") {
   const wrapper = document.createElement("article");
   wrapper.className = `message ${role}`;
@@ -1352,7 +1651,14 @@ function renderMessage(role, text, streamingState = "complete") {
   label.textContent = role;
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  bubble.textContent = text;
+  // Only the assistant's text is Markdown. What the user typed is shown back
+  // exactly as typed — rendering their asterisks as emphasis would change the
+  // record of what they asked.
+  if (role === "assistant") {
+    renderMarkdownInto(bubble, text);
+  } else {
+    bubble.textContent = text;
+  }
   wrapper.append(label, bubble);
   return wrapper;
 }
@@ -2707,6 +3013,16 @@ function finishActiveTurn(activeTurn, label, canceled) {
     activeTurn.assistantBubble.textContent = canceled
       ? "Generation stopped."
       : "Response completed without text.";
+  } else {
+    // Formatting is applied once, here, rather than on every delta.
+    //
+    // Two reasons, and the first is the one that matters: a partially received
+    // block is ambiguous. An unclosed fence, half a link, a list item still
+    // being written — each renders as something different from what it will
+    // become, so live formatting means blocks that visibly change shape. The
+    // second is cost: re-parsing the whole answer per delta is quadratic in
+    // its length, which a long reply would feel.
+    renderMarkdownInto(activeTurn.assistantBubble, activeTurn.assistantText);
   }
   turnState.textContent = label;
   updateComposerState();
@@ -2721,6 +3037,11 @@ function finishActiveTurnWithError(activeTurn, message) {
   const safeMessage = sanitizeErrorMessage(message || "The Agent turn failed.");
   if (!activeTurn.assistantText) {
     activeTurn.assistantBubble.textContent = safeMessage;
+  } else {
+    // A failed turn still delivered text, and that text is as much an answer
+    // as a successful one's. Leaving it unformatted would make a partial reply
+    // look like a different kind of object from a complete one.
+    renderMarkdownInto(activeTurn.assistantBubble, activeTurn.assistantText);
   }
   turnState.textContent = "Error";
   renderTaskContext();

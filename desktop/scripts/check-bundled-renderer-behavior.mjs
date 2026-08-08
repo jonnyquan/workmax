@@ -80,6 +80,14 @@ class FakeClassList {
     }
   }
 
+  add(name) {
+    this.values.add(name);
+  }
+
+  remove(name) {
+    this.values.delete(name);
+  }
+
   contains(name) {
     return this.values.has(name);
   }
@@ -247,6 +255,20 @@ class FakeDocument {
 
   createElement(tagName) {
     return new FakeElement(tagName);
+  }
+
+  // Text nodes are how the Markdown renderer puts model output on the page —
+  // never as markup. The stub keeps them distinguishable from elements so a
+  // test can assert that a would-be tag really did arrive as text.
+  createTextNode(data) {
+    return {
+      nodeType: 3,
+      tagName: "#text",
+      children: [],
+      classList: new FakeClassList(),
+      parentNode: null,
+      textContent: String(data),
+    };
   }
 }
 
@@ -1355,6 +1377,147 @@ async function testShimInterceptsExternalLinks() {
   click.handler({ target: anchor, preventDefault() { prevented = true; } });
   await settle();
   assert.equal(prevented, false, "a fragment link must be left to the page");
+}
+
+// Markdown is what models write, so it is what the chat column has to read
+// back. This drives the real path: a turn streams Markdown, finishes, and the
+// bubble is asserted structurally — elements, not a string that happens to
+// contain the right characters.
+async function testAssistantMarkdownIsRenderedAsElements() {
+  let emit = null;
+  const answer = [
+    "## Findings",
+    "",
+    "Revenue is **up** and costs are `flat`.",
+    "",
+    "- first point",
+    "- second point",
+    "",
+    "```sql",
+    "SELECT 1;",
+    "```",
+    "",
+    "See [the plan](https://example.com/plan) or [this](javascript:alert(1)).",
+    "",
+    "> quoted remark",
+    "",
+    "Not a tag: <img src=x onerror=alert(1)>",
+  ].join("\n");
+
+  // The turn is reconciled against the sidecar once it completes, so the
+  // bubble that ends up on screen is the one rendered from cached history —
+  // which is the path a reopened thread takes too. Serving the answer back
+  // here means this test covers both.
+  let answered = false;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("md-thread", "Markdown")] });
+      }
+      if (pathname === "/agent/threads/md-thread/messages") {
+        return response({
+          items: answered
+            ? [{
+                uuid: "md-msg",
+                user_text: "Summarise",
+                ai_text: answer,
+                streaming_state: "complete",
+                created_at: "2026-05-21T00:00:00Z",
+                updated_at: "2026-05-21T00:00:00Z",
+              }]
+            : [],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input, callback) {
+        emit = (event) => callback({ ...event, turnID: "md-turn" });
+        return { turnID: "md-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  const input = document.byId.get("chat-input");
+  input.value = "Summarise";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  emit({ type: "text_delta", delta: answer });
+  await settle();
+
+  const streaming = walk(
+    document.byId.get("message-list"),
+    (n) => n.classList?.contains("bubble") && n.parentNode?.classList?.contains("assistant"),
+  ).at(-1);
+  assert.equal(
+    streaming.classList.contains("markdown"),
+    false,
+    "while streaming the bubble must stay raw text; formatting a half-written block would make it change shape as it arrives",
+  );
+
+  answered = true;
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  await settle();
+
+  const bubble = walk(
+    document.byId.get("message-list"),
+    (n) => n.classList?.contains("bubble") && n.parentNode?.classList?.contains("assistant"),
+  ).at(-1);
+  assert.ok(bubble, "the reconciled thread must still show the assistant's answer");
+  assert.equal(bubble.classList.contains("markdown"), true, "the finished answer must be formatted");
+
+  const tags = (name) => walk(bubble, (n) => n.tagName === name);
+  // Heading levels are clamped so model output cannot outrank the app's own.
+  assert.equal(tags("H5").length, 1, "'##' must become a heading, clamped below the app's headings");
+  assert.equal(tags("H1").length + tags("H2").length + tags("H3").length, 0);
+  assert.equal(tags("STRONG").length, 1, "**up** must be emphasis, not literal asterisks");
+  assert.equal(tags("UL").length, 1);
+  assert.equal(tags("LI").length, 2);
+  assert.equal(tags("BLOCKQUOTE").length, 1);
+
+  const pre = tags("PRE");
+  assert.equal(pre.length, 1, "a fenced block must become a code block");
+  assert.equal(pre[0].textContent, "SELECT 1;", "the code must be the code, without the fence");
+  assert.equal(walk(pre[0], (n) => n.tagName === "CODE")[0].className, "language-sql");
+
+  const links = tags("A");
+  assert.equal(links.length, 1, "only the http link may become an anchor");
+  assert.equal(links[0].getAttribute("href"), "https://example.com/plan");
+  assert.match(
+    bubble.textContent,
+    /\[this\]\(javascript:alert\(1\)\)/,
+    "a javascript: link must be shown as the literal text the model wrote, not offered as a link",
+  );
+
+  // The security property, stated as a test: markup in model output is text.
+  assert.equal(tags("IMG").length, 0, "model output must never become an element");
+  assert.match(
+    bubble.textContent,
+    /<img src=x onerror=alert\(1\)>/,
+    "the tag must be visible to the user as the characters it is",
+  );
+
+  // And the user's own words are shown back unchanged.
+  const userBubble = walk(
+    document.byId.get("message-list"),
+    (n) => n.classList?.contains("bubble") && n.parentNode?.classList?.contains("user"),
+  ).at(-1);
+  assert.equal(userBubble.classList.contains("markdown"), false);
 }
 
 // The retrieval announcement is the only way the user learns that an answer
@@ -3415,6 +3578,7 @@ await testThreadGroupingAndSearch();
 await testThreadSearchIsHiddenWithNothingToFilter();
 await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
+await testAssistantMarkdownIsRenderedAsElements();
 await testRetrievedContextIsShownAndResetPerTurn();
 await testShimValidatesRetrievalPayloads();
 await testStagedAttachmentsAreSentWithTheTurn();
