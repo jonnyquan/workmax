@@ -70,6 +70,32 @@ func (s *Server) handlePutAgentThread(c *gin.Context) {
 	}
 	request.AgentMode, _ = NormalizeDesktopAgentMode(request.AgentMode)
 
+	// Local route: build the thread locally without requiring a cloud session
+	// (L3d, D2). An unauthenticated local-only user gets localSingleUserUID; an
+	// authenticated local-route user keeps their real uid. Cloud path below is
+	// untouched.
+	if s.shouldUseLocalRoute() {
+		uid := localSingleUserUID
+		if pair, _, acqErr := cloudproxy.AcquireAccessTokenWithLease(
+			c.Request.Context(), s.cfg.TokenStore, s.cfg.Proxy.CloudClient(),
+		); acqErr == nil {
+			if u, uidErr := cloudproxy.ExtractUIDFromAccessToken(pair.AccessToken); uidErr == nil && u != 0 {
+				uid = uint64(u)
+			}
+		}
+		row, created, err := s.createLocalAgentThread(uid, threadUUID, request)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "local_thread_create_failed"})
+			return
+		}
+		status := http.StatusOK
+		if created {
+			status = http.StatusCreated
+		}
+		c.JSON(status, putAgentThreadResponse{State: "ready", Created: created, Thread: row})
+		return
+	}
+
 	cloud := s.cfg.Proxy.CloudClient()
 	pair, lease, err := cloudproxy.AcquireAccessTokenWithLease(
 		c.Request.Context(),
@@ -93,22 +119,6 @@ func (s *Server) handlePutAgentThread(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "session_unavailable"})
 		return
 	}
-	// Local route：不调云端 PutThread，直接在本地 SQLite 建线程（cloud_thread_id
-	// 留空——local route 的对话/缓存/列表都不需要它）。沿用已登录的 uid。
-	if s.shouldUseLocalRoute() {
-		row, created, err := s.createLocalAgentThread(uint64(expectedUID), threadUUID, request)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "local_thread_create_failed"})
-			return
-		}
-		status := http.StatusOK
-		if created {
-			status = http.StatusCreated
-		}
-		c.JSON(status, putAgentThreadResponse{State: "ready", Created: created, Thread: row})
-		return
-	}
-
 	leaseContext, releaseLease := lease.BindContext(c.Request.Context())
 	defer releaseLease()
 

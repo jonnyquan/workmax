@@ -37,15 +37,30 @@ type legacyAgentTurnStreamInput struct {
 	Files  []int64 // 本地附件 file_ids（L3b），仅 local 路径用
 }
 
+// localSingleUserUID is the reserved uid for unauthenticated local-only users
+// (L3d, D2): a high-bit value far above any real cloud uid, so SQLite uid=?
+// filtering keeps local-only threads/messages naturally isolated from real
+// accounts. Compare noLocalHistoryUID = 1<<63-1.
+const localSingleUserUID = uint64(1) << 62
+
 func (s *Server) currentAgentTurnSession() (uint64, cloudproxy.SessionLease, error) {
 	if s.cfg.TokenStore == nil {
+		if s.shouldUseLocalRoute() {
+			return localSingleUserUID, cloudproxy.SessionLease{}, nil
+		}
 		return 0, cloudproxy.SessionLease{}, cloudproxy.ErrNoSession
 	}
 	snapshot, err := s.cfg.TokenStore.GetSnapshot()
 	if err != nil {
+		if s.shouldUseLocalRoute() {
+			return localSingleUserUID, cloudproxy.SessionLease{}, nil
+		}
 		return 0, cloudproxy.SessionLease{}, err
 	}
 	if snapshot.Pair.AccessToken == "" || snapshot.Pair.IsRefreshExpired(time.Now().UTC()) {
+		if s.shouldUseLocalRoute() {
+			return localSingleUserUID, cloudproxy.SessionLease{}, nil
+		}
 		return 0, cloudproxy.SessionLease{}, cloudproxy.ErrNoSession
 	}
 	uid, err := cloudproxy.ExtractUIDFromAccessToken(snapshot.Pair.AccessToken)

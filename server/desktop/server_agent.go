@@ -629,17 +629,29 @@ func (s *Server) triggerMessagesSync(threadUUID string, uid uint64) {
 // expired, or the token entry is corrupt.
 func (s *Server) activeLocalHistoryUID() uint64 {
 	if s.cfg.TokenStore == nil {
+		if s.shouldUseLocalRoute() {
+			return localSingleUserUID
+		}
 		return 0
 	}
 	pair, err := s.cfg.TokenStore.Get()
 	if err != nil || pair == nil || pair.AccessToken == "" {
+		if s.shouldUseLocalRoute() {
+			return localSingleUserUID
+		}
 		return noLocalHistoryUID
 	}
 	if pair.IsRefreshExpired(time.Now().UTC()) {
+		if s.shouldUseLocalRoute() {
+			return localSingleUserUID
+		}
 		return noLocalHistoryUID
 	}
 	uid, err := cloudproxy.ExtractUIDFromAccessToken(pair.AccessToken)
 	if err != nil || uid == 0 {
+		if s.shouldUseLocalRoute() {
+			return localSingleUserUID
+		}
 		return noLocalHistoryUID
 	}
 	return uint64(uid)

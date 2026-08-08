@@ -39,8 +39,9 @@ func (s *Server) handleUploadThreadFile(c *gin.Context) {
 	}
 	uid, _, err := s.currentAgentTurnSession()
 	if err != nil {
-		// Local route or not, file ownership needs a stable uid. Today that still
-		// requires a valid cloud session (L3a scope); D2 offline-uid is L3d.
+		// File ownership needs a stable uid. Unauthenticated local-route users
+		// resolve to localSingleUserUID inside currentAgentTurnSession (L3d); a
+		// failure here means neither local nor cloud session is usable.
 		s.writeAgentTurnSessionError(c, err)
 		return
 	}

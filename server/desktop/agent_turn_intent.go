@@ -118,6 +118,20 @@ func validateFrozenAgentTurnIntent(intent agentTurnIntent) (time.Time, error) {
 	return updatedAt, nil
 }
 
+// runWithLease runs a short local callback under the session lease when one is
+// present (cloud route), or directly when the lease is empty (local route).
+// The local route has no session replacement to fence against, so a zero-value
+// SessionLease (Epoch()==0) runs the callback without lease protection — this
+// mirrors the Proxy.Chat Epoch()!=0 guard (cloud_proxy/proxy.go:125) and lets
+// unauthenticated local-only users (L3d) use the intent store. Cloud path is
+// unchanged (real lease Epoch!=0 → WithCurrent as before).
+func runWithLease(lease cloudproxy.SessionLease, fn func() error) error {
+	if lease.Epoch() == 0 {
+		return fn()
+	}
+	return lease.WithCurrent(fn)
+}
+
 // ensureAgentTurnIntent applies first-writer-wins ownership before comparing
 // request content. A cross-account UUID collision therefore returns one
 // generic conflict without revealing whether the frozen text/digest matched.
@@ -135,7 +149,7 @@ func ensureAgentTurnIntent(
 	if db == nil || uid == 0 {
 		return intent, thread, false, fmt.Errorf("agent turn intent store is unavailable")
 	}
-	err := lease.WithCurrent(func() error {
+	err := runWithLease(lease, func() error {
 		return db.Transaction(func(tx *gorm.DB) error {
 			existing, found, err := selectAgentTurnIntent(tx, turnUUID)
 			if err != nil {
@@ -216,7 +230,7 @@ func checkAgentTurnIntentOwner(
 	turnUUID string,
 ) (bool, error) {
 	var ownerUID uint64
-	err := lease.WithCurrent(func() error {
+	err := runWithLease(lease, func() error {
 		err := db.Raw(`
 			SELECT uid
 			  FROM w_desktop_agent_turn_intent
@@ -247,7 +261,7 @@ func loadOwnedAgentTurnIntentAndThread(
 		intent agentTurnIntent
 		thread agentTurnThread
 	)
-	err := lease.WithCurrent(func() error {
+	err := runWithLease(lease, func() error {
 		return db.Transaction(func(tx *gorm.DB) error {
 			var found bool
 			var err error
@@ -313,7 +327,7 @@ func updateAgentTurnIntentState(
 	uid uint64,
 	turnUUID, state, lastErrorKind string,
 ) error {
-	return lease.WithCurrent(func() error {
+	return runWithLease(lease, func() error {
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		res := db.Exec(`
 			UPDATE w_desktop_agent_turn_intent
@@ -337,7 +351,7 @@ func enterAgentTurnIntentState(
 	uid uint64,
 	turnUUID, state string,
 ) error {
-	return lease.WithCurrent(func() error {
+	return runWithLease(lease, func() error {
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		res := db.Exec(`
 			UPDATE w_desktop_agent_turn_intent
@@ -425,7 +439,7 @@ func listRecoverableAgentTurnIntents(
 	limit int,
 ) ([]recoverableAgentTurnIntent, error) {
 	items := make([]recoverableAgentTurnIntent, 0, limit)
-	err := lease.WithCurrent(func() error {
+	err := runWithLease(lease, func() error {
 		rows, err := db.Raw(`
 			SELECT turn_uuid, thread_uuid, user_text, chat_mode, request_digest,
 			       state, last_error_kind, updated_at
@@ -469,7 +483,7 @@ func cancelAgentTurnIntent(
 	turnUUID string,
 ) (bool, error) {
 	var canceled bool
-	err := lease.WithCurrent(func() error {
+	err := runWithLease(lease, func() error {
 		return db.Transaction(func(tx *gorm.DB) error {
 			intent, found, err := selectAgentTurnIntent(tx, turnUUID)
 			if err != nil {
