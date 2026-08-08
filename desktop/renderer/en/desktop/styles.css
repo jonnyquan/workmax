@@ -1,8 +1,79 @@
+/* ===========================================================================
+   Design tokens
+   ===========================================================================
+   Ported from the Work Agent web client's design system (web/app/globals.css)
+   so the desktop and the web surface read as one product rather than two
+   applications that happen to share a name.
+   
+   The palette is warm-paper neutrals with a low-saturation ink-green primary.
+   Values are kept in HSL channel form, the way the source defines them, so a
+   token can be reused at partial opacity — hsl(var(--x) / 0.5) — without
+   introducing a second, drifting definition of the same colour.
+   
+   Contrast, carried over from the source's own notes: the primary reads about
+   6.9:1 on the background, which passes WCAG AA for body text, so it is safe
+   for links and labels and not only for large headings. Amber requires a dark
+   foreground — white on it lands near 2.2:1.
+   
+   The desktop follows the operating system rather than shipping its own
+   toggle: a native window that ignores the system appearance looks broken next
+   to every other window on the desktop.
+*/
+
+:root {
+  --background: 42 24% 94%;
+  --foreground: 40 12% 14%;
+  --card: 44 33% 98%;
+  --card-foreground: 40 12% 14%;
+  --primary: 158 34% 27%;
+  --primary-foreground: 44 33% 98%;
+  --secondary: 44 18% 88%;
+  --secondary-foreground: 40 12% 14%;
+  --muted: 44 18% 88%;
+  --muted-foreground: 40 8% 40%;
+  --accent: 158 34% 27%;
+  --accent-foreground: 44 33% 98%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 0 0% 98%;
+  --success: 152 42% 33%;
+  --warning: 38 82% 48%;
+  --warning-foreground: 40 12% 14%;
+  --info: 185 38% 34%;
+  --border: 40 14% 82%;
+  --input: 40 14% 82%;
+  --ring: 158 34% 27%;
+  --radius: 0.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: 40 10% 8%;
+    --foreground: 42 18% 92%;
+    --card: 40 9% 11%;
+    --card-foreground: 42 18% 92%;
+    --primary: 150 36% 52%;
+    --primary-foreground: 40 10% 8%;
+    --secondary: 40 8% 15%;
+    --secondary-foreground: 42 18% 92%;
+    --muted: 40 8% 15%;
+    --muted-foreground: 42 10% 62%;
+    --accent: 150 36% 52%;
+    --accent-foreground: 40 10% 8%;
+    --destructive: 0 72% 58%;
+    --success: 150 36% 52%;
+    --warning: 38 78% 58%;
+    --info: 185 38% 52%;
+    --border: 40 7% 20%;
+    --input: 40 7% 20%;
+    --ring: 150 36% 52%;
+  }
+}
+
 :root {
   color-scheme: dark;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #0b0b0e;
-  color: #f5f5f7;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
 }
 
 * {
@@ -12,15 +83,15 @@
 body {
   margin: 0;
   min-width: 780px;
-  background: #0b0b0e;
+  background: hsl(var(--background));
 }
 
 button {
   height: 34px;
-  border: 1px solid #2d313a;
+  border: 1px solid hsl(var(--border));
   border-radius: 6px;
-  background: #181b22;
-  color: #f5f5f7;
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
   font: inherit;
   font-size: 13px;
   cursor: pointer;
@@ -28,8 +99,8 @@ button {
 }
 
 button:hover {
-  border-color: #4b5563;
-  background: #20242d;
+  border-color: hsl(var(--border));
+  background: hsl(var(--border));
 }
 
 button:disabled {
@@ -42,15 +113,19 @@ button:active:not(:disabled) {
 }
 
 button.primary {
-  border-color: #e5e7eb;
-  background: #e5e7eb;
-  color: #111827;
-  font-weight: 650;
+  /* The primary action carries the brand colour. It was grey before, which
+     made every button look equally important — the ink-green reads at about
+     6.9:1 on the background, so this is a contrast improvement as well as a
+     hierarchy one. */
+  border-color: hsl(var(--primary));
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  font-weight: 500;
 }
 
 button.primary:hover:not(:disabled) {
-  border-color: #fff;
-  background: #fff;
+  background: hsl(var(--primary) / 0.88);
+  border-color: hsl(var(--primary) / 0.88);
 }
 
 a:focus-visible,
@@ -58,7 +133,7 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid #94a3b8;
+  outline: 2px solid hsl(var(--muted-foreground));
   outline-offset: 2px;
 }
 
@@ -88,8 +163,10 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border-right: 1px solid #20242d;
-  background: #101116;
+  border-right: 1px solid hsl(var(--border));
+  /* Chrome, not content: tinted so the conversation reads as the surface in
+     front of it. */
+  background: hsl(var(--background));
 }
 
 .model-settings-form {
@@ -107,7 +184,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: #9ca3af;
+  color: hsl(var(--muted-foreground));
 }
 
 .sidebar-check input {
@@ -117,7 +194,7 @@ textarea:focus-visible {
 .model-key-status {
   margin: 0;
   font-size: 12px;
-  color: #94a3b8;
+  color: hsl(var(--muted-foreground));
 }
 
 .brand {
@@ -125,7 +202,7 @@ textarea:focus-visible {
   gap: 12px;
   align-items: center;
   padding: 18px 18px 14px;
-  border-bottom: 1px solid #20242d;
+  border-bottom: 1px solid hsl(var(--border));
 }
 
 .brand-mark {
@@ -134,8 +211,8 @@ textarea:focus-visible {
   width: 34px;
   height: 34px;
   border-radius: 8px;
-  background: #f5f5f7;
-  color: #0b0b0e;
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
   font-weight: 800;
 }
 
@@ -151,7 +228,7 @@ textarea:focus-visible {
 .empty-state p,
 #thread-meta {
   margin: 0;
-  color: #9ca3af;
+  color: hsl(var(--muted-foreground));
   font-size: 12px;
   line-height: 1.45;
 }
@@ -160,14 +237,14 @@ textarea:focus-visible {
   min-height: 54px;
   margin: 14px;
   padding: 12px;
-  border: 1px solid #252936;
+  border: 1px solid hsl(var(--secondary));
   border-radius: 8px;
-  background: #151820;
+  background: hsl(var(--card));
 }
 
 .status-card.error {
-  border-color: #7f1d1d;
-  color: #fecaca;
+  border-color: hsl(var(--destructive) / 0.25);
+  color: hsl(var(--destructive));
 }
 
 .sidebar-actions {
@@ -182,9 +259,9 @@ textarea:focus-visible {
   gap: 12px;
   margin: 0 14px 14px;
   padding: 13px;
-  border: 1px solid #252936;
+  border: 1px solid hsl(var(--secondary));
   border-radius: 8px;
-  background: #151820;
+  background: hsl(var(--card));
 }
 
 .login-form[hidden] {
@@ -201,7 +278,7 @@ textarea:focus-visible {
 }
 
 .login-form-heading span {
-  color: #9ca3af;
+  color: hsl(var(--muted-foreground));
   font-size: 11px;
   line-height: 1.4;
 }
@@ -209,7 +286,7 @@ textarea:focus-visible {
 .login-field {
   display: grid;
   gap: 5px;
-  color: #cbd5e1;
+  color: hsl(var(--muted-foreground));
   font-size: 11px;
   font-weight: 650;
 }
@@ -217,11 +294,11 @@ textarea:focus-visible {
 .login-field input {
   width: 100%;
   height: 34px;
-  border: 1px solid #2d313a;
+  border: 1px solid hsl(var(--border));
   border-radius: 6px;
   outline: none;
-  background: #0f1117;
-  color: #f5f5f7;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
   font: inherit;
   font-size: 13px;
   font-weight: 400;
@@ -229,8 +306,8 @@ textarea:focus-visible {
 }
 
 .login-field input:focus {
-  border-color: #64748b;
-  box-shadow: 0 0 0 2px rgb(100 116 139 / 20%);
+  border-color: hsl(var(--border));
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.35);
 }
 
 .login-field input:disabled {
@@ -250,7 +327,7 @@ textarea:focus-visible {
   justify-content: space-between;
   gap: 12px;
   padding: 0 14px 10px;
-  color: #cbd5e1;
+  color: hsl(var(--muted-foreground));
   font-size: 12px;
 }
 
@@ -264,9 +341,9 @@ textarea:focus-visible {
   gap: 11px;
   margin: 0 14px 12px;
   padding: 13px;
-  border: 1px solid #303646;
+  border: 1px solid hsl(var(--secondary));
   border-radius: 8px;
-  background: #151820;
+  background: hsl(var(--card));
 }
 
 .sidebar-form[hidden] {
@@ -283,7 +360,7 @@ textarea:focus-visible {
 }
 
 .sidebar-form-heading span {
-  color: #aeb7c4;
+  color: hsl(var(--muted-foreground));
   font-size: 11px;
   line-height: 1.4;
 }
@@ -291,7 +368,7 @@ textarea:focus-visible {
 .sidebar-field {
   display: grid;
   gap: 5px;
-  color: #d4dbe5;
+  color: hsl(var(--foreground));
   font-size: 11px;
   font-weight: 650;
 }
@@ -300,11 +377,11 @@ textarea:focus-visible {
 .sidebar-field select {
   width: 100%;
   height: 34px;
-  border: 1px solid #363c48;
+  border: 1px solid hsl(var(--secondary));
   border-radius: 6px;
   outline: none;
-  background: #0f1117;
-  color: #f5f5f7;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
   font: inherit;
   font-size: 13px;
   font-weight: 400;
@@ -313,8 +390,8 @@ textarea:focus-visible {
 
 .sidebar-field input:focus,
 .sidebar-field select:focus {
-  border-color: #718096;
-  box-shadow: 0 0 0 2px rgb(113 128 150 / 24%);
+  border-color: hsl(var(--border));
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.35);
 }
 
 .sidebar-field input:disabled,
@@ -330,13 +407,13 @@ textarea:focus-visible {
 
 .form-error {
   margin: 0;
-  color: #fca5a5;
+  color: hsl(var(--destructive));
   font-size: 11px;
   line-height: 1.4;
 }
 
 .form-error.pending {
-  color: #cbd5e1;
+  color: hsl(var(--muted-foreground));
 }
 
 .thread-list {
@@ -350,8 +427,8 @@ textarea:focus-visible {
 
 .sidebar-footer {
   padding: 9px 18px 12px;
-  border-top: 1px solid #252a34;
-  color: #8f98a8;
+  border-top: 1px solid hsl(var(--secondary));
+  color: hsl(var(--muted-foreground));
   font-size: 11px;
 }
 
@@ -361,7 +438,7 @@ textarea:focus-visible {
 }
 
 .sidebar-footer a:hover {
-  color: #e5e7eb;
+  color: hsl(var(--foreground));
   text-decoration: underline;
 }
 
@@ -383,13 +460,13 @@ textarea:focus-visible {
 
 .thread-button:hover,
 .thread-button.active {
-  background: #1a1f2b;
+  background: hsl(var(--muted));
 }
 
 .thread-button strong {
   display: block;
   overflow: hidden;
-  color: #f5f5f7;
+  color: hsl(var(--foreground));
   font-size: 13px;
   font-weight: 600;
   text-overflow: ellipsis;
@@ -400,9 +477,9 @@ textarea:focus-visible {
   display: inline-block;
   margin-top: 5px;
   padding: 2px 5px;
-  border: 1px solid #58471f;
+  border: 1px solid hsl(var(--warning) / 0.4);
   border-radius: 999px;
-  color: #fbbf24;
+  color: hsl(var(--warning));
   font-size: 10px;
   font-weight: 650;
 }
@@ -410,7 +487,8 @@ textarea:focus-visible {
 .content {
   min-width: 0;
   overflow: hidden;
-  background: #0b0b0e;
+  /* The reading surface. */
+  background: hsl(var(--card));
 }
 
 .empty-state {
@@ -441,7 +519,7 @@ textarea:focus-visible {
 
 .eyebrow {
   margin: 0 0 10px !important;
-  color: #d1d5db !important;
+  color: hsl(var(--foreground)) !important;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -461,28 +539,28 @@ textarea:focus-visible {
   justify-content: space-between;
   gap: 18px;
   padding: 24px 32px 18px;
-  border-bottom: 1px solid #20242d;
+  border-bottom: 1px solid hsl(var(--border));
 }
 
 .turn-state {
   flex: none;
   margin-top: 2px;
   padding: 5px 8px;
-  border: 1px solid #2d313a;
+  border: 1px solid hsl(var(--border));
   border-radius: 999px;
-  color: #9ca3af;
+  color: hsl(var(--muted-foreground));
   font-size: 11px;
   font-weight: 650;
 }
 
 .turn-state.busy {
-  border-color: #475569;
-  color: #e2e8f0;
+  border-color: hsl(var(--border));
+  color: hsl(var(--foreground));
 }
 
 .turn-state.error {
-  border-color: #7f1d1d;
-  color: #fecaca;
+  border-color: hsl(var(--destructive) / 0.25);
+  color: hsl(var(--destructive));
 }
 
 .message-viewport {
@@ -508,9 +586,9 @@ textarea:focus-visible {
   width: min(900px, calc(100% - 64px));
   margin: 0 auto 10px;
   padding: 11px 12px;
-  border: 1px solid #58471f;
+  border: 1px solid hsl(var(--warning) / 0.4);
   border-radius: 8px;
-  background: #191710;
+  background: hsl(var(--warning) / 0.12);
 }
 
 .turn-recovery-card[hidden] {
@@ -518,7 +596,7 @@ textarea:focus-visible {
 }
 
 .turn-recovery-card[aria-busy="true"] {
-  border-color: #475569;
+  border-color: hsl(var(--border));
 }
 
 .turn-recovery-copy {
@@ -528,19 +606,19 @@ textarea:focus-visible {
 }
 
 .turn-recovery-copy strong {
-  color: #f5f5f7;
+  color: hsl(var(--foreground));
   font-size: 12px;
 }
 
 .turn-recovery-copy > span {
-  color: #b7bec9;
+  color: hsl(var(--muted-foreground));
   font-size: 11px;
   line-height: 1.4;
 }
 
 .turn-recovery-prompt {
   overflow: hidden;
-  color: #d4dbe5 !important;
+  color: hsl(var(--foreground)) !important;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -550,7 +628,7 @@ textarea:focus-visible {
 }
 
 .turn-recovery-feedback.error {
-  color: #fca5a5 !important;
+  color: hsl(var(--destructive)) !important;
 }
 
 .turn-recovery-actions {
@@ -569,7 +647,7 @@ textarea:focus-visible {
 }
 
 .message-role {
-  color: #9ca3af;
+  color: hsl(var(--muted-foreground));
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -580,10 +658,10 @@ textarea:focus-visible {
   width: fit-content;
   max-width: min(720px, 100%);
   padding: 12px 14px;
-  border: 1px solid #252936;
+  border: 1px solid hsl(var(--secondary));
   border-radius: 8px;
-  background: #141821;
-  color: #e5e7eb;
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
   font-size: 14px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -591,8 +669,8 @@ textarea:focus-visible {
 
 .message.user .bubble {
   margin-left: auto;
-  background: #e5e7eb;
-  color: #111827;
+  background: hsl(var(--foreground));
+  color: hsl(var(--primary-foreground));
 }
 
 .message.pending .bubble::after {
@@ -602,14 +680,14 @@ textarea:focus-visible {
   height: 14px;
   margin-left: 4px;
   border-radius: 1px;
-  background: #94a3b8;
+  background: hsl(var(--muted-foreground));
   vertical-align: -2px;
   animation: cursor-blink 1s steps(2, start) infinite;
 }
 
 .message.partial .message-role::after {
   content: " · partial";
-  color: #fbbf24;
+  color: hsl(var(--warning));
 }
 
 .composer {
@@ -617,9 +695,9 @@ textarea:focus-visible {
   width: min(900px, calc(100% - 64px));
   margin: 0 auto 24px;
   padding: 12px;
-  border: 1px solid #252936;
+  border: 1px solid hsl(var(--secondary));
   border-radius: 10px;
-  background: #11141b;
+  background: hsl(var(--card));
   box-shadow: 0 14px 40px rgb(0 0 0 / 24%);
 }
 
@@ -628,7 +706,7 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: 9px;
-  color: #9ca3af;
+  color: hsl(var(--muted-foreground));
   font-size: 11px;
 }
 
@@ -640,10 +718,10 @@ textarea:focus-visible {
 .composer-toolbar select {
   max-width: 180px;
   height: 27px;
-  border: 1px solid #2d313a;
+  border: 1px solid hsl(var(--border));
   border-radius: 5px;
-  background: #181b22;
-  color: #e5e7eb;
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
   font: inherit;
 }
 
@@ -668,14 +746,14 @@ textarea:focus-visible {
   border: 0;
   outline: 0;
   background: transparent;
-  color: #f5f5f7;
+  color: hsl(var(--foreground));
   font: inherit;
   font-size: 14px;
   line-height: 1.5;
 }
 
 .composer-input textarea::placeholder {
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
 }
 
 .composer-input textarea:disabled {
@@ -709,10 +787,10 @@ textarea:focus-visible {
 .attachment-chip {
   display: inline-block;
   padding: 2px 6px;
-  border: 1px solid #2d313a;
+  border: 1px solid hsl(var(--border));
   border-radius: 4px;
-  background: #181b22;
-  color: #d1d5db;
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
   font-size: 12px;
 }
 
@@ -784,8 +862,8 @@ textarea:focus-visible {
   flex-direction: column;
   min-width: 0;
   overflow-y: auto;
-  border-left: 1px solid #20242d;
-  background: #101116;
+  border-left: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
 }
 
 .context-header {
@@ -794,25 +872,25 @@ textarea:focus-visible {
   justify-content: space-between;
   gap: 8px;
   padding: 16px 16px 12px;
-  border-bottom: 1px solid #20242d;
+  border-bottom: 1px solid hsl(var(--border));
 }
 
 .context-title {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
-  color: #e5e7eb;
+  color: hsl(var(--foreground));
 }
 
 .context-count {
   font-size: 12px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   font-variant-numeric: tabular-nums;
 }
 
 .context-section {
   padding: 14px 16px;
-  border-bottom: 1px solid #191c24;
+  border-bottom: 1px solid hsl(var(--border));
 }
 
 .context-section-title {
@@ -823,13 +901,13 @@ textarea:focus-visible {
   margin: 0 0 10px;
   font-size: 12px;
   font-weight: 600;
-  color: #9ca3af;
+  color: hsl(var(--muted-foreground));
 }
 
 .context-section-meta {
   font-size: 11px;
   font-weight: 400;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   font-variant-numeric: tabular-nums;
 }
 
@@ -848,25 +926,25 @@ textarea:focus-visible {
   align-items: baseline;
   gap: 8px;
   font-size: 12px;
-  color: #d1d5db;
+  color: hsl(var(--foreground));
 }
 
 /* The marker carries the state, so it must not rely on colour alone. */
 .run-step-mark {
   font-size: 12px;
   line-height: 1.4;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
 }
 
-.run-step.is-complete .run-step-mark { color: #34d399; }
-.run-step.is-active .run-step-mark { color: #60a5fa; }
-.run-step.is-failed .run-step-mark { color: #f87171; }
+.run-step.is-complete .run-step-mark { color: hsl(var(--success)); }
+.run-step.is-active .run-step-mark { color: hsl(var(--info)); }
+.run-step.is-failed .run-step-mark { color: hsl(var(--destructive)); }
 
-.run-step.is-pending .run-step-label { color: #6b7280; }
+.run-step.is-pending .run-step-label { color: hsl(var(--muted-foreground)); }
 
 .run-step-detail {
   font-size: 11px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
   text-align: right;
   white-space: nowrap;
 }
@@ -885,28 +963,28 @@ textarea:focus-visible {
   flex-direction: column;
   gap: 2px;
   padding: 8px 10px;
-  border: 1px solid #20242d;
+  border: 1px solid hsl(var(--border));
   border-radius: 8px;
-  background: #14161c;
+  background: hsl(var(--card));
 }
 
 .context-item-name {
   font-size: 12px;
-  color: #e5e7eb;
+  color: hsl(var(--foreground));
   word-break: break-all;
 }
 
 .context-item-meta {
   font-size: 11px;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
 }
 
-.context-item.is-missing .context-item-name { color: #9ca3af; }
-.context-item.is-missing .context-item-meta { color: #f87171; }
+.context-item.is-missing .context-item-name { color: hsl(var(--muted-foreground)); }
+.context-item.is-missing .context-item-meta { color: hsl(var(--destructive)); }
 
 .context-empty {
   margin: 0;
   font-size: 11px;
   line-height: 1.5;
-  color: #6b7280;
+  color: hsl(var(--muted-foreground));
 }
