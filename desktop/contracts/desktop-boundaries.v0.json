@@ -63,6 +63,10 @@
         "routeId": "agent.skills.catalog"
       },
       {
+        "bridgeMethod": "agent.listModes",
+        "routeId": "agent.skills.modes"
+      },
+      {
         "bridgeMethod": "agent.createThread",
         "routeId": "agent.thread-put"
       },
@@ -431,6 +435,18 @@
       "id": "agent.skills.catalog",
       "method": "GET",
       "path": "/agent/skills/catalog",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "agent.skills.modes",
+      "method": "GET",
+      "path": "/agent/skills/modes",
       "credential": "local-token",
       "requestPolicy": {
         "origin": "absent",

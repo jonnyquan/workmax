@@ -1379,6 +1379,105 @@ async function testShimInterceptsExternalLinks() {
   assert.equal(prevented, false, "a fragment link must be left to the page");
 }
 
+// Signed out with a local model configured is a supported way to use this
+// app, and until now the renderer did not believe it: the sidecar has served
+// unauthenticated turns since L3d, but the composer was gated on a cloud
+// session, so the local-first configuration existed only on the server.
+function localModeBridge({ localRoute }) {
+  const calls = [];
+  const bridge = {
+    async fetch(pathname) {
+      calls.push(pathname);
+      if (pathname === "/auth/status") {
+        return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("local-thread", "Offline notes")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() {
+        // What the sidecar really answers without a session. If the renderer
+        // still depended on this, everything below would be unreachable.
+        return { ok: false, status: 401, statusText: "Unauthorized", headers: {}, error: { error: "authentication_required" } };
+      },
+      async listModes() {
+        return typedSuccess({ allowed_modes: ["ppt"], local_route: localRoute });
+      },
+      async listRecoverableTurns() { return typedSuccess({ items: [], count: 0 }); },
+      async createThread() { throw new Error("not exercised"); },
+      async resumeTurn() { throw new Error("not exercised"); },
+      startTurn() { return { turnID: "local-turn" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+  return { bridge, desktopBridge, calls };
+}
+
+async function testSignedOutLocalRouteCanDriveTheAgent() {
+  const { bridge, desktopBridge } = localModeBridge({ localRoute: true });
+  const { document } = await runRenderer(bridge, desktopBridge);
+
+  assert.match(
+    document.byId.get("thread-list").textContent,
+    /Offline notes/,
+    "local threads must load without a cloud session; they belong to the local single user",
+  );
+  assert.equal(
+    document.byId.get("login-button").hidden,
+    false,
+    "signing in must still be offered — local mode is a way to work, not a replacement",
+  );
+
+  const threadButton = walk(
+    document.byId.get("thread-list"),
+    (node) => node.tagName === "BUTTON",
+  )[0];
+  threadButton.click();
+  await settle();
+
+  assert.equal(
+    document.byId.get("chat-input").disabled,
+    false,
+    "the composer must be usable: this is exactly the configuration the local route exists for",
+  );
+  assert.match(
+    document.byId.get("composer-status").textContent,
+    /local model/i,
+    "the composer must say where the turn will run",
+  );
+
+  // And a turn actually goes out.
+  const input = document.byId.get("chat-input");
+  input.value = "What did I write yesterday?";
+  input.dispatch("input");
+  assert.equal(document.byId.get("send-button").disabled, false);
+}
+
+// The other half of the rule: without the local route there is no signed-out
+// path, and the renderer must not offer one it cannot fulfil.
+async function testSignedOutWithoutLocalRouteStaysGated() {
+  const { bridge, desktopBridge } = localModeBridge({ localRoute: false });
+  const { document } = await runRenderer(bridge, desktopBridge);
+
+  assert.match(
+    document.byId.get("thread-list").textContent,
+    /No cached threads yet/,
+    "with no local route there is no local user whose threads could be shown",
+  );
+  assert.equal(document.byId.get("chat-input").disabled, true);
+  assert.match(
+    document.byId.get("empty-title").textContent,
+    /Sign in/,
+    "the empty state must still ask for a sign-in",
+  );
+}
+
 // Markdown is what models write, so it is what the chat column has to read
 // back. This drives the real path: a turn streams Markdown, finishes, and the
 // bubble is asserted structurally — elements, not a string that happens to
@@ -3578,6 +3677,8 @@ await testThreadGroupingAndSearch();
 await testThreadSearchIsHiddenWithNothingToFilter();
 await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
+await testSignedOutLocalRouteCanDriveTheAgent();
+await testSignedOutWithoutLocalRouteStaysGated();
 await testAssistantMarkdownIsRenderedAsElements();
 await testRetrievedContextIsShownAndResetPerTurn();
 await testShimValidatesRetrievalPayloads();

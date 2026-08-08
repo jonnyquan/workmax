@@ -56,8 +56,22 @@ func ListLocalThreads(db *gorm.DB, uid uint64, limit int, includePaused bool) ([
 	if limit <= 0 {
 		limit = 50
 	}
+	// message_count is written by cloud sync, so a thread that only ever
+	// existed on this machine reported 0 no matter how much was in it — the
+	// sidebar said "0 messages" next to a conversation the user had just had.
+	// The larger of the two is the honest answer: the stored count can exceed
+	// what is cached locally (the cloud knows about messages this machine has
+	// not pulled), and the local count can exceed the stored one (local-only
+	// turns the cloud has never seen).
 	baseQuery := `
-		SELECT uuid, name, agent_mode, message_count, updated_at,
+		SELECT uuid, name, agent_mode,
+		       MAX(
+		         message_count,
+		         (SELECT COUNT(*) FROM w_workagent_message m
+		           WHERE m.thread_id = w_workagent_thread.id
+		             AND m.uid = w_workagent_thread.uid)
+		       ),
+		       updated_at,
 		       COALESCE(cloud_sync_state, 'synced')
 		  FROM w_workagent_thread
 		 WHERE agent_type = 'general_agent'`

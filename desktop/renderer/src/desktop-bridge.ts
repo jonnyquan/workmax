@@ -236,6 +236,17 @@ export interface AgentSkillCatalog {
   allowed_modes: string[];
 }
 
+/**
+ * The Desktop's own answer to "which modes may I use, and would a turn run
+ * locally right now". Read without a cloud session, which is the whole point:
+ * the allowlist is a constant in the sidecar, and the catalog that also
+ * carries it needs an account.
+ */
+export interface AgentModes {
+  allowed_modes: string[];
+  local_route: boolean;
+}
+
 export interface AgentTurnInput {
   threadUUID: string;
   userText: string;
@@ -410,6 +421,7 @@ export interface DesktopBridge {
   };
   agent: {
     listSkills: () => Promise<DesktopBridgeResult<AgentSkillCatalog>>;
+    listModes: () => Promise<DesktopBridgeResult<AgentModes>>;
     createThread: (
       input: AgentCreateThreadInput
     ) => Promise<DesktopBridgeResult<AgentCreateThreadResult>>;
@@ -549,6 +561,14 @@ const ROUTES = {
     "agent.skills.catalog",
     "GET",
     "/agent/skills/catalog",
+    "none",
+    null
+  ),
+  agentListModes: defineTypedRoute(
+    "agent.listModes",
+    "agent.skills.modes",
+    "GET",
+    "/agent/skills/modes",
     "none",
     null
   ),
@@ -697,6 +717,7 @@ export function createDesktopBridge(
     agent: {
       listSkills: () =>
         execute<AgentSkillCatalog>(deps, ROUTES.agentListSkills),
+      listModes: () => execute<AgentModes>(deps, ROUTES.agentListModes),
       createThread: async (input) => {
         const request = buildAgentCreateThreadRequest(input);
         const path = ROUTES.agentCreateThread.path.replace(

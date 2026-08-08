@@ -14,6 +14,7 @@ const ROUTES = {
     historyListThreads: defineTypedRoute("history.listThreads", "agent.threads", "GET", "/agent/threads", "none", null),
     historyListMessages: defineTypedRoute("history.listMessages", "agent.thread-messages", "GET", "/agent/threads/:uuid/messages", "none", null),
     agentListSkills: defineTypedRoute("agent.listSkills", "agent.skills.catalog", "GET", "/agent/skills/catalog", "none", null),
+    agentListModes: defineTypedRoute("agent.listModes", "agent.skills.modes", "GET", "/agent/skills/modes", "none", null),
     agentCreateThread: defineTypedRoute("agent.createThread", "agent.thread-put", "PUT", "/agent/threads/:uuid", "json", "application/json"),
     agentStartTurn: defineTypedRoute("agent.startTurn", "agent.chat", "POST", "/agent/chat", "json", "application/json"),
     agentListRecoverableTurns: defineTypedRoute("agent.listRecoverableTurns", "agent.turns-recoverable", "GET", "/agent/turns/recoverable", "none", null),
@@ -61,6 +62,7 @@ function createDesktopBridge(deps) {
         },
         agent: {
             listSkills: () => execute(deps, ROUTES.agentListSkills),
+            listModes: () => execute(deps, ROUTES.agentListModes),
             createThread: async (input) => {
                 const request = buildAgentCreateThreadRequest(input);
                 const path = ROUTES.agentCreateThread.path.replace(":uuid", encodeURIComponent(request.threadUUID));

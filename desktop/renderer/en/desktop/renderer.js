@@ -29,6 +29,11 @@ const state = {
   pendingFiles: [],
   threadQuery: "",
   uploadGeneration: 0,
+  // True when a turn sent right now would run on the locally configured model.
+  // That is the one condition under which the sidecar serves an unauthenticated
+  // turn (localSingleUserUID, L3d/D2), so it is what decides whether this app
+  // is usable without an account.
+  localRoute: false,
 };
 
 const AUTH_POLL_INTERVAL_MS = 1000;
@@ -902,6 +907,18 @@ function renderAttachments() {
   renderTaskContext();
 }
 
+function desktopAgentModesBridge() {
+  const desktop = window.desktopBridge;
+  if (
+    !isRecord(desktop) ||
+    !isRecord(desktop.agent) ||
+    typeof desktop.agent.listModes !== "function"
+  ) {
+    return null;
+  }
+  return desktop.agent;
+}
+
 function desktopAgentCreateBridge() {
   const desktop = window.desktopBridge;
   if (
@@ -1076,9 +1093,16 @@ async function submitModelSettings(event) {
       throw new Error(sanitizeErrorMessage(result.error) || "Could not save model settings");
     }
     fillModelSettingsForm(parseModelRouteSettings(result.data));
+    // Switching the route changes whether a signed-out user may run a turn at
+    // all, so the gate is re-read here rather than left until the next
+    // refresh — otherwise saving "local" appears to do nothing.
+    await loadLocalModes();
+    renderEmptyState();
     setStatus(
       preferred === "local"
-        ? "Saved local model route (inference wiring still pending)."
+        ? isLocalOnlySession()
+          ? "Saved. Local model route — you can work without signing in."
+          : "Saved local model route."
         : "Saved official model route preference."
     );
   } catch (error) {
@@ -1181,6 +1205,72 @@ async function loadSkills(expectedSessionGeneration = state.sessionGeneration) {
   state.allowedModes = catalog.allowed_modes;
   state.skillsDegraded = catalog.items.length === 0 && catalog.allowed_modes.length > 0;
   renderSkillOptions();
+  updateComposerState();
+  return true;
+}
+
+// parseAgentModes mirrors the strictness of every other bridge parser: the
+// answer decides whether a signed-out user may drive the agent, so a
+// half-understood payload must be an error rather than a permissive default.
+function parseAgentModes(value) {
+  if (
+    !hasExactKeys(value, ["allowed_modes", "local_route"]) ||
+    !Array.isArray(value.allowed_modes) ||
+    typeof value.local_route !== "boolean"
+  ) {
+    throw new Error("Malformed agent modes response");
+  }
+  const modes = [];
+  const seen = new Set();
+  for (const mode of value.allowed_modes) {
+    if (!isSafeProtocolString(mode, 64) || seen.has(mode)) {
+      throw new Error("Malformed agent modes response");
+    }
+    seen.add(mode);
+    modes.push(mode);
+  }
+  return { allowed_modes: modes, local_route: value.local_route };
+}
+
+// Reads the Desktop's own answer to "what may I run, and would it run here".
+//
+// Never throws outward: this is the call that decides whether a signed-out app
+// is usable, and if it fails the honest outcome is the pre-existing behaviour
+// (sign in first), not a broken boot.
+async function loadLocalModes(expectedSessionGeneration = state.sessionGeneration) {
+  const agent = desktopAgentModesBridge();
+  // The same availability facts loadSkills records. They live in both because
+  // this is the only loader that runs on the signed-out path, and without them
+  // the composer stays disabled for a reason that has nothing to do with the
+  // route: "no agent bridge", which is false.
+  state.agentAvailable = desktopAgentBridge() !== null;
+  state.createAvailable = desktopAgentCreateBridge() !== null;
+  if (!agent) return false;
+  let result;
+  try {
+    result = parseDesktopBridgeResult(await agent.listModes(), "agent modes result");
+  } catch {
+    return false;
+  }
+  if (expectedSessionGeneration !== state.sessionGeneration) return false;
+  if (!result.ok) return false;
+  let modes;
+  try {
+    modes = parseAgentModes(result.data);
+  } catch {
+    return false;
+  }
+  state.localRoute = modes.local_route;
+  // The catalog is authoritative when there is a session — it carries the same
+  // allowlist plus the live skill details. This only fills the gap the catalog
+  // cannot cover, which is having no session at all.
+  if (state.auth?.state !== "authenticated") {
+    state.allowedModes = modes.allowed_modes;
+    if (!state.allowedModes.includes(state.selectedMode)) {
+      state.selectedMode = state.allowedModes[0] || "";
+    }
+    renderSkillOptions();
+  }
   updateComposerState();
   return true;
 }
@@ -1802,7 +1892,7 @@ function updateRecoveryState() {
 }
 
 function updateComposerState() {
-  const authenticated = state.auth?.state === "authenticated";
+  const authenticated = canUseAgent();
   const hasThread = Boolean(state.selectedThreadUUID);
   const hasMode = state.allowedModes.includes(state.selectedMode);
   const active = state.activeTurn !== null;
@@ -1829,9 +1919,12 @@ function updateComposerState() {
   if (state.recoveringSession) {
     composerStatus.textContent = "Your signed-in account changed. Select a thread again.";
   } else if (!authenticated) {
-    composerStatus.textContent = "Sign in to continue a synced thread.";
+    composerStatus.textContent =
+      "Sign in, or choose a local model under Models, to start a conversation.";
   } else if (!hasThread) {
-    composerStatus.textContent = "Select a synced thread to continue.";
+    composerStatus.textContent = isLocalOnlySession()
+      ? "Select or create a thread. It stays on this machine."
+      : "Select a synced thread to continue.";
   } else if (!state.agentAvailable) {
     composerStatus.textContent = "Agent streaming is unavailable in this Desktop build.";
   } else if (state.skillsLoading) {
@@ -1850,6 +1943,8 @@ function updateComposerState() {
     composerStatus.textContent = state.activeTurn.stopRequested
       ? "Stopping this turn..."
       : "WorkMax Agent is responding...";
+  } else if (isLocalOnlySession()) {
+    composerStatus.textContent = `${state.selectedMode.toUpperCase()} on your local model. Signed out — nothing leaves this machine.`;
   } else if (state.skillsDegraded) {
     composerStatus.textContent = `${state.selectedMode.toUpperCase()} is available; live skill details are offline.`;
   } else {
@@ -1857,6 +1952,24 @@ function updateComposerState() {
   }
   updateRecoveryState();
   updateNewThreadState();
+}
+
+// Whether the agent can be driven at all right now.
+//
+// It used to be "is there a cloud session", which made the local route
+// unreachable: the sidecar has served unauthenticated turns since L3d, but the
+// renderer disabled its composer, hid the new-thread button and never even
+// loaded local threads, so the signed-out local-first configuration existed
+// only on the server side.
+function canUseAgent() {
+  return state.auth?.state === "authenticated" || state.localRoute;
+}
+
+// Signed out and running locally. Worth naming because several messages have
+// to say something different in this state — "sign in" is not the answer to
+// anything here.
+function isLocalOnlySession() {
+  return state.localRoute && state.auth?.state !== "authenticated";
 }
 
 function canGenerateThreadUUID() {
@@ -1876,7 +1989,7 @@ function generateThreadUUID() {
 
 function canOpenNewThread() {
   return (
-    state.auth?.state === "authenticated" &&
+    canUseAgent() &&
     state.agentAvailable &&
     state.createAvailable &&
     canGenerateThreadUUID() &&
@@ -1890,16 +2003,25 @@ function canOpenNewThread() {
 }
 
 function renderEmptyState() {
-  const authenticated = state.auth?.state === "authenticated";
+  const authenticated = canUseAgent();
   if (!authenticated) {
     emptyTitle.textContent = "Sign in to use WorkMax Agent";
-    emptyDescription.textContent = "Sign in to sync presentation threads and continue from local history.";
+    emptyDescription.textContent =
+      "Sign in to sync presentation threads — or point Models at a local endpoint and work without an account.";
+  } else if (isLocalOnlySession() && state.threads.length === 0) {
+    emptyTitle.textContent = "Start a local thread";
+    emptyDescription.textContent =
+      "No account needed. Turns run on the model configured under Models, and the history stays in this app's own database.";
   } else if (state.threads.length === 0 && state.createAvailable) {
     emptyTitle.textContent = "Start a presentation thread";
     emptyDescription.textContent = "Create a synced thread, then describe the deck you want to build.";
   } else if (state.threads.length === 0) {
     emptyTitle.textContent = "No synced threads yet";
     emptyDescription.textContent = "This Desktop build can continue existing threads after they appear in local history.";
+  } else if (isLocalOnlySession()) {
+    emptyTitle.textContent = "Continue from local history";
+    emptyDescription.textContent =
+      "Select a thread to read it and keep going. Nothing here is synced — it lives in this app's own database.";
   } else {
     emptyTitle.textContent = "Continue from local history";
     emptyDescription.textContent = "Select a synced thread to read its cached messages and continue the conversation.";
@@ -2097,7 +2219,7 @@ async function submitNewThread(event) {
   const name = newThreadName.value.trim();
   const mode = newThreadMode.value;
   if (
-    state.auth?.state !== "authenticated" ||
+    !canUseAgent() ||
     !agent ||
     !state.agentAvailable ||
     state.skillsLoading ||
@@ -2440,7 +2562,22 @@ async function handleSessionChanged() {
     const auth = await loadAuthStatus(generation);
     if (generation !== state.sessionGeneration || !auth) return;
     loginButton.hidden = auth.state === "authenticated";
+    if (auth.state !== "authenticated") {
+      // The account went away rather than changing. If the local route is
+      // configured this is still a usable app, so land on the signed-out local
+      // session instead of an empty workbench.
+      state.localRoute = false;
+      await loadLocalModes(generation);
+      if (generation !== state.sessionGeneration) return;
+      if (state.localRoute) {
+        await Promise.allSettled([
+          loadThreads(generation),
+          loadRecoverableTurns(generation),
+        ]);
+      }
+    }
     if (auth.state === "authenticated") {
+      state.localRoute = false;
       const results = await Promise.allSettled([
         loadThreads(generation),
         loadSkills(generation),
@@ -2512,7 +2649,7 @@ function submitChat(event) {
   );
   const userText = chatInput.value.trim();
   if (
-    state.auth?.state !== "authenticated" ||
+    !canUseAgent() ||
     !agent ||
     !thread ||
     !state.allowedModes.includes(state.selectedMode) ||
@@ -3532,11 +3669,29 @@ async function refresh() {
       renderThreads();
       emptyState.hidden = false;
       threadPanel.hidden = true;
+      // Signed out is not the same as unusable. If the local route is
+      // configured the sidecar will serve turns under its single local user,
+      // so load what that user has instead of stopping at the sign-in wall.
+      await loadLocalModes(generation);
+      if (generation !== state.sessionGeneration) return;
+      if (state.localRoute) {
+        setStatus("Local model route. Signed out — history stays on this machine.");
+        await Promise.all([
+          loadThreads(generation),
+          loadRecoverableTurns(generation),
+        ]);
+        if (generation !== state.sessionGeneration) return;
+        renderEmptyState();
+        updateComposerState();
+        await restoreLoginTransaction();
+        return;
+      }
       updateComposerState();
       setStatus(`Auth state: ${auth.state}. Sign in to sync cloud history.`);
       await restoreLoginTransaction();
       return;
     }
+    state.localRoute = false;
     setLoginFormState(false);
     setStatus(`Authenticated${auth.tier ? ` · ${auth.tier}` : ""}. Reading local cache.`);
     await Promise.all([

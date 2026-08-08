@@ -526,3 +526,68 @@ func seedBenchThread(tb testing.TB, db *gorm.DB, uuid string) int64 {
 	}
 	return id
 }
+
+// A thread that only ever existed on this machine has no cloud-written
+// message_count, so the sidebar said "0 messages" beside a conversation the
+// user had just had. Counting the rows is what makes the local-first list
+// describe itself honestly.
+func TestListLocalThreads_CountsLocalMessagesWhenCloudCountIsBehind(t *testing.T) {
+	db := openHistoryTestDB(t)
+	id := seedThread(t, db, 7, "thr_local", "Local only", "ppt", 5)
+	seedMessage(t, db, id, "m1", "hi", "hello", "ppt", "complete")
+	seedMessage(t, db, id, "m2", "again", "sure", "ppt", "complete")
+
+	rows, err := ListLocalThreads(db, 7, 50, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+	if rows[0].MessageCount != 2 {
+		t.Errorf("message_count = %d, want 2 (the rows that exist)", rows[0].MessageCount)
+	}
+}
+
+// The stored count is not simply replaced: the cloud can know about messages
+// this machine has never pulled, and reporting only what is cached would make
+// a synced thread look emptier than it is.
+func TestListLocalThreads_KeepsCloudCountWhenItIsAhead(t *testing.T) {
+	db := openHistoryTestDB(t)
+	id := seedThread(t, db, 7, "thr_synced", "Synced", "ppt", 5)
+	if err := db.Exec(`UPDATE w_workagent_thread SET message_count = 40 WHERE id = ?`, id).Error; err != nil {
+		t.Fatal(err)
+	}
+	seedMessage(t, db, id, "m1", "hi", "hello", "ppt", "complete")
+
+	rows, err := ListLocalThreads(db, 7, 50, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[0].MessageCount != 40 {
+		t.Errorf("message_count = %d, want the cloud's 40", rows[0].MessageCount)
+	}
+}
+
+// Counting must respect the same uid filter as everything else, or one local
+// identity's threads would be described using another's messages.
+func TestListLocalThreads_CountIsScopedToTheOwner(t *testing.T) {
+	db := openHistoryTestDB(t)
+	id := seedThread(t, db, 7, "thr_mine", "Mine", "ppt", 5)
+	seedMessage(t, db, id, "m1", "hi", "hello", "ppt", "complete")
+	// A message row that points at the thread but belongs to another uid.
+	if err := db.Exec(
+		`INSERT INTO w_workagent_message (uid, uuid, thread_id, user_text, ai_text, chat_mode, streaming_state)
+		 VALUES (?, ?, ?, '', '', 'ppt', 'complete')`, 8, "m-other", id,
+	).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := ListLocalThreads(db, 7, 50, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[0].MessageCount != 1 {
+		t.Errorf("message_count = %d, want 1; the other uid's row must not be counted", rows[0].MessageCount)
+	}
+}

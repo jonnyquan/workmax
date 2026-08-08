@@ -27,6 +27,7 @@ import (
 // Endpoints:
 //   - POST /agent/chat                   — typed SSE chat relay
 //   - GET  /agent/skills/catalog         — filtered skills
+//   - GET  /agent/skills/modes           — the local allowlist, no cloud
 //   - GET  /agent/threads                — local thread list
 //   - GET  /agent/threads/:uuid/messages — local messages
 
@@ -488,6 +489,38 @@ func (s *Server) handleSkillsCatalog(c *gin.Context) {
 		Items:        filtered,
 		Count:        len(filtered),
 		AllowedModes: DesktopAllowedAgentModes,
+	})
+}
+
+// agentModesResponse is the wire shape of GET /agent/skills/modes.
+type agentModesResponse struct {
+	AllowedModes []string `json:"allowed_modes"`
+	// LocalRoute reports whether a turn sent right now would run on the local
+	// model. The renderer needs this to answer "can I be used signed out?",
+	// which is exactly the condition currentAgentTurnSession applies before it
+	// hands out localSingleUserUID.
+	LocalRoute bool `json:"local_route"`
+}
+
+// handleAgentModes answers "which agent modes may this Desktop use", without
+// asking the cloud anything.
+//
+// The allowlist is desktop-local knowledge — a constant in this binary — but
+// until now the only way to read it was GET /agent/skills/catalog, which needs
+// a cloud session and returns 401 without one. That made the allowlist
+// unreachable in precisely the configuration the local route exists to
+// support: no account, local model, everything on this machine. The renderer
+// therefore had no modes, so its composer stayed disabled and the local route
+// could not be used at all.
+//
+// This route deliberately does NOT degrade the catalog's rule that an auth
+// failure must never look like a valid empty catalog. It answers a different
+// question and never contacts the cloud, so there is no auth state for it to
+// misreport.
+func (s *Server) handleAgentModes(c *gin.Context) {
+	c.JSON(http.StatusOK, agentModesResponse{
+		AllowedModes: DesktopAllowedAgentModes,
+		LocalRoute:   s.shouldUseLocalRoute(),
 	})
 }
 

@@ -99,6 +99,7 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	newCurrentSidecarRoutePolicy("agent.turn-cancel", http.MethodPost, "/agent/turns/:uuid/cancel", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-put", http.MethodPut, "/agent/threads/:uuid", SidecarBodyRequired, maxAgentThreadPutBodyBytes, "application/json"),
 	newCurrentSidecarRoutePolicy("agent.skills.catalog", http.MethodGet, "/agent/skills/catalog", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("agent.skills.modes", http.MethodGet, "/agent/skills/modes", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.threads", http.MethodGet, "/agent/threads", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-messages", http.MethodGet, "/agent/threads/:uuid/messages", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("system.network-state", http.MethodGet, "/system/network-state", SidecarBodyForbidden, 0),
@@ -291,6 +292,8 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handleUploadThreadFile, true
 	case "agent.skills.catalog":
 		return s.handleSkillsCatalog, true
+	case "agent.skills.modes":
+		return s.handleAgentModes, true
 	case "agent.threads":
 		return s.handleListThreads, true
 	case "agent.thread-messages":

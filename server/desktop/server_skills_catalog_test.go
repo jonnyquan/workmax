@@ -723,3 +723,117 @@ func TestAgentChat_BuildsFrozenCloudPayloadFromTypedIntent(t *testing.T) {
 		t.Fatalf("cloud payload should contain only stream plus canonical contract fields: %s", upstreamBody.Load().([]byte))
 	}
 }
+
+// The allowlist has to be readable without an account.
+//
+// It is a constant in this binary, but until GET /agent/skills/modes existed
+// the only way to read it was the catalog, which needs a cloud session and
+// answers 401 without one. That made the modes unreachable in exactly the
+// configuration the local route exists for — no account, local model — so the
+// renderer had nothing to populate its mode selector with and kept its
+// composer disabled. These pin the route open in that state.
+func TestAgentModes_ReadableWithoutASession(t *testing.T) {
+	db := openServerTestDB(t)
+	modelSettings := ensureLocalModelSettingsDB(t, db)
+	srv, base := newModesFixture(t, ServerConfig{
+		SidecarVersion: "test",
+		LocalToken:     "tok",
+		DB:             db,
+		DeviceID:       "dev",
+		// A token store with nothing saved: unauthenticated, not misconfigured.
+		TokenStore:     cloudproxy.NewTokenStore(newMemKeychain()),
+		ModelSettings:  modelSettings,
+		LocalInference: &fakeLocalRunner{},
+	})
+	_ = srv
+
+	body := getAgentModes(t, base, "tok")
+	if len(body.AllowedModes) != 1 || body.AllowedModes[0] != DefaultDesktopAgentMode {
+		t.Fatalf("allowed_modes = %+v, want the desktop allowlist", body.AllowedModes)
+	}
+	if !body.LocalRoute {
+		t.Error("local_route = false with preferred_route=local; the renderer would refuse to let a signed-out user chat")
+	}
+}
+
+// With the official route selected there is no signed-out path, and the route
+// must say so rather than letting the renderer offer a turn that would 401.
+func TestAgentModes_ReportsNoLocalRouteWhenOfficial(t *testing.T) {
+	db := openServerTestDB(t)
+	// Left at its default, which is the official route.
+	store := NewLocalModelSettingsStore(db, newMemKeychain())
+	_, base := newModesFixture(t, ServerConfig{
+		SidecarVersion: "test",
+		LocalToken:     "tok",
+		DB:             db,
+		DeviceID:       "dev",
+		TokenStore:     cloudproxy.NewTokenStore(newMemKeychain()),
+		ModelSettings:  store,
+		LocalInference: &fakeLocalRunner{},
+	})
+
+	body := getAgentModes(t, base, "tok")
+	if body.LocalRoute {
+		t.Error("local_route = true on the official route")
+	}
+	if len(body.AllowedModes) == 0 {
+		t.Error("the allowlist must be reported regardless of route; it is what the mode selector is built from")
+	}
+}
+
+// The route is unauthenticated, not unguarded: it still sits behind the local
+// token like every other loopback route.
+func TestAgentModes_StillRequiresTheLocalToken(t *testing.T) {
+	db := openServerTestDB(t)
+	_, base := newModesFixture(t, ServerConfig{
+		SidecarVersion: "test",
+		LocalToken:     "tok",
+		DB:             db,
+		DeviceID:       "dev",
+		TokenStore:     cloudproxy.NewTokenStore(newMemKeychain()),
+	})
+
+	req, _ := http.NewRequest(http.MethodGet, base+"/agent/skills/modes", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("status %d without the local token; the route must stay behind the perimeter", resp.StatusCode)
+	}
+}
+
+func newModesFixture(t *testing.T, cfg ServerConfig) (*Server, string) {
+	t.Helper()
+	srv, err := NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve() }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	})
+	return srv, "http://" + srv.listener.Addr().String()
+}
+
+func getAgentModes(t *testing.T, base, token string) agentModesResponse {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, base+"/agent/skills/modes", nil)
+	req.Header.Set("X-Local-Token", token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	var body agentModesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
