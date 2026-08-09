@@ -80,6 +80,17 @@
   box-sizing: border-box;
 }
 
+/* The hidden attribute's UA display:none loses to ANY explicit display
+   declaration — .empty-state { display: grid } silently defeated
+   hidden=true, so the empty state and the thread panel were both visible
+   and the panel rendered off-screen below it. Found by the first real
+   click ever driven through the UI; the VM tests assert the property, not
+   the computed style, and could never see it. This guard closes the whole
+   class of bug, which is why it is !important. */
+[hidden] {
+  display: none !important;
+}
+
 /* Native scrollbars read as a web page inside a frame; thin quiet ones read
    as an application surface. */
 ::-webkit-scrollbar {

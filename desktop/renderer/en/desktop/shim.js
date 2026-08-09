@@ -389,7 +389,23 @@ function dispatchAgentSSEFrame(active, eventName, rawData) {
     return;
   }
   if (eventName === "done") {
-    emitAgentTerminal(active, { type: "done", turnID: active.turnID });
+    // The renderer's contract wants a typed result triple; the sidecar's
+    // local routes send {"result":"OK"} and the cloud path can carry
+    // code/subtype/is_error. Both shapes normalize here — the day-one bug
+    // was emitting no result at all, which the renderer rightly refused,
+    // so no real turn had ever completed on the renderer side.
+    const parsed = parseAgentJSON(rawData);
+    const value = parsed.ok && isRecord(parsed.value) ? parsed.value : {};
+    const raw = isRecord(value.result) ? value.result : {};
+    emitAgentTerminal(active, {
+      type: "done",
+      turnID: active.turnID,
+      result: {
+        code: typeof raw.code === "string" ? raw.code.slice(0, 128) : "",
+        subtype: typeof raw.subtype === "string" ? raw.subtype.slice(0, 128) : "",
+        is_error: raw.is_error === true,
+      },
+    });
     return;
   }
   if (eventName === "canceled") {

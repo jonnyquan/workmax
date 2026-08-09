@@ -151,6 +151,14 @@ func runDesktop(boot *desktop.Boot) {
 	}
 	defer func() { _ = ui.Close() }()
 	log.Printf("ui origin: %s (capability path minted per launch; api under %s)", ui.Origin(), uiAPIPrefix)
+	// Dev-only, default off: the full capability URL, for driving the real UI
+	// from an external browser (interactive E2E, DevTools). The capability IS
+	// the credential, so this stays behind an explicit opt-in and goes only to
+	// the process's own stdout — the same trust domain as the operator who
+	// set the variable. Never set in packaged launches.
+	if os.Getenv("WORKMAX_DESKTOP_DEV_UI_URL") == "1" {
+		log.Printf("dev ui url: %s/", ui.BaseURL())
+	}
 
 	app := application.New(application.Options{
 		Name:        "WorkMax Desktop",

@@ -3081,7 +3081,19 @@ async function testShimValidatesRetrievalPayloads() {
   assert.equal(retrieval.sources.length, 2);
   assert.equal(retrieval.sources[0].label, "a.md");
   assert.equal(retrieval.sources[0].score, 0.5);
-  assert.ok(good.some((e) => e.type === "done"), "the turn must still complete");
+  const doneEvent = good.find((e) => e.type === "done");
+  assert.ok(doneEvent, "the turn must still complete");
+  // The shape the renderer's parser demands, from the sidecar's actual done
+  // frame. This exact seam shipped broken — the shim emitted no result and
+  // the renderer refused every real completion; every VM fixture called the
+  // callback directly and skipped the dispatch, so only a click against the
+  // live app could see it. The shim's SSE-driven output now goes through the
+  // renderer's own validation here.
+  assert.deepEqual(
+    { code: doneEvent.result.code, subtype: doneEvent.result.subtype, is_error: doneEvent.result.is_error },
+    { code: "", subtype: "", is_error: false },
+    "the done frame must normalize into the typed result the renderer parses",
+  );
 
   // Each of these is malformed in a different way. All must be dropped, and
   // none may turn into a protocol error: the provenance list is informational,
