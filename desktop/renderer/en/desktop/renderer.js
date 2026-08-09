@@ -5526,11 +5526,56 @@ const quickSwitcherInput = document.querySelector("#quick-switcher-input");
 const quickSwitcherList = document.querySelector("#quick-switcher-list");
 let quickSwitcherIndex = 0;
 
+// The palette's action half: things you can DO from the keyboard, not just
+// places you can go. Context-aware — each command appears only when the app
+// would honour it, so the list never offers a dead end.
+function quickSwitcherCommands(query) {
+  const commands = [];
+  const current = state.threads.find(
+    (candidate) => candidate.uuid === state.selectedThreadUUID
+  );
+  const agent = window.desktopBridge?.agent;
+  if (canUseAgent() && state.createAvailable) {
+    commands.push({
+      kind: "command",
+      label: "New thread",
+      hint: "Start a conversation",
+      run: () => openNewThreadForm(),
+    });
+  }
+  if (current) {
+    commands.push({
+      kind: "command",
+      label: current.pinned ? "Unpin this conversation" : "Pin this conversation",
+      hint: current.name || "Untitled thread",
+      run: () => void toggleThreadPin(current),
+    });
+    if ((current.message_count || 0) > 0 && typeof agent?.exportThread === "function") {
+      commands.push({
+        kind: "command",
+        label: "Export as Markdown",
+        hint: current.name || "Untitled thread",
+        run: () => void exportSelectedThread(),
+      });
+    }
+  }
+  commands.push({
+    kind: "command",
+    label: "Open model settings",
+    hint: "Local route, protocol, API key",
+    run: () => void openModelSettings(),
+  });
+  if (!query) return commands;
+  return commands.filter((command) => command.label.toLowerCase().includes(query));
+}
+
 function quickSwitcherCandidates() {
   const query = (quickSwitcherInput?.value || "").trim().toLowerCase();
-  return state.threads
+  const threads = state.threads
     .filter((thread) => threadMatchesQuery(thread, query))
-    .slice(0, 8);
+    .slice(0, 8)
+    .map((thread) => ({ kind: "thread", thread }));
+  return threads.concat(quickSwitcherCommands(query));
 }
 
 function renderQuickSwitcher() {
@@ -5541,22 +5586,39 @@ function renderQuickSwitcher() {
   if (candidates.length === 0) {
     const empty = document.createElement("li");
     empty.className = "quick-switcher-empty";
-    empty.textContent = "No conversations match.";
+    empty.textContent = "Nothing matches.";
     quickSwitcherList.appendChild(empty);
     return;
   }
-  candidates.forEach((thread, index) => {
+  let commandsHeadingShown = false;
+  candidates.forEach((candidate, index) => {
+    if (candidate.kind === "command" && !commandsHeadingShown) {
+      commandsHeadingShown = true;
+      const heading = document.createElement("li");
+      heading.className = "quick-switcher-heading";
+      heading.textContent = "Actions";
+      quickSwitcherList.appendChild(heading);
+    }
     const item = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "quick-switcher-item" + (index === quickSwitcherIndex ? " active" : "");
-    const title = document.createElement("strong");
-    title.textContent = thread.name || "Untitled thread";
-    const meta = document.createElement("span");
-    meta.textContent = `${thread.message_count || 0} messages`;
-    button.append(title, meta);
+    if (candidate.kind === "thread") {
+      button.className = "quick-switcher-item" + (index === quickSwitcherIndex ? " active" : "");
+      const title = document.createElement("strong");
+      title.textContent = candidate.thread.name || "Untitled thread";
+      const meta = document.createElement("span");
+      meta.textContent = `${candidate.thread.message_count || 0} messages`;
+      button.append(title, meta);
+    } else {
+      button.className = "quick-switcher-command" + (index === quickSwitcherIndex ? " active" : "");
+      const title = document.createElement("strong");
+      title.textContent = candidate.label;
+      const meta = document.createElement("span");
+      meta.textContent = candidate.hint;
+      button.append(title, meta);
+    }
     button.addEventListener("click", () => {
-      commitQuickSwitcherChoice(thread);
+      commitQuickSwitcherChoice(candidate);
     });
     item.appendChild(button);
     quickSwitcherList.appendChild(item);
@@ -5564,7 +5626,9 @@ function renderQuickSwitcher() {
 }
 
 function openQuickSwitcher() {
-  if (!quickSwitcher || state.threads.length === 0) return;
+  // Commands make the palette useful even before the first conversation
+  // exists, so an empty thread list no longer keeps it closed.
+  if (!quickSwitcher || quickSwitcherCandidates().length === 0) return;
   quickSwitcherIndex = 0;
   if (quickSwitcherInput) quickSwitcherInput.value = "";
   quickSwitcher.hidden = false;
@@ -5576,9 +5640,13 @@ function closeQuickSwitcher() {
   if (quickSwitcher) quickSwitcher.hidden = true;
 }
 
-function commitQuickSwitcherChoice(thread) {
+function commitQuickSwitcherChoice(candidate) {
   closeQuickSwitcher();
-  selectThread(thread);
+  if (candidate.kind === "command") {
+    candidate.run();
+    return;
+  }
+  selectThread(candidate.thread);
 }
 
 if (quickSwitcherInput) {

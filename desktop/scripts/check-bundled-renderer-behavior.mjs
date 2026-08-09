@@ -3075,6 +3075,101 @@ async function testComposerChipsNameRuntimeAndIdentity() {
 // Pins: the sidebar's Pinned group leads, and the toggle round-trips through
 // the sidecar so the sidebar shows what the server would answer, not a local
 // guess at it.
+// ⌘K is a command palette, not just a switcher: doing things stays on the
+// keyboard. Commands are context-aware — a dead-end action never shows.
+async function testPaletteRunsCommands() {
+  let pinned = false;
+  const pinCalls = [];
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({
+          // Zero messages ON PURPOSE: the Export guard below is only a real
+          // test if the export bridge exists AND the count is what blocks it.
+          items: [{ ...thread("local-thread", "Offline notes", 0), pinned }],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const { desktopBridge } = localModeBridge({ localRoute: true });
+  desktopBridge.agent.exportThread = async () => {
+    throw new Error("export must not run in this scenario");
+  };
+  desktopBridge.agent.pinThread = async (uuid) => {
+    pinCalls.push(uuid);
+    pinned = true;
+    return typedSuccess({ pinned: true });
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  // Select the thread so thread-scoped commands have a subject.
+  walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[0].click();
+  await settle();
+
+  document.dispatchKey({ key: "k", metaKey: true });
+  const headings = walk(
+    document.byId.get("quick-switcher-list"),
+    (n) => n.classList?.contains("quick-switcher-heading"),
+  );
+  assert.equal(headings.length, 1, "commands sit under their own Actions heading");
+  const commandLabels = () =>
+    walk(document.byId.get("quick-switcher-list"), (n) => n.classList?.contains("quick-switcher-command"))
+      .map((n) => n.textContent);
+  assert.ok(
+    commandLabels().some((label) => label.startsWith("Pin this conversation")),
+    "a selected thread offers Pin",
+  );
+  assert.ok(
+    !commandLabels().some((label) => label.startsWith("Export")),
+    "a thread with no messages must NOT offer Export — the sidecar would 409 it",
+  );
+
+  const input = document.byId.get("quick-switcher-input");
+  input.value = "pin";
+  input.dispatch("input");
+  const narrowed = walk(
+    document.byId.get("quick-switcher-list"),
+    (n) => n.classList?.contains("quick-switcher-command") || n.classList?.contains("quick-switcher-item"),
+  );
+  assert.equal(narrowed.length, 1, "the query narrows across threads AND commands");
+  input.dispatch("keydown", { key: "Enter" });
+  await settle();
+  await settle();
+  assert.deepEqual(pinCalls, ["local-thread"], "Enter runs the highlighted command");
+  assert.equal(document.byId.get("quick-switcher").hidden, true, "running a command closes the palette");
+}
+
+async function testPaletteOpensWithoutThreads() {
+  const { bridge, desktopBridge } = localModeBridge({ localRoute: true });
+  bridge.fetch = async (pathname) => {
+    if (pathname === "/auth/status") {
+      return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
+    }
+    if (pathname === "/agent/threads?include_paused=false") return response({ items: [] });
+    if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+    throw new Error(`unexpected fetch path ${pathname}`);
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+  document.dispatchKey({ key: "k", metaKey: true });
+  assert.equal(
+    document.byId.get("quick-switcher").hidden,
+    false,
+    "commands make the palette useful before the first conversation exists",
+  );
+  assert.ok(
+    walk(document.byId.get("quick-switcher-list"), (n) => n.classList?.contains("quick-switcher-command"))
+      .length > 0,
+    "actions are offered even with zero threads",
+  );
+}
+
 async function testPinnedThreadsLeadTheSidebar() {
   let pinned = false;
   const pinCalls = [];
@@ -5561,6 +5656,8 @@ await testLocalAccountDeleteIsArmedAndScoped();
 await testComposerChipsNameRuntimeAndIdentity();
 await testComposerAccountChipSkipsTheDefaultIdentity();
 await testExportThreadWritesAndReveals();
+await testPaletteRunsCommands();
+await testPaletteOpensWithoutThreads();
 await testPinnedThreadsLeadTheSidebar();
 await testModesParseFailureNamesTheSkew();
 await testLocalAccountRowHiddenWithoutLocalRoute();

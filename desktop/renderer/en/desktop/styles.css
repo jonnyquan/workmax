@@ -1105,6 +1105,16 @@ textarea:focus-visible {
   list-style: none;
 }
 
+.quick-switcher-heading {
+  padding: 8px 12px 4px;
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.quick-switcher-command,
 .quick-switcher-item {
   display: flex;
   justify-content: space-between;
@@ -1119,6 +1129,8 @@ textarea:focus-visible {
   text-align: left;
 }
 
+.quick-switcher-command strong,
+.quick-switcher-command strong,
 .quick-switcher-item strong {
   overflow: hidden;
   font-size: 13px;
@@ -1127,16 +1139,21 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.quick-switcher-command span,
+.quick-switcher-command span,
 .quick-switcher-item span {
   flex: none;
   color: hsl(var(--muted-foreground));
   font-size: 11px;
 }
 
+.quick-switcher-command:hover,
 .quick-switcher-item:hover {
   background: hsl(var(--muted) / 0.6);
 }
 
+.quick-switcher-command.active,
+.quick-switcher-command.active,
 .quick-switcher-item.active {
   background: hsl(var(--primary) / 0.1);
   box-shadow: inset 2px 0 0 hsl(var(--primary));
