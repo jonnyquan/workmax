@@ -14,6 +14,9 @@ const ROUTES = {
     historyListThreads: defineTypedRoute("history.listThreads", "agent.threads", "GET", "/agent/threads", "none", null),
     historyListMessages: defineTypedRoute("history.listMessages", "agent.thread-messages", "GET", "/agent/threads/:uuid/messages", "none", null),
     agentListSkills: defineTypedRoute("agent.listSkills", "agent.skills.catalog", "GET", "/agent/skills/catalog", "none", null),
+    localListAccounts: defineTypedRoute("local.listAccounts", "local.accounts.list", "GET", "/local/accounts", "none", null),
+    localCreateAccount: defineTypedRoute("local.createAccount", "local.accounts.create", "POST", "/local/accounts", "json", "application/json"),
+    localSelectAccount: defineTypedRoute("local.selectAccount", "local.accounts.select", "POST", "/local/accounts/:id/select", "none", null),
     agentListModes: defineTypedRoute("agent.listModes", "agent.skills.modes", "GET", "/agent/skills/modes", "none", null),
     agentCreateThread: defineTypedRoute("agent.createThread", "agent.thread-put", "PUT", "/agent/threads/:uuid", "json", "application/json"),
     agentDeleteThread: defineTypedRoute("agent.deleteThread", "agent.thread-delete", "DELETE", "/agent/threads/:uuid", "none", null),
@@ -53,6 +56,17 @@ function createDesktopBridge(deps) {
             submitLoginPassword: (input) => deps.submitLoginPassword(input),
             cancelLogin: () => deps.cancelLogin(),
             logout: () => execute(deps, ROUTES.authLogout),
+        },
+        local: {
+            listAccounts: () => execute(deps, ROUTES.localListAccounts),
+            createAccount: async (name) => execute(deps, ROUTES.localCreateAccount, undefined, { name }),
+            selectAccount: async (id) => {
+                if (!Number.isInteger(id) || id <= 0) {
+                    throw new Error("selectAccount id must be a positive integer");
+                }
+                const path = ROUTES.localSelectAccount.path.replace(":id", String(id));
+                return execute(deps, ROUTES.localSelectAccount, path);
+            },
         },
         history: {
             listThreads: async (options) => {
@@ -180,6 +194,10 @@ function buildCapabilities() {
                     "cancelLogin",
                     "logout",
                 ],
+            },
+            local: {
+                supported: true,
+                methods: ["listAccounts", "createAccount", "selectAccount"],
             },
             history: {
                 supported: true,

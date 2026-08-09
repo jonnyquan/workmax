@@ -38,6 +38,10 @@ const state = {
   // turn (localSingleUserUID, L3d/D2), so it is what decides whether this app
   // is usable without an account.
   localRoute: false,
+  // Named local identities (登录这块的"本地账户"半边). Loaded on the signed-out
+  // path only; the active one decides which uid the local route runs as.
+  localAccounts: [],
+  localAccountPanelOpen: false,
   // Whether a local turn right now runs the L2 tool loop or pure chat. The
   // dispatch falls back silently; the composer must not.
   toolLoop: false,
@@ -108,6 +112,13 @@ const CANONICAL_V4_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{
 let loginOperationGeneration = 0;
 
 const statusCard = document.querySelector("#status-card");
+const localAccountRow = document.querySelector("#local-account-row");
+const localAccountAvatar = document.querySelector("#local-account-avatar");
+const localAccountNameEl = document.querySelector("#local-account-name");
+const localAccountPanel = document.querySelector("#local-account-panel");
+const localAccountListEl = document.querySelector("#local-account-list");
+const localAccountCreateForm = document.querySelector("#local-account-create-form");
+const localAccountNameInput = document.querySelector("#local-account-name-input");
 const runtimeLabel = document.querySelector("#runtime-label");
 const refreshButton = document.querySelector("#refresh-button");
 const modelsButton = document.querySelector("#models-button");
@@ -1326,6 +1337,7 @@ async function loadLocalModes(expectedSessionGeneration = state.sessionGeneratio
   }
   state.localRoute = modes.local_route;
   state.toolLoop = modes.tool_loop;
+  void loadLocalAccounts(expectedSessionGeneration);
   // The catalog is authoritative when there is a session — it carries the same
   // allowlist plus the live skill details. This only fills the gap the catalog
   // cannot cover, which is having no session at all.
@@ -1338,6 +1350,177 @@ async function loadLocalModes(expectedSessionGeneration = state.sessionGeneratio
   }
   updateComposerState();
   return true;
+}
+
+function desktopLocalAccountsBridge() {
+  const desktop = window.desktopBridge;
+  if (
+    !isRecord(desktop) ||
+    !isRecord(desktop.local) ||
+    typeof desktop.local.listAccounts !== "function" ||
+    typeof desktop.local.createAccount !== "function" ||
+    typeof desktop.local.selectAccount !== "function"
+  ) {
+    return null;
+  }
+  return desktop.local;
+}
+
+function parseLocalAccounts(data) {
+  if (!isRecord(data) || !Array.isArray(data.items)) {
+    throw new Error("invalid local accounts payload");
+  }
+  return data.items.map((item) => {
+    if (
+      !isRecord(item) ||
+      !Number.isInteger(item.id) ||
+      item.id <= 0 ||
+      typeof item.name !== "string" ||
+      item.name.length === 0 ||
+      typeof item.active !== "boolean"
+    ) {
+      throw new Error("invalid local account entry");
+    }
+    return { id: item.id, name: item.name, active: item.active };
+  });
+}
+
+// loadLocalAccounts fills the account switcher. Never throws outward: if the
+// sidecar cannot answer, the switcher simply stays hidden and the local route
+// keeps running as whatever account is active server-side — accounts are a
+// convenience surface, not a gate.
+async function loadLocalAccounts(
+  expectedSessionGeneration = state.sessionGeneration
+) {
+  const local = desktopLocalAccountsBridge();
+  if (!local) return false;
+  let accounts;
+  try {
+    const result = parseDesktopBridgeResult(
+      await local.listAccounts(),
+      "local accounts result"
+    );
+    if (!result.ok) return false;
+    accounts = parseLocalAccounts(result.data);
+  } catch {
+    return false;
+  }
+  if (expectedSessionGeneration !== state.sessionGeneration) return false;
+  state.localAccounts = accounts;
+  renderLocalAccountArea();
+  return true;
+}
+
+function activeLocalAccount() {
+  return state.localAccounts.find((account) => account.active) || null;
+}
+
+// The switcher shows only in local-only sessions: with a cloud session the
+// local account is not what turns run as, and showing it would claim it is.
+function renderLocalAccountArea() {
+  if (!localAccountRow || !localAccountPanel) return;
+  const active = activeLocalAccount();
+  const visible = isLocalOnlySession() && active !== null;
+  localAccountRow.hidden = !visible;
+  if (!visible) {
+    state.localAccountPanelOpen = false;
+    localAccountPanel.hidden = true;
+    return;
+  }
+  if (localAccountNameEl) localAccountNameEl.textContent = active.name;
+  if (localAccountAvatar) {
+    localAccountAvatar.textContent = Array.from(active.name)[0].toUpperCase();
+  }
+  localAccountPanel.hidden = !state.localAccountPanelOpen;
+  if (!state.localAccountPanelOpen || !localAccountListEl) return;
+  localAccountListEl.textContent = "";
+  for (const account of state.localAccounts) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "local-account-item";
+    button.classList.toggle("active", account.active);
+    button.dataset.accountId = String(account.id);
+    button.textContent = account.active ? account.name + " · active" : account.name;
+    button.addEventListener("click", () => {
+      void selectLocalAccountByID(account.id);
+    });
+    item.appendChild(button);
+    localAccountListEl.appendChild(item);
+  }
+}
+
+function toggleLocalAccountPanel() {
+  state.localAccountPanelOpen = !state.localAccountPanelOpen;
+  renderLocalAccountArea();
+  if (state.localAccountPanelOpen && localAccountNameInput) {
+    localAccountNameInput.value = "";
+  }
+}
+
+// Switching accounts is a full session reload: every loaded thread, message
+// and mode belongs to the previous uid, so nothing short of refresh() is
+// honest about what just happened.
+async function selectLocalAccountByID(id) {
+  const local = desktopLocalAccountsBridge();
+  if (!local) return;
+  const current = activeLocalAccount();
+  if (current && current.id === id) {
+    state.localAccountPanelOpen = false;
+    renderLocalAccountArea();
+    return;
+  }
+  try {
+    const result = parseDesktopBridgeResult(
+      await local.selectAccount(id),
+      "select local account result"
+    );
+    if (!result.ok) {
+      const raw = isRecord(result.error) ? result.error.error : result.error;
+      throw new Error(sanitizeErrorMessage(raw) || "Could not switch account");
+    }
+  } catch (error) {
+    setStatus(String(error.message || error), "error");
+    return;
+  }
+  state.localAccountPanelOpen = false;
+  const chosen = state.localAccounts.find((account) => account.id === id);
+  setStatus(chosen ? 'Switched to "' + chosen.name + '"' : "Switched account");
+  await refresh();
+}
+
+async function submitCreateLocalAccount(event) {
+  if (event && typeof event.preventDefault === "function") event.preventDefault();
+  const local = desktopLocalAccountsBridge();
+  if (!local || !localAccountNameInput) return;
+  const name = localAccountNameInput.value.trim();
+  if (!name) {
+    setStatus("Account name cannot be empty", "error");
+    return;
+  }
+  try {
+    const result = parseDesktopBridgeResult(
+      await local.createAccount(name),
+      "create local account result"
+    );
+    if (!result.ok) {
+      const raw = isRecord(result.error) ? result.error.error : result.error;
+      const reason = sanitizeErrorMessage(raw);
+      throw new Error(
+        reason === "name_taken"
+          ? "An account with that name already exists"
+          : reason === "account_limit"
+            ? "Account limit reached"
+            : reason || "Could not create account"
+      );
+    }
+  } catch (error) {
+    setStatus(String(error.message || error), "error");
+    return;
+  }
+  localAccountNameInput.value = "";
+  setStatus('Created "' + name + '" — click it to switch');
+  await loadLocalAccounts();
 }
 
 async function loadRecoverableTurns(
@@ -2250,6 +2433,7 @@ function updateRecoveryState() {
 }
 
 function updateComposerState() {
+  renderLocalAccountArea();
   const authenticated = canUseAgent();
   const hasThread = Boolean(state.selectedThreadUUID);
   const hasMode = state.allowedModes.includes(state.selectedMode);
@@ -4435,6 +4619,16 @@ turnRecoveryResumeButton.addEventListener("click", () => {
 turnRecoveryDismissButton.addEventListener("click", () => {
   void dismissRecoverableTurn();
 });
+if (localAccountRow) {
+  localAccountRow.addEventListener("click", () => {
+    toggleLocalAccountPanel();
+  });
+}
+if (localAccountCreateForm) {
+  localAccountCreateForm.addEventListener("submit", (event) => {
+    void submitCreateLocalAccount(event);
+  });
+}
 
 void refresh();
 

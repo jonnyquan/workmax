@@ -67,6 +67,18 @@
         "routeId": "agent.skills.modes"
       },
       {
+        "bridgeMethod": "local.listAccounts",
+        "routeId": "local.accounts.list"
+      },
+      {
+        "bridgeMethod": "local.createAccount",
+        "routeId": "local.accounts.create"
+      },
+      {
+        "bridgeMethod": "local.selectAccount",
+        "routeId": "local.accounts.select"
+      },
+      {
         "bridgeMethod": "agent.createThread",
         "routeId": "agent.thread-put"
       },
@@ -514,6 +526,45 @@
       "id": "agent.skills.modes",
       "method": "GET",
       "path": "/agent/skills/modes",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "local.accounts.list",
+      "method": "GET",
+      "path": "/local/accounts",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "local.accounts.create",
+      "method": "POST",
+      "path": "/local/accounts",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 2048,
+        "bodyTooLargeError": "request body too large"
+      }
+    },
+    {
+      "id": "local.accounts.select",
+      "method": "POST",
+      "path": "/local/accounts/:id/select",
       "credential": "local-token",
       "requestPolicy": {
         "origin": "absent",

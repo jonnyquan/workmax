@@ -32,6 +32,31 @@
             <h1>WorkMax Desktop</h1>
           </div>
         </div>
+        <button id="local-account-row" class="local-account-row" type="button" hidden>
+          <span id="local-account-avatar" class="local-account-avatar">L</span>
+          <span id="local-account-name" class="local-account-name">Local</span>
+          <span class="local-account-hint">Switch</span>
+        </button>
+        <div id="local-account-panel" class="sidebar-form local-account-panel" hidden>
+          <div class="sidebar-form-heading">
+            <strong>Local accounts</strong>
+            <span>Separate workspaces on this machine. Not a lock — the data on disk is shared.</span>
+          </div>
+          <ol id="local-account-list" class="local-account-list"></ol>
+          <form id="local-account-create-form" novalidate>
+            <div class="local-account-create">
+              <input
+                id="local-account-name-input"
+                type="text"
+                autocomplete="off"
+                maxlength="64"
+                placeholder="New account name"
+                aria-label="New account name"
+              />
+              <button id="local-account-create-button" type="submit">Add</button>
+            </div>
+          </form>
+        </div>
         <div id="status-card" class="status-card">Starting sidecar bridge...</div>
         <div class="sidebar-actions">
           <button id="refresh-button" type="button">Refresh</button>

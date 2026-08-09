@@ -255,6 +255,21 @@ export interface AgentSkillCatalog {
  * the allowlist is a constant in the sidecar, and the catalog that also
  * carries it needs an account.
  */
+/** One named local identity — the machine-side half of sign-in. */
+export interface LocalAccount {
+  id: number;
+  name: string;
+  uid: string;
+  active: boolean;
+  created_at: string;
+  last_used_at: string;
+}
+
+export interface LocalAccountList {
+  items: LocalAccount[];
+  count: number;
+}
+
 export interface AgentModes {
   allowed_modes: string[];
   local_route: boolean;
@@ -415,6 +430,7 @@ export interface DesktopBridgeCapabilities {
   };
   namespaces: {
     auth: CapabilityNamespace;
+    local: CapabilityNamespace;
     history: CapabilityNamespace;
     system: CapabilityNamespace;
     agent: CapabilityNamespace;
@@ -444,6 +460,15 @@ export interface DesktopBridge {
     ) => Promise<LoginTransactionResult>;
     cancelLogin: () => Promise<LoginTransactionResult>;
     logout: () => Promise<DesktopBridgeResult<AuthLogout>>;
+  };
+  local: {
+    listAccounts: () => Promise<DesktopBridgeResult<LocalAccountList>>;
+    createAccount: (
+      name: string
+    ) => Promise<DesktopBridgeResult<LocalAccount>>;
+    selectAccount: (
+      id: number
+    ) => Promise<DesktopBridgeResult<{ selected: boolean }>>;
   };
   history: {
     listThreads: (
@@ -608,6 +633,30 @@ const ROUTES = {
     "agent.skills.catalog",
     "GET",
     "/agent/skills/catalog",
+    "none",
+    null
+  ),
+  localListAccounts: defineTypedRoute(
+    "local.listAccounts",
+    "local.accounts.list",
+    "GET",
+    "/local/accounts",
+    "none",
+    null
+  ),
+  localCreateAccount: defineTypedRoute(
+    "local.createAccount",
+    "local.accounts.create",
+    "POST",
+    "/local/accounts",
+    "json",
+    "application/json"
+  ),
+  localSelectAccount: defineTypedRoute(
+    "local.selectAccount",
+    "local.accounts.select",
+    "POST",
+    "/local/accounts/:id/select",
     "none",
     null
   ),
@@ -782,6 +831,18 @@ export function createDesktopBridge(
       submitLoginPassword: (input) => deps.submitLoginPassword(input),
       cancelLogin: () => deps.cancelLogin(),
       logout: () => execute<AuthLogout>(deps, ROUTES.authLogout),
+    },
+    local: {
+      listAccounts: () => execute<LocalAccountList>(deps, ROUTES.localListAccounts),
+      createAccount: async (name) =>
+        execute<LocalAccount>(deps, ROUTES.localCreateAccount, undefined, { name }),
+      selectAccount: async (id) => {
+        if (!Number.isInteger(id) || id <= 0) {
+          throw new Error("selectAccount id must be a positive integer");
+        }
+        const path = ROUTES.localSelectAccount.path.replace(":id", String(id));
+        return execute<{ selected: boolean }>(deps, ROUTES.localSelectAccount, path);
+      },
     },
     history: {
       listThreads: async (options) => {
@@ -973,6 +1034,10 @@ function buildCapabilities(): DesktopBridgeCapabilities {
           "cancelLogin",
           "logout",
         ],
+      },
+      local: {
+        supported: true,
+        methods: ["listAccounts", "createAccount", "selectAccount"],
       },
       history: {
         supported: true,

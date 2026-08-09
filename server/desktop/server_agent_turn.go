@@ -46,20 +46,20 @@ const localSingleUserUID = uint64(1) << 62
 func (s *Server) currentAgentTurnSession() (uint64, cloudproxy.SessionLease, error) {
 	if s.cfg.TokenStore == nil {
 		if s.shouldUseLocalRoute() {
-			return localSingleUserUID, cloudproxy.SessionLease{}, nil
+			return s.localRouteUID(), cloudproxy.SessionLease{}, nil
 		}
 		return 0, cloudproxy.SessionLease{}, cloudproxy.ErrNoSession
 	}
 	snapshot, err := s.cfg.TokenStore.GetSnapshot()
 	if err != nil {
 		if s.shouldUseLocalRoute() {
-			return localSingleUserUID, cloudproxy.SessionLease{}, nil
+			return s.localRouteUID(), cloudproxy.SessionLease{}, nil
 		}
 		return 0, cloudproxy.SessionLease{}, err
 	}
 	if snapshot.Pair.AccessToken == "" || snapshot.Pair.IsRefreshExpired(time.Now().UTC()) {
 		if s.shouldUseLocalRoute() {
-			return localSingleUserUID, cloudproxy.SessionLease{}, nil
+			return s.localRouteUID(), cloudproxy.SessionLease{}, nil
 		}
 		return 0, cloudproxy.SessionLease{}, cloudproxy.ErrNoSession
 	}

@@ -75,7 +75,7 @@ func (s *Server) handlePutAgentThread(c *gin.Context) {
 	// authenticated local-route user keeps their real uid. Cloud path below is
 	// untouched.
 	if s.shouldUseLocalRoute() {
-		uid := localSingleUserUID
+		uid := s.localRouteUID()
 		if pair, _, acqErr := cloudproxy.AcquireAccessTokenWithLease(
 			c.Request.Context(), s.cfg.TokenStore, s.cfg.Proxy.CloudClient(),
 		); acqErr == nil {

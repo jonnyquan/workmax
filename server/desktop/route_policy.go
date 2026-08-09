@@ -102,6 +102,9 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	newCurrentSidecarRoutePolicy("agent.thread-rename", http.MethodPatch, "/agent/threads/:uuid", SidecarBodyRequired, maxAgentThreadRenameBodyBytes, "application/json"),
 	newCurrentSidecarRoutePolicy("agent.skills.catalog", http.MethodGet, "/agent/skills/catalog", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.skills.modes", http.MethodGet, "/agent/skills/modes", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("local.accounts.list", http.MethodGet, "/local/accounts", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("local.accounts.create", http.MethodPost, "/local/accounts", SidecarBodyRequired, maxLocalAccountBodyBytes, "application/json"),
+	newCurrentSidecarRoutePolicy("local.accounts.select", http.MethodPost, "/local/accounts/:id/select", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.threads", http.MethodGet, "/agent/threads", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-messages", http.MethodGet, "/agent/threads/:uuid/messages", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("system.network-state", http.MethodGet, "/system/network-state", SidecarBodyForbidden, 0),
@@ -306,6 +309,12 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handleSkillsCatalog, true
 	case "agent.skills.modes":
 		return s.handleAgentModes, true
+	case "local.accounts.list":
+		return s.handleListLocalAccounts, true
+	case "local.accounts.create":
+		return s.handleCreateLocalAccount, true
+	case "local.accounts.select":
+		return s.handleSelectLocalAccount, true
 	case "agent.threads":
 		return s.handleListThreads, true
 	case "agent.thread-messages":

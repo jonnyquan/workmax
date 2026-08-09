@@ -103,6 +103,7 @@ class FakeElement {
     this.attributes = new Map();
     this.listeners = new Map();
     this.classList = new FakeClassList();
+    this.dataset = {};
     this.hidden = false;
     this._textContent = "";
     this._className = "";
@@ -2756,7 +2757,7 @@ async function testStreamedAnswerGainsActionsWhenReconcileFails() {
 // app, and until now the renderer did not believe it: the sidecar has served
 // unauthenticated turns since L3d, but the composer was gated on a cloud
 // session, so the local-first configuration existed only on the server.
-function localModeBridge({ localRoute }) {
+function localModeBridge({ localRoute, accounts }) {
   const calls = [];
   const bridge = {
     async fetch(pathname) {
@@ -2789,7 +2790,143 @@ function localModeBridge({ localRoute }) {
       async cancelTurn(turnID) { return { turnID, canceled: true }; },
     },
   };
-  return { bridge, desktopBridge, calls };
+  const accountCalls = { list: 0, created: [], selected: [] };
+  if (accounts) {
+    desktopBridge.local = {
+      async listAccounts() {
+        accountCalls.list += 1;
+        return typedSuccess({ items: accounts.slice(), count: accounts.length });
+      },
+      async createAccount(name) {
+        accountCalls.created.push(name);
+        const next = { id: accounts.length + 1, name, active: false };
+        accounts.push(next);
+        return typedSuccess(next, 201);
+      },
+      async selectAccount(id) {
+        accountCalls.selected.push(id);
+        for (const account of accounts) account.active = account.id === id;
+        return typedSuccess({ selected: true });
+      },
+    };
+  }
+  return { bridge, desktopBridge, calls, accountCalls };
+}
+
+// 登录这块的"本地账户"半边: signed-out with a local route, the sidebar must
+// name who you are locally and let you switch — and switching must reload
+// the whole session, because every loaded thread belonged to the old uid.
+async function testLocalAccountSwitcherSwitchesAndReloads() {
+  const accounts = [
+    { id: 1, name: "Local", active: true },
+    { id: 2, name: "Ming", active: false },
+  ];
+  const { bridge, desktopBridge, calls, accountCalls } = localModeBridge({
+    localRoute: true,
+    accounts,
+  });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  const row = document.byId.get("local-account-row");
+  assert.equal(row.hidden, false, "signed-out local session must show the account row");
+  assert.equal(document.byId.get("local-account-name").textContent, "Local");
+  assert.equal(document.byId.get("local-account-avatar").textContent, "L");
+  assert.equal(
+    document.byId.get("local-account-panel").hidden,
+    true,
+    "the panel opens on demand, not by default",
+  );
+
+  row.click();
+  await settle();
+  const panel = document.byId.get("local-account-panel");
+  assert.equal(panel.hidden, false, "clicking the row opens the switcher");
+  const items = walk(
+    document.byId.get("local-account-list"),
+    (node) => node.classList?.contains("local-account-item"),
+  );
+  assert.equal(items.length, 2, "every account shows in the switcher");
+  assert.match(items[0].textContent, /active/, "the active account is marked");
+
+  const threadFetchesBefore = calls.filter(
+    (pathname) => pathname === "/agent/threads?include_paused=false",
+  ).length;
+  const ming = items.find((item) => item.dataset.accountId === "2");
+  ming.click();
+  await settle();
+  await settle();
+  await settle();
+
+  assert.deepEqual(accountCalls.selected, [2], "switching selects exactly the clicked account");
+  const threadFetchesAfter = calls.filter(
+    (pathname) => pathname === "/agent/threads?include_paused=false",
+  ).length;
+  assert.ok(
+    threadFetchesAfter > threadFetchesBefore,
+    "switching accounts must reload the thread list — everything on screen belonged to the previous uid",
+  );
+  assert.equal(document.byId.get("local-account-name").textContent, "Ming");
+  assert.equal(document.byId.get("local-account-avatar").textContent, "M");
+  assert.equal(
+    document.byId.get("local-account-panel").hidden,
+    true,
+    "the panel closes once the switch lands",
+  );
+}
+
+async function testLocalAccountCreateDoesNotSwitch() {
+  const accounts = [{ id: 1, name: "Local", active: true }];
+  const { bridge, desktopBridge, accountCalls } = localModeBridge({
+    localRoute: true,
+    accounts,
+  });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  document.byId.get("local-account-row").click();
+  await settle();
+  document.byId.get("local-account-name-input").value = "  Ming  ";
+  document.byId.get("local-account-create-form").submit();
+  await settle();
+  await settle();
+
+  assert.deepEqual(accountCalls.created, ["Ming"], "the typed name is trimmed and sent once");
+  assert.deepEqual(
+    accountCalls.selected,
+    [],
+    "creating an account must NOT activate it — appearing and taking over are different consents",
+  );
+  assert.equal(
+    document.byId.get("local-account-name").textContent,
+    "Local",
+    "the active identity is unchanged after a create",
+  );
+  const items = walk(
+    document.byId.get("local-account-list"),
+    (node) => node.classList?.contains("local-account-item"),
+  );
+  assert.equal(items.length, 2, "the new account shows in the switcher, ready to be chosen");
+  assert.match(
+    document.byId.get("status-card").textContent,
+    /Created "Ming"/,
+    "the user is told what happened and what to do next",
+  );
+}
+
+async function testLocalAccountRowHiddenWithoutLocalRoute() {
+  const accounts = [
+    { id: 1, name: "Local", active: true },
+    { id: 2, name: "Ming", active: false },
+  ];
+  const { bridge, desktopBridge } = localModeBridge({ localRoute: false, accounts });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+  assert.equal(
+    document.byId.get("local-account-row").hidden,
+    true,
+    "without a usable local route the switcher would gate nothing — hide it",
+  );
 }
 
 async function testSignedOutLocalRouteCanDriveTheAgent() {
@@ -5111,6 +5248,9 @@ await testMessageActionsCopyAndReuse();
 await testMessageActionsAbsentWithoutAClipboard();
 await testStreamedAnswerGainsActionsWhenReconcileFails();
 await testSignedOutLocalRouteCanDriveTheAgent();
+await testLocalAccountSwitcherSwitchesAndReloads();
+await testLocalAccountCreateDoesNotSwitch();
+await testLocalAccountRowHiddenWithoutLocalRoute();
 await testSignedOutWithoutLocalRouteStaysGated();
 await testAssistantMarkdownIsRenderedAsElements();
 await testRetrievedContextIsShownAndResetPerTurn();

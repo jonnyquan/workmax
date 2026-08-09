@@ -227,6 +227,8 @@ textarea:focus-visible {
 .sidebar > .thread-search { order: 11; }
 .sidebar > #new-thread-form { order: 12; }
 .sidebar > .thread-list { order: 13; }
+.sidebar > #local-account-row { order: 19; }
+.sidebar > #local-account-panel { order: 19; }
 .sidebar > #status-card { order: 20; }
 .sidebar > .sidebar-actions { order: 21; }
 .sidebar > #model-settings-form { order: 22; }
@@ -304,6 +306,99 @@ textarea:focus-visible {
   color: hsl(var(--muted-foreground));
   font-size: 12px;
   line-height: 1.45;
+}
+
+.local-account-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: auto;
+  margin: 10px 14px 0;
+  padding: 8px 10px;
+  border: 1px solid hsl(var(--border) / 0.6);
+  border-radius: 8px;
+  background: hsl(var(--card));
+  text-align: left;
+}
+
+.local-account-avatar {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.local-account-name {
+  flex: 1;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-account-hint {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.local-account-panel {
+  margin: 10px 14px 0;
+}
+
+.local-account-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.local-account-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: auto;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 13px;
+  text-align: left;
+}
+
+.local-account-item:hover {
+  background: hsl(var(--muted) / 0.6);
+}
+
+.local-account-item.active {
+  background: hsl(var(--primary) / 0.1);
+  box-shadow: inset 2px 0 0 hsl(var(--primary));
+}
+
+.local-account-create {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.local-account-create input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 13px;
 }
 
 .status-card {

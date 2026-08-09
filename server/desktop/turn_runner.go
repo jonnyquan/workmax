@@ -48,6 +48,13 @@ func (s *Server) localToolLoopActive() bool {
 	return err == nil && dto.Local.Protocol == LocalProtocolAnthropicCompatible
 }
 
+// localRouteUID is the identity the signed-out local route runs as: the
+// active local account. Falls back to the reserved single-user uid on any
+// bookkeeping failure — an accounts problem must never lock a user out.
+func (s *Server) localRouteUID() uint64 {
+	return activeLocalAccountUID(s.cfg.DB)
+}
+
 func (s *Server) shouldUseLocalRoute() bool {
 	if s.cfg.LocalInference == nil || s.cfg.ModelSettings == nil {
 		return false
