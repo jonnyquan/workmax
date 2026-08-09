@@ -732,6 +732,37 @@ textarea:focus-visible {
   color: hsl(var(--destructive-foreground));
 }
 
+/* Pin shares the delete's hover-reveal manners and sits beside it; on synced
+   threads (no delete) it takes the corner alone. */
+.thread-pin {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  height: auto;
+  padding: 2px 7px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--card));
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.4;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.thread-item:has(.thread-delete) .thread-pin {
+  right: 62px;
+}
+
+.thread-item:hover .thread-pin,
+.thread-pin:focus-visible {
+  opacity: 1;
+}
+
+.thread-pin:hover {
+  color: hsl(var(--foreground));
+}
+
 .thread-button {
   display: block;
   width: 100%;

@@ -307,6 +307,9 @@ function parseThread(value) {
     // the delete affordance is allowed to appear on. Absent or unknown values
     // are treated as synced, which errs on the side of not offering deletion.
     cloud_sync_state: optionalString(value.cloud_sync_state),
+    // A local view preference; anything but literal true means unpinned, so
+    // an older sidecar that omits the field degrades to the old behaviour.
+    pinned: value.pinned === true,
   };
 }
 
@@ -3207,6 +3210,7 @@ function localCalendarDay(date) {
 }
 
 const THREAD_GROUPS = [
+  { key: "pinned", label: "Pinned" },
   { key: "today", label: "Today" },
   { key: "week", label: "Previous 7 days" },
   { key: "older", label: "Older" },
@@ -3214,8 +3218,13 @@ const THREAD_GROUPS = [
 
 function groupThreads(threads, now) {
   const today = localCalendarDay(now);
-  const groups = { today: [], week: [], older: [] };
+  const groups = { pinned: [], today: [], week: [], older: [] };
   for (const thread of threads) {
+    if (thread.pinned) {
+      // A pin overrides the calendar: that is what pinning means.
+      groups.pinned.push(thread);
+      continue;
+    }
     const updated = new Date(thread.updated_at);
     if (Number.isNaN(updated.getTime())) {
       // Unreachable through the normal path today: parseThread rejects an
@@ -3241,6 +3250,29 @@ function groupThreads(threads, now) {
 function threadMatchesQuery(thread, query) {
   if (!query) return true;
   return (thread.name || "Untitled thread").toLowerCase().includes(query);
+}
+
+async function toggleThreadPin(thread) {
+  const agent = window.desktopBridge?.agent;
+  const method = thread.pinned ? agent?.unpinThread : agent?.pinThread;
+  if (typeof method !== "function") return;
+  try {
+    const result = parseDesktopBridgeResult(
+      await method.call(agent, thread.uuid),
+      "thread pin result"
+    );
+    if (!result.ok) {
+      const raw = isRecord(result.error) ? result.error.error : result.error;
+      throw new Error(sanitizeErrorMessage(raw) || "Could not update the pin");
+    }
+  } catch (error) {
+    setStatus(String(error.message || error), "error");
+    return;
+  }
+  // Reload rather than patch: the pin changes the server-side sort, and the
+  // sidebar should show exactly what the sidecar would answer, not a local
+  // approximation of it.
+  await loadThreads();
 }
 
 // Deleting is offered only where the sidecar would allow it: threads that
@@ -3314,6 +3346,20 @@ function renderThreadButton(thread) {
     selectThread(thread);
   });
   item.appendChild(button);
+  const pin = document.createElement("button");
+  pin.type = "button";
+  pin.className = "thread-pin";
+  pin.classList.toggle("pinned", thread.pinned === true);
+  pin.textContent = thread.pinned ? "Unpin" : "Pin";
+  pin.setAttribute(
+    "aria-label",
+    (thread.pinned ? "Unpin " : "Pin ") + (thread.name || "Untitled thread")
+  );
+  pin.addEventListener("click", () => {
+    pin.disabled = true;
+    void toggleThreadPin(thread);
+  });
+  item.appendChild(pin);
   if (threadIsDeletable(thread)) {
     // Two clicks, one control: the first arms it, the second deletes. A modal
     // would be heavier machinery for the same guarantee — that no single

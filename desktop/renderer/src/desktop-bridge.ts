@@ -524,6 +524,12 @@ export interface DesktopBridge {
     exportThread: (
       threadUUID: string
     ) => Promise<DesktopBridgeResult<AgentThreadExport>>;
+    pinThread: (
+      threadUUID: string
+    ) => Promise<DesktopBridgeResult<{ pinned: boolean }>>;
+    unpinThread: (
+      threadUUID: string
+    ) => Promise<DesktopBridgeResult<{ pinned: boolean }>>;
     listRecoverableTurns: () => Promise<
       DesktopBridgeResult<AgentRecoverableTurnList>
     >;
@@ -748,6 +754,22 @@ const ROUTES = {
     "none",
     null
   ),
+  agentPinThread: defineTypedRoute(
+    "agent.pinThread",
+    "agent.thread-pin",
+    "POST",
+    "/agent/threads/:uuid/pin",
+    "none",
+    null
+  ),
+  agentUnpinThread: defineTypedRoute(
+    "agent.unpinThread",
+    "agent.thread-unpin",
+    "DELETE",
+    "/agent/threads/:uuid/pin",
+    "none",
+    null
+  ),
   agentRenameThread: defineTypedRoute(
     "agent.renameThread",
     "agent.thread-rename",
@@ -943,6 +965,16 @@ export function createDesktopBridge(
           encodeURIComponent(uuid)
         );
         return execute<AgentThreadExport>(deps, ROUTES.agentExportThread, path);
+      },
+      pinThread: async (threadUUID) => {
+        const uuid = validateCanonicalV4UUID(threadUUID, "pinThread threadUUID");
+        const path = ROUTES.agentPinThread.path.replace(":uuid", encodeURIComponent(uuid));
+        return execute<{ pinned: boolean }>(deps, ROUTES.agentPinThread, path);
+      },
+      unpinThread: async (threadUUID) => {
+        const uuid = validateCanonicalV4UUID(threadUUID, "unpinThread threadUUID");
+        const path = ROUTES.agentUnpinThread.path.replace(":uuid", encodeURIComponent(uuid));
+        return execute<{ pinned: boolean }>(deps, ROUTES.agentUnpinThread, path);
       },
       renameThread: async (threadUUID, name) => {
         const uuid = validateCanonicalV4UUID(threadUUID, "renameThread threadUUID");

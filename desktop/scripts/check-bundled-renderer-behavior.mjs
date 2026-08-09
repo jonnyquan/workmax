@@ -526,7 +526,7 @@ async function testAuthenticatedCacheRead() {
 
   const threadButton = walk(
     document.byId.get("thread-list"),
-    (node) => node.tagName === "BUTTON"
+    (node) => node.classList?.contains("thread-button")
   )[0];
   assert.ok(threadButton, "expected a thread button");
   threadButton.click();
@@ -960,7 +960,7 @@ async function testRejectsMalformedMessages() {
   const { document } = await runRenderer(bridge);
   const threadButton = walk(
     document.byId.get("thread-list"),
-    (node) => node.tagName === "BUTTON"
+    (node) => node.classList?.contains("thread-button")
   )[0];
   assert.ok(threadButton, "expected a thread button");
   threadButton.click();
@@ -1014,7 +1014,7 @@ async function testRejectsMalformedMessageTimestamps() {
   const { document } = await runRenderer(bridge);
   const threadButton = walk(
     document.byId.get("thread-list"),
-    (node) => node.tagName === "BUTTON"
+    (node) => node.classList?.contains("thread-button")
   )[0];
   assert.ok(threadButton, "expected a thread button");
   threadButton.click();
@@ -1164,7 +1164,7 @@ async function testCachedStreamingStatesRenderPartialAndRejectUnknown() {
   const invalid = await runRenderer(invalidBridge);
   walk(
     invalid.document.byId.get("thread-list"),
-    (node) => node.tagName === "BUTTON"
+    (node) => node.classList?.contains("thread-button")
   )[0].click();
   await settle();
   assert.match(
@@ -1542,7 +1542,7 @@ async function testDropAndPasteAttachFiles() {
     },
   };
   const { document } = await runRenderer(bridge, desktopBridge);
-  walk(document.byId.get("thread-list"), (n) => n.tagName === "BUTTON")[0].click();
+  walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[0].click();
   await settle();
 
   const panel = document.byId.get("thread-panel");
@@ -1597,7 +1597,7 @@ async function testRegenerateRunsTheLastPromptAgain() {
     },
   };
   const { document } = await runRenderer(bridge, desktopBridge);
-  walk(document.byId.get("thread-list"), (n) => n.tagName === "BUTTON")[0].click();
+  walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[0].click();
   await settle();
 
   const regens = walk(
@@ -3053,7 +3053,7 @@ async function testComposerChipsNameRuntimeAndIdentity() {
 
   const threadButton = walk(
     document.byId.get("thread-list"),
-    (node) => node.tagName === "BUTTON",
+    (node) => node.classList?.contains("thread-button"),
   )[0];
   threadButton.click();
   await settle();
@@ -3072,6 +3072,85 @@ async function testComposerChipsNameRuntimeAndIdentity() {
 // Export: the conversation leaves as a Markdown file in the thread's own
 // workspace, and the folder opens — "your data can leave when you say so"
 // ends with the file in front of the user.
+// Pins: the sidebar's Pinned group leads, and the toggle round-trips through
+// the sidecar so the sidebar shows what the server would answer, not a local
+// guess at it.
+async function testPinnedThreadsLeadTheSidebar() {
+  let pinned = false;
+  const pinCalls = [];
+  const unpinCalls = [];
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        const rows = [
+          { ...thread("fresh-thread", "Fresh work"), updated_at: new Date().toISOString() },
+          { ...thread("old-thread", "Old favourite"), updated_at: "2026-07-01T00:00:00Z", pinned },
+        ];
+        // The sidecar sorts pinned first; the fake must honour the contract.
+        rows.sort((a, b) => (b.pinned === true) - (a.pinned === true));
+        return response({ items: rows });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const { desktopBridge } = localModeBridge({ localRoute: true });
+  desktopBridge.agent.pinThread = async (uuid) => {
+    pinCalls.push(uuid);
+    pinned = true;
+    return typedSuccess({ pinned: true });
+  };
+  desktopBridge.agent.unpinThread = async (uuid) => {
+    unpinCalls.push(uuid);
+    pinned = false;
+    return typedSuccess({ pinned: false });
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  const groupLabels = () =>
+    walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-group"))
+      .map((n) => n.textContent);
+  assert.deepEqual(groupLabels(), ["Today", "Older"], "no pins, no Pinned group");
+
+  const pinButtons = walk(
+    document.byId.get("thread-list"),
+    (n) => n.classList?.contains("thread-pin"),
+  );
+  assert.equal(pinButtons.length, 2, "every row offers Pin");
+  // Pin the old thread (second row).
+  pinButtons[1].click();
+  await settle();
+  await settle();
+
+  assert.deepEqual(pinCalls, ["old-thread"]);
+  assert.equal(
+    groupLabels()[0],
+    "Pinned",
+    "a pinned thread must lead the sidebar under its own heading",
+  );
+  const firstTitle = walk(
+    document.byId.get("thread-list"),
+    (n) => n.classList?.contains("thread-button"),
+  )[0].textContent;
+  assert.match(firstTitle, /Old favourite/, "the pin overrides the calendar");
+
+  // Unpin from the (now first) row's toggle.
+  const unpinButton = walk(
+    document.byId.get("thread-list"),
+    (n) => n.classList?.contains("thread-pin"),
+  )[0];
+  assert.equal(unpinButton.textContent, "Unpin", "the toggle names its next action");
+  unpinButton.click();
+  await settle();
+  await settle();
+  assert.deepEqual(unpinCalls, ["old-thread"]);
+  assert.deepEqual(groupLabels(), ["Today", "Older"], "unpinning restores the calendar");
+}
+
 async function testExportThreadWritesAndReveals() {
   const accounts = [{ id: 1, name: "Local", active: true }];
   const { bridge, desktopBridge } = localModeBridge({ localRoute: true, accounts });
@@ -3090,7 +3169,7 @@ async function testExportThreadWritesAndReveals() {
 
   const threadButton = walk(
     document.byId.get("thread-list"),
-    (node) => node.tagName === "BUTTON",
+    (node) => node.classList?.contains("thread-button"),
   )[0];
   threadButton.click();
   await settle();
@@ -3117,7 +3196,7 @@ async function testComposerAccountChipSkipsTheDefaultIdentity() {
   await settle();
   const threadButton = walk(
     document.byId.get("thread-list"),
-    (node) => node.tagName === "BUTTON",
+    (node) => node.classList?.contains("thread-button"),
   )[0];
   threadButton.click();
   await settle();
@@ -3173,7 +3252,7 @@ async function testSignedOutLocalRouteCanDriveTheAgent() {
 
   const threadButton = walk(
     document.byId.get("thread-list"),
-    (node) => node.tagName === "BUTTON",
+    (node) => node.classList?.contains("thread-button"),
   )[0];
   threadButton.click();
   await settle();
@@ -3819,7 +3898,7 @@ async function testAgentTurnStreamsAndReconciles() {
   );
   const threadButton = walk(
     document.byId.get("thread-list"),
-    (node) => node.tagName === "BUTTON"
+    (node) => node.classList?.contains("thread-button")
   )[0];
   threadButton.click();
   await settle();
@@ -3932,7 +4011,7 @@ async function testLateThreadHistoryCannotContaminateSelection() {
   const { document } = await runRenderer(bridge);
   const buttons = walk(
     document.byId.get("thread-list"),
-    (node) => node.tagName === "BUTTON"
+    (node) => node.classList?.contains("thread-button")
   );
   buttons[0].click();
   buttons[1].click();
@@ -3992,7 +4071,7 @@ async function testThreadSwitchCancelsAndFencesOldTurn() {
   const { document } = await runRenderer(bridge, desktopBridge);
   const buttons = walk(
     document.byId.get("thread-list"),
-    (node) => node.tagName === "BUTTON"
+    (node) => node.classList?.contains("thread-button")
   );
   buttons[0].click();
   await settle();
@@ -5482,6 +5561,7 @@ await testLocalAccountDeleteIsArmedAndScoped();
 await testComposerChipsNameRuntimeAndIdentity();
 await testComposerAccountChipSkipsTheDefaultIdentity();
 await testExportThreadWritesAndReveals();
+await testPinnedThreadsLeadTheSidebar();
 await testModesParseFailureNamesTheSkew();
 await testLocalAccountRowHiddenWithoutLocalRoute();
 await testSignedOutWithoutLocalRouteStaysGated();

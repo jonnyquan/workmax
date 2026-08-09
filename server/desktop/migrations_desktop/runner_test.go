@@ -24,8 +24,8 @@ func TestApplyRunsMessageCreatedOrderIndexMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if len(applied) != 5 || applied[0] != "0001" || applied[1] != "0002" || applied[2] != "0003" || applied[3] != "0004" || applied[4] != "0005" {
-		t.Fatalf("applied: got %v, want [0001 0002 0003 0004 0005]", applied)
+	if len(applied) != 6 || applied[0] != "0001" || applied[1] != "0002" || applied[2] != "0003" || applied[3] != "0004" || applied[4] != "0005" || applied[5] != "0006" {
+		t.Fatalf("applied: got %v, want [0001 0002 0003 0004 0005 0006]", applied)
 	}
 
 	var indexCount int

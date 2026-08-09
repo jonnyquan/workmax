@@ -119,6 +119,14 @@
         "routeId": "agent.thread-export"
       },
       {
+        "bridgeMethod": "agent.pinThread",
+        "routeId": "agent.thread-pin"
+      },
+      {
+        "bridgeMethod": "agent.unpinThread",
+        "routeId": "agent.thread-unpin"
+      },
+      {
         "bridgeMethod": "agent.listRecoverableTurns",
         "routeId": "agent.turns-recoverable"
       },
@@ -526,6 +534,30 @@
       "id": "agent.thread-export",
       "method": "POST",
       "path": "/agent/threads/:uuid/export",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "agent.thread-pin",
+      "method": "POST",
+      "path": "/agent/threads/:uuid/pin",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "agent.thread-unpin",
+      "method": "DELETE",
+      "path": "/agent/threads/:uuid/pin",
       "credential": "local-token",
       "requestPolicy": {
         "origin": "absent",

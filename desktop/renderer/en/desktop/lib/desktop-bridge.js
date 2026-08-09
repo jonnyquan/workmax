@@ -25,6 +25,8 @@ const ROUTES = {
     agentListWorkspaceFiles: defineTypedRoute("agent.listWorkspaceFiles", "agent.thread-workspace-list", "GET", "/agent/threads/:uuid/workspace", "none", null),
     agentRevealWorkspace: defineTypedRoute("agent.revealWorkspace", "agent.thread-workspace-reveal", "POST", "/agent/threads/:uuid/workspace/reveal", "none", null),
     agentExportThread: defineTypedRoute("agent.exportThread", "agent.thread-export", "POST", "/agent/threads/:uuid/export", "none", null),
+    agentPinThread: defineTypedRoute("agent.pinThread", "agent.thread-pin", "POST", "/agent/threads/:uuid/pin", "none", null),
+    agentUnpinThread: defineTypedRoute("agent.unpinThread", "agent.thread-unpin", "DELETE", "/agent/threads/:uuid/pin", "none", null),
     agentRenameThread: defineTypedRoute("agent.renameThread", "agent.thread-rename", "PATCH", "/agent/threads/:uuid", "json", "application/json"),
     agentStartTurn: defineTypedRoute("agent.startTurn", "agent.chat", "POST", "/agent/chat", "json", "application/json"),
     agentListRecoverableTurns: defineTypedRoute("agent.listRecoverableTurns", "agent.turns-recoverable", "GET", "/agent/turns/recoverable", "none", null),
@@ -112,6 +114,16 @@ function createDesktopBridge(deps) {
                 const uuid = validateCanonicalV4UUID(threadUUID, "exportThread threadUUID");
                 const path = ROUTES.agentExportThread.path.replace(":uuid", encodeURIComponent(uuid));
                 return execute(deps, ROUTES.agentExportThread, path);
+            },
+            pinThread: async (threadUUID) => {
+                const uuid = validateCanonicalV4UUID(threadUUID, "pinThread threadUUID");
+                const path = ROUTES.agentPinThread.path.replace(":uuid", encodeURIComponent(uuid));
+                return execute(deps, ROUTES.agentPinThread, path);
+            },
+            unpinThread: async (threadUUID) => {
+                const uuid = validateCanonicalV4UUID(threadUUID, "unpinThread threadUUID");
+                const path = ROUTES.agentUnpinThread.path.replace(":uuid", encodeURIComponent(uuid));
+                return execute(deps, ROUTES.agentUnpinThread, path);
             },
             renameThread: async (threadUUID, name) => {
                 const uuid = validateCanonicalV4UUID(threadUUID, "renameThread threadUUID");

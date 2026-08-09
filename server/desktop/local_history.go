@@ -20,6 +20,7 @@ type LocalThreadRow struct {
 	MessageCount int       `json:"message_count"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	CloudSync    string    `json:"cloud_sync_state"`
+	Pinned       bool      `json:"pinned"`
 }
 
 // LocalMessageRow is the per-message row the renderer sees from
@@ -63,6 +64,8 @@ func ListLocalThreads(db *gorm.DB, uid uint64, limit int, includePaused bool) ([
 	// what is cached locally (the cloud knows about messages this machine has
 	// not pulled), and the local count can exceed the stored one (local-only
 	// turns the cloud has never seen).
+	// Pins live in their own uid-scoped table (see migration 0006), so a
+	// sync upsert of the thread row can never clobber the preference.
 	baseQuery := `
 		SELECT uuid, name, agent_mode,
 		       MAX(
@@ -72,7 +75,12 @@ func ListLocalThreads(db *gorm.DB, uid uint64, limit int, includePaused bool) ([
 		             AND m.uid = w_workagent_thread.uid)
 		       ),
 		       updated_at,
-		       COALESCE(cloud_sync_state, 'synced')
+		       COALESCE(cloud_sync_state, 'synced'),
+		       EXISTS(
+		         SELECT 1 FROM w_desktop_thread_pin p
+		          WHERE p.uid = w_workagent_thread.uid
+		            AND p.thread_uuid = w_workagent_thread.uuid
+		       )
 		  FROM w_workagent_thread
 		 WHERE agent_type = 'general_agent'`
 	args := []any{}
@@ -85,8 +93,10 @@ func ListLocalThreads(db *gorm.DB, uid uint64, limit int, includePaused bool) ([
 		baseQuery += `
 		   AND COALESCE(cloud_sync_state, 'synced') <> 'paused'`
 	}
+	// Pinned first, then recency: the pin IS a sort preference, and a pin
+	// that does not move the row is a star sticker, not a feature.
 	baseQuery += `
-		 ORDER BY updated_at DESC, id DESC
+		 ORDER BY 7 DESC, updated_at DESC, id DESC
 		 LIMIT ?`
 	args = append(args, limit)
 
@@ -101,10 +111,12 @@ func ListLocalThreads(db *gorm.DB, uid uint64, limit int, includePaused bool) ([
 		var (
 			r         LocalThreadRow
 			updatedAt string
+			pinned    int
 		)
-		if err := rows.Scan(&r.UUID, &r.Name, &r.AgentMode, &r.MessageCount, &updatedAt, &r.CloudSync); err != nil {
+		if err := rows.Scan(&r.UUID, &r.Name, &r.AgentMode, &r.MessageCount, &updatedAt, &r.CloudSync, &pinned); err != nil {
 			return nil, fmt.Errorf("list threads: scan: %w", err)
 		}
+		r.Pinned = pinned == 1
 		r.UpdatedAt = parseSQLiteTime(updatedAt)
 		out = append(out, r)
 	}
