@@ -227,6 +227,7 @@ textarea:focus-visible {
 .sidebar > .thread-search { order: 11; }
 .sidebar > #new-thread-form { order: 12; }
 .sidebar > .thread-list { order: 13; }
+.sidebar > .content-match-panel { order: 14; }
 .sidebar > #local-account-row { order: 19; }
 .sidebar > #local-account-panel { order: 19; }
 .sidebar > #status-card { order: 20; }
@@ -692,6 +693,55 @@ textarea:focus-visible {
 .sidebar-footer a:hover {
   color: hsl(var(--foreground));
   text-decoration: underline;
+}
+
+.content-match-panel {
+  flex: none;
+  margin: 0;
+  padding: 0 8px 8px;
+  border-top: 1px solid hsl(var(--border) / 0.6);
+}
+
+.content-match-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.content-match {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  height: auto;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+}
+
+.content-match:hover {
+  background: hsl(var(--muted) / 0.6);
+}
+
+.content-match strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content-match span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .thread-item {

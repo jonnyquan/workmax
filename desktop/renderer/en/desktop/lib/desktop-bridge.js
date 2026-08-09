@@ -25,6 +25,7 @@ const ROUTES = {
     agentListWorkspaceFiles: defineTypedRoute("agent.listWorkspaceFiles", "agent.thread-workspace-list", "GET", "/agent/threads/:uuid/workspace", "none", null),
     agentRevealWorkspace: defineTypedRoute("agent.revealWorkspace", "agent.thread-workspace-reveal", "POST", "/agent/threads/:uuid/workspace/reveal", "none", null),
     agentExportThread: defineTypedRoute("agent.exportThread", "agent.thread-export", "POST", "/agent/threads/:uuid/export", "none", null),
+    agentSearchMessages: defineTypedRoute("agent.searchMessages", "agent.search", "GET", "/agent/search", "none", null),
     agentPinThread: defineTypedRoute("agent.pinThread", "agent.thread-pin", "POST", "/agent/threads/:uuid/pin", "none", null),
     agentUnpinThread: defineTypedRoute("agent.unpinThread", "agent.thread-unpin", "DELETE", "/agent/threads/:uuid/pin", "none", null),
     agentRenameThread: defineTypedRoute("agent.renameThread", "agent.thread-rename", "PATCH", "/agent/threads/:uuid", "json", "application/json"),
@@ -114,6 +115,13 @@ function createDesktopBridge(deps) {
                 const uuid = validateCanonicalV4UUID(threadUUID, "exportThread threadUUID");
                 const path = ROUTES.agentExportThread.path.replace(":uuid", encodeURIComponent(uuid));
                 return execute(deps, ROUTES.agentExportThread, path);
+            },
+            searchMessages: async (query) => {
+                if (typeof query !== "string" || query.trim() === "" || query.length > 200) {
+                    throw new Error("searchMessages query must be a non-empty string of at most 200 characters");
+                }
+                const path = ROUTES.agentSearchMessages.path + "?q=" + encodeURIComponent(query.trim());
+                return execute(deps, ROUTES.agentSearchMessages, path);
             },
             pinThread: async (threadUUID) => {
                 const uuid = validateCanonicalV4UUID(threadUUID, "pinThread threadUUID");

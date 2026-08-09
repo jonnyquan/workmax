@@ -121,6 +121,7 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	newCurrentSidecarRoutePolicy("agent.thread-workspace-list", http.MethodGet, "/agent/threads/:uuid/workspace", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-workspace-reveal", http.MethodPost, "/agent/threads/:uuid/workspace/reveal", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-export", http.MethodPost, "/agent/threads/:uuid/export", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("agent.search", http.MethodGet, "/agent/search", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-pin", http.MethodPost, "/agent/threads/:uuid/pin", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-unpin", http.MethodDelete, "/agent/threads/:uuid/pin", SidecarBodyForbidden, 0),
 }
@@ -310,6 +311,8 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handleRevealWorkspace, true
 	case "agent.thread-export":
 		return s.handleExportThread, true
+	case "agent.search":
+		return s.handleSearchMessages, true
 	case "agent.thread-pin":
 		return s.handlePinThread, true
 	case "agent.thread-unpin":

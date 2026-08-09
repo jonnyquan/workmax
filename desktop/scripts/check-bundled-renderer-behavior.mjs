@@ -3077,6 +3077,103 @@ async function testComposerChipsNameRuntimeAndIdentity() {
 // guess at it.
 // ⌘K is a command palette, not just a switcher: doing things stays on the
 // keyboard. Commands are context-aware — a dead-end action never shows.
+// Content search: the title filter answers instantly from memory; message
+// bodies are the sidecar's to search. The two layers must compose without
+// the async one ever lying about which query it answers.
+async function testSidebarContentSearch() {
+  const searchCalls = [];
+  let pendingResolve = null;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("local-thread", "Offline notes"), thread("other-thread", "Other work")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const { desktopBridge } = localModeBridge({ localRoute: true });
+  desktopBridge.agent.searchMessages = async (query) => {
+    searchCalls.push(query);
+    if (query === "slowquery") {
+      return new Promise((resolve) => {
+        pendingResolve = () =>
+          resolve(typedSuccess({
+            items: [{ thread_uuid: "other-thread", thread_name: "STALE", role: "you", snippet: "stale answer", created_at: "2026-08-09T00:00:00Z" }],
+            count: 1,
+          }));
+      });
+    }
+    return typedSuccess({
+      items: [{
+        thread_uuid: "other-thread",
+        thread_name: "Other work",
+        role: "assistant",
+        snippet: "…churn 环比持平于 2.1%…",
+        created_at: "2026-08-09T00:00:00Z",
+      }],
+      count: 1,
+    });
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  const input = document.byId.get("thread-search");
+  input.value = "churn";
+  input.dispatch("input");
+  await settle();
+  await settle();
+
+  assert.deepEqual(searchCalls, ["churn"], "typing asks the sidecar once (debounced)");
+  const panel = document.byId.get("content-match-panel");
+  assert.equal(panel.hidden, false, "content matches surface under their own group");
+  const match = walk(
+    document.byId.get("content-match-list"),
+    (n) => n.classList?.contains("content-match"),
+  )[0];
+  assert.match(match.textContent, /churn 环比持平/, "the snippet is shown");
+  assert.match(match.textContent, /Other work/, "the owning conversation is named");
+
+  match.click();
+  await settle();
+  assert.match(
+    document.byId.get("thread-title").textContent,
+    /Other work/,
+    "clicking a content match opens its conversation",
+  );
+
+  // Generation guard: a SLOW answer to an old query arrives after a newer
+  // query already rendered — the stale answer must be dropped.
+  input.value = "slowquery";
+  input.dispatch("input");
+  await settle();
+  input.value = "churn";
+  input.dispatch("input");
+  await settle();
+  await settle();
+  const resolveStale = pendingResolve;
+  if (resolveStale) resolveStale();
+  await settle();
+  await settle();
+  const names = walk(
+    document.byId.get("content-match-list"),
+    (n) => n.classList?.contains("content-match"),
+  ).map((n) => n.textContent);
+  assert.ok(
+    names.every((label) => !label.includes("STALE")),
+    "a late answer to an old query must never overwrite the newer results",
+  );
+
+  // Clearing the query clears the group.
+  input.value = "";
+  input.dispatch("input");
+  await settle();
+  assert.equal(panel.hidden, true, "no query, no content group");
+}
+
 async function testPaletteRunsCommands() {
   let pinned = false;
   const pinCalls = [];
@@ -5656,6 +5753,7 @@ await testLocalAccountDeleteIsArmedAndScoped();
 await testComposerChipsNameRuntimeAndIdentity();
 await testComposerAccountChipSkipsTheDefaultIdentity();
 await testExportThreadWritesAndReveals();
+await testSidebarContentSearch();
 await testPaletteRunsCommands();
 await testPaletteOpensWithoutThreads();
 await testPinnedThreadsLeadTheSidebar();

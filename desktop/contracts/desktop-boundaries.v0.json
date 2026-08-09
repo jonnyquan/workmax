@@ -119,6 +119,10 @@
         "routeId": "agent.thread-export"
       },
       {
+        "bridgeMethod": "agent.searchMessages",
+        "routeId": "agent.search"
+      },
+      {
         "bridgeMethod": "agent.pinThread",
         "routeId": "agent.thread-pin"
       },
@@ -534,6 +538,18 @@
       "id": "agent.thread-export",
       "method": "POST",
       "path": "/agent/threads/:uuid/export",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "agent.search",
+      "method": "GET",
+      "path": "/agent/search",
       "credential": "local-token",
       "requestPolicy": {
         "origin": "absent",

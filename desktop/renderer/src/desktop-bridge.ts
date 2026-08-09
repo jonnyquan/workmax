@@ -237,6 +237,19 @@ export interface AgentWorkspaceFile {
   modified_at: string;
 }
 
+export interface AgentSearchMatch {
+  thread_uuid: string;
+  thread_name: string;
+  role: string;
+  snippet: string;
+  created_at: string;
+}
+
+export interface AgentSearchResults {
+  items: AgentSearchMatch[];
+  count: number;
+}
+
 export interface AgentThreadExport {
   exported: boolean;
   path: string;
@@ -524,6 +537,9 @@ export interface DesktopBridge {
     exportThread: (
       threadUUID: string
     ) => Promise<DesktopBridgeResult<AgentThreadExport>>;
+    searchMessages: (
+      query: string
+    ) => Promise<DesktopBridgeResult<AgentSearchResults>>;
     pinThread: (
       threadUUID: string
     ) => Promise<DesktopBridgeResult<{ pinned: boolean }>>;
@@ -754,6 +770,14 @@ const ROUTES = {
     "none",
     null
   ),
+  agentSearchMessages: defineTypedRoute(
+    "agent.searchMessages",
+    "agent.search",
+    "GET",
+    "/agent/search",
+    "none",
+    null
+  ),
   agentPinThread: defineTypedRoute(
     "agent.pinThread",
     "agent.thread-pin",
@@ -965,6 +989,13 @@ export function createDesktopBridge(
           encodeURIComponent(uuid)
         );
         return execute<AgentThreadExport>(deps, ROUTES.agentExportThread, path);
+      },
+      searchMessages: async (query) => {
+        if (typeof query !== "string" || query.trim() === "" || query.length > 200) {
+          throw new Error("searchMessages query must be a non-empty string of at most 200 characters");
+        }
+        const path = ROUTES.agentSearchMessages.path + "?q=" + encodeURIComponent(query.trim());
+        return execute<AgentSearchResults>(deps, ROUTES.agentSearchMessages, path);
       },
       pinThread: async (threadUUID) => {
         const uuid = validateCanonicalV4UUID(threadUUID, "pinThread threadUUID");

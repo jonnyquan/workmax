@@ -5718,10 +5718,104 @@ if (openWorkspaceButton) {
   });
 }
 
+// Content search: titles filter instantly in memory; message bodies live in
+// SQLite, so the sidecar answers those. Debounced so a fast typist asks
+// once, generation-guarded so a slow answer to an old query can never
+// overwrite the results of a newer one.
+let contentSearchTimer = null;
+let contentSearchGeneration = 0;
+
+function clearContentMatches() {
+  contentSearchGeneration += 1;
+  const panel = document.querySelector("#content-match-panel");
+  const list = document.querySelector("#content-match-list");
+  if (panel) panel.hidden = true;
+  if (list) list.textContent = "";
+}
+
+function parseSearchMatches(data) {
+  if (!isRecord(data) || !Array.isArray(data.items)) {
+    throw new Error("invalid search payload");
+  }
+  return data.items.filter(
+    (item) =>
+      isRecord(item) &&
+      isSafeLocalHistoryUUID(item.thread_uuid) &&
+      typeof item.snippet === "string" &&
+      item.snippet.length > 0 &&
+      (item.role === "you" || item.role === "assistant")
+  );
+}
+
+function renderContentMatches(matches) {
+  const panel = document.querySelector("#content-match-panel");
+  const list = document.querySelector("#content-match-list");
+  if (!panel || !list) return;
+  list.textContent = "";
+  if (matches.length === 0) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  for (const match of matches) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "content-match";
+    const title = document.createElement("strong");
+    title.textContent =
+      (isRecord(match) && typeof match.thread_name === "string" && match.thread_name) ||
+      "Untitled thread";
+    const snippet = document.createElement("span");
+    snippet.textContent = (match.role === "you" ? "You: " : "") + match.snippet;
+    button.append(title, snippet);
+    button.addEventListener("click", () => {
+      const thread = state.threads.find((candidate) => candidate.uuid === match.thread_uuid);
+      if (thread) selectThread(thread);
+    });
+    item.appendChild(button);
+    list.appendChild(item);
+  }
+}
+
+async function runContentSearch(query) {
+  const agent = window.desktopBridge?.agent;
+  if (typeof agent?.searchMessages !== "function") return;
+  const generation = ++contentSearchGeneration;
+  let matches;
+  try {
+    const result = parseDesktopBridgeResult(
+      await agent.searchMessages(query),
+      "search messages result"
+    );
+    if (!result.ok) return;
+    matches = parseSearchMatches(result.data);
+  } catch {
+    // Content search is an enhancement on top of the title filter; a failure
+    // degrades to exactly the behaviour the sidebar always had.
+    return;
+  }
+  if (generation !== contentSearchGeneration) return;
+  renderContentMatches(matches);
+}
+
+function scheduleContentSearch() {
+  if (contentSearchTimer) clearTimeout(contentSearchTimer);
+  const query = (state.threadQuery || "").trim();
+  if (query.length < 2) {
+    clearContentMatches();
+    return;
+  }
+  contentSearchTimer = setTimeout(() => {
+    void runContentSearch(query);
+  }, 250);
+}
+
 const threadSearchInput = document.querySelector("#thread-search");
 if (threadSearchInput) {
   threadSearchInput.addEventListener("input", () => {
     state.threadQuery = threadSearchInput.value;
     renderThreads();
+    scheduleContentSearch();
   });
 }
