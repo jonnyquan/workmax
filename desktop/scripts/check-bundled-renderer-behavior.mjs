@@ -2938,9 +2938,9 @@ async function testRetrievedContextIsShownAndResetPerTurn() {
   await settle();
 
   assert.equal(
-    document.byId.get("retrieved-empty").hidden,
-    false,
-    "before any turn the section must say nothing has been retrieved",
+    document.byId.get("context-retrieved").hidden,
+    true,
+    "with nothing retrieved the whole section stands down — an empty module explaining itself costs more than it returns",
   );
 
   const input = document.byId.get("chat-input");
@@ -2961,9 +2961,9 @@ async function testRetrievedContextIsShownAndResetPerTurn() {
 
   assert.equal(document.byId.get("retrieved-meta").textContent, "2");
   assert.equal(
-    document.byId.get("retrieved-empty").hidden,
-    true,
-    "the empty note must give way once sources arrive",
+    document.byId.get("context-retrieved").hidden,
+    false,
+    "the section appears the moment there is something to attribute",
   );
   const listed = document.byId.get("retrieved-list");
   assert.equal(listed.children.length, 2);
@@ -2991,7 +2991,11 @@ async function testRetrievedContextIsShownAndResetPerTurn() {
     0,
     "the previous turn's sources must not survive into the next turn",
   );
-  assert.equal(document.byId.get("retrieved-meta").textContent, "0");
+  assert.equal(
+    document.byId.get("context-retrieved").hidden,
+    true,
+    "and the section stands back down with them",
+  );
 }
 
 // runShimTurn drives the shipped shim over a canned SSE body: real frame
@@ -3359,6 +3363,11 @@ async function testAgentTurnStreamsAndReconciles() {
   await settle();
 
   assert.equal(document.byId.get("agent-mode").value, "ppt");
+  assert.equal(
+    document.byId.get("agent-mode").hidden,
+    true,
+    "one allowed skill is not a choice; the selector must stand down until there are two",
+  );
   assert.equal(document.byId.get("chat-input").disabled, false);
   const chatInput = document.byId.get("chat-input");
   chatInput.value = "  Refine the deck  ";

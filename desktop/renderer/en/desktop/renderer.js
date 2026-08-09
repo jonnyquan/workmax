@@ -2246,6 +2246,12 @@ function updateComposerState() {
     !state.createFormOpen &&
     !state.recoveringSession;
   agentMode.disabled = !ready;
+  // One allowed skill is not a choice; the composer status already names it.
+  // The selector earns its pixels back the day a second skill ships.
+  const singleSkill = state.allowedModes.length <= 1;
+  agentMode.hidden = singleSkill;
+  const modeLabel = document.querySelector("#agent-mode-label");
+  if (modeLabel) modeLabel.hidden = singleSkill;
   chatInput.disabled = !ready;
   sendButton.disabled = !ready || !isValidChatText(chatInput.value);
   stopButton.hidden = !active;
@@ -4780,6 +4786,10 @@ function renderRetrieved() {
   }
   if (ctxEl("retrieved-empty")) ctxEl("retrieved-empty").hidden = items.length > 0;
   if (ctxEl("retrieved-meta")) ctxEl("retrieved-meta").textContent = String(items.length);
+  // The whole section stands down when there is nothing retrieved: it is
+  // per-turn transient, and an empty module whose body explains its own
+  // emptiness costs more attention than it returns.
+  if (ctxEl("context-retrieved")) ctxEl("context-retrieved").hidden = items.length === 0;
 }
 
 // What the agent produced: the workspace listing, newest first. Until L2
