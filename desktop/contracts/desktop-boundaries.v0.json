@@ -115,6 +115,10 @@
         "routeId": "agent.thread-workspace-reveal"
       },
       {
+        "bridgeMethod": "agent.exportThread",
+        "routeId": "agent.thread-export"
+      },
+      {
         "bridgeMethod": "agent.listRecoverableTurns",
         "routeId": "agent.turns-recoverable"
       },
@@ -510,6 +514,18 @@
       "id": "agent.thread-workspace-reveal",
       "method": "POST",
       "path": "/agent/threads/:uuid/workspace/reveal",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "agent.thread-export",
+      "method": "POST",
+      "path": "/agent/threads/:uuid/export",
       "credential": "local-token",
       "requestPolicy": {
         "origin": "absent",

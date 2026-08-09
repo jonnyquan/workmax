@@ -1177,7 +1177,10 @@ textarea:focus-visible {
   /* Tight inside an exchange, air between exchanges: the question and its
      answer read as one unit, and units read apart. */
   gap: 10px;
-  width: min(900px, 100%);
+  /* A reading column, not a full bleed: ~70ch keeps long answers scannable.
+     The composer stays wider on purpose — writing wants room, reading wants
+     a measure. */
+  width: min(760px, 100%);
   margin: 0 auto;
   padding: 24px 32px 34px;
 }

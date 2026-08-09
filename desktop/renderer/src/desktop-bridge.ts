@@ -237,6 +237,13 @@ export interface AgentWorkspaceFile {
   modified_at: string;
 }
 
+export interface AgentThreadExport {
+  exported: boolean;
+  path: string;
+  messages: number;
+  bytes: number;
+}
+
 export interface AgentWorkspaceFileList {
   items: AgentWorkspaceFile[];
   count: number;
@@ -514,6 +521,9 @@ export interface DesktopBridge {
     revealWorkspace: (
       threadUUID: string
     ) => Promise<DesktopBridgeResult<{ revealed: boolean }>>;
+    exportThread: (
+      threadUUID: string
+    ) => Promise<DesktopBridgeResult<AgentThreadExport>>;
     listRecoverableTurns: () => Promise<
       DesktopBridgeResult<AgentRecoverableTurnList>
     >;
@@ -730,6 +740,14 @@ const ROUTES = {
     "none",
     null
   ),
+  agentExportThread: defineTypedRoute(
+    "agent.exportThread",
+    "agent.thread-export",
+    "POST",
+    "/agent/threads/:uuid/export",
+    "none",
+    null
+  ),
   agentRenameThread: defineTypedRoute(
     "agent.renameThread",
     "agent.thread-rename",
@@ -917,6 +935,14 @@ export function createDesktopBridge(
           encodeURIComponent(uuid)
         );
         return execute<{ revealed: boolean }>(deps, ROUTES.agentRevealWorkspace, path);
+      },
+      exportThread: async (threadUUID) => {
+        const uuid = validateCanonicalV4UUID(threadUUID, "exportThread threadUUID");
+        const path = ROUTES.agentExportThread.path.replace(
+          ":uuid",
+          encodeURIComponent(uuid)
+        );
+        return execute<AgentThreadExport>(deps, ROUTES.agentExportThread, path);
       },
       renameThread: async (threadUUID, name) => {
         const uuid = validateCanonicalV4UUID(threadUUID, "renameThread threadUUID");

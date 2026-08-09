@@ -2422,7 +2422,58 @@ function updateSelectedThreadHeading() {
     renameButton.hidden =
       thread.cloud_sync_state !== "local" || !renameThreadBridgeAvailable();
   }
+  // Export needs messages to export and a bridge to ask through; unlike
+  // rename it works for synced threads too — the file is a copy, not an
+  // edit, so the sync worker has nothing to restore.
+  const exportButton = document.querySelector("#export-thread-button");
+  if (exportButton) {
+    exportButton.hidden =
+      (thread.message_count || 0) === 0 ||
+      typeof window.desktopBridge?.agent?.exportThread !== "function";
+  }
   closeRenameForm();
+}
+
+// Export writes the conversation into the thread's workspace as Markdown,
+// then opens the folder: "take your data with you" ends with the file in
+// front of the user, not with a path in a status message they must chase.
+async function exportSelectedThread() {
+  const agent = window.desktopBridge?.agent;
+  if (!agent || typeof agent.exportThread !== "function") return;
+  const threadUUID = state.selectedThreadUUID;
+  if (!threadUUID) return;
+  const exportButton = document.querySelector("#export-thread-button");
+  if (exportButton) exportButton.disabled = true;
+  try {
+    const result = parseDesktopBridgeResult(
+      await agent.exportThread(threadUUID),
+      "export thread result"
+    );
+    if (!result.ok) {
+      const raw = isRecord(result.error) ? result.error.error : result.error;
+      const reason = sanitizeErrorMessage(raw);
+      throw new Error(
+        reason === "thread_empty"
+          ? "Nothing to export yet — this conversation has no messages"
+          : reason || "Could not export the conversation"
+      );
+    }
+    const data = isRecord(result.data) ? result.data : {};
+    const count = Number.isInteger(data.messages) ? data.messages : 0;
+    setStatus(
+      "Exported " + count + " message" + (count === 1 ? "" : "s") + " as Markdown — opening the folder"
+    );
+    if (typeof agent.revealWorkspace === "function") {
+      await agent.revealWorkspace(threadUUID);
+    }
+    // The file is a deliverable; the panel that lists deliverables should
+    // know about it without waiting for the next turn.
+    void loadWorkspaceDeliverables(threadUUID);
+  } catch (error) {
+    setStatus(String(error.message || error), "error");
+  } finally {
+    if (exportButton) exportButton.disabled = false;
+  }
 }
 
 function renameThreadBridgeAvailable() {
@@ -5381,6 +5432,12 @@ const renameThreadButton = document.querySelector("#rename-thread-button");
 if (renameThreadButton) {
   renameThreadButton.addEventListener("click", () => {
     openRenameForm();
+  });
+}
+const exportThreadButton = document.querySelector("#export-thread-button");
+if (exportThreadButton) {
+  exportThreadButton.addEventListener("click", () => {
+    void exportSelectedThread();
   });
 }
 const renameThreadForm = document.querySelector("#rename-thread-form");

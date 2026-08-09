@@ -3069,6 +3069,47 @@ async function testComposerChipsNameRuntimeAndIdentity() {
   assert.equal(modeChip.textContent, "PPT");
 }
 
+// Export: the conversation leaves as a Markdown file in the thread's own
+// workspace, and the folder opens — "your data can leave when you say so"
+// ends with the file in front of the user.
+async function testExportThreadWritesAndReveals() {
+  const accounts = [{ id: 1, name: "Local", active: true }];
+  const { bridge, desktopBridge } = localModeBridge({ localRoute: true, accounts });
+  const exportCalls = [];
+  const revealCalls = [];
+  desktopBridge.agent.exportThread = async (uuid) => {
+    exportCalls.push(uuid);
+    return typedSuccess({ exported: true, path: "exports/conversation-x.md", messages: 6, bytes: 812 });
+  };
+  desktopBridge.agent.revealWorkspace = async (uuid) => {
+    revealCalls.push(uuid);
+    return typedSuccess({ revealed: true });
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  const threadButton = walk(
+    document.byId.get("thread-list"),
+    (node) => node.tagName === "BUTTON",
+  )[0];
+  threadButton.click();
+  await settle();
+
+  const exportButton = document.byId.get("export-thread-button");
+  assert.equal(exportButton.hidden, false, "a conversation with messages offers Export");
+  exportButton.click();
+  await settle();
+  await settle();
+
+  assert.equal(exportCalls.length, 1, "one click, one export");
+  assert.deepEqual(revealCalls, exportCalls, "the folder opens on the exported thread");
+  assert.match(
+    document.byId.get("status-card").textContent,
+    /Exported 6 messages/,
+    "the user is told what was written",
+  );
+}
+
 async function testComposerAccountChipSkipsTheDefaultIdentity() {
   const accounts = [{ id: 1, name: "Local", active: true }];
   const { bridge, desktopBridge } = localModeBridge({ localRoute: true, accounts });
@@ -5440,6 +5481,7 @@ await testLocalAccountRenameIsALabelChange();
 await testLocalAccountDeleteIsArmedAndScoped();
 await testComposerChipsNameRuntimeAndIdentity();
 await testComposerAccountChipSkipsTheDefaultIdentity();
+await testExportThreadWritesAndReveals();
 await testModesParseFailureNamesTheSkew();
 await testLocalAccountRowHiddenWithoutLocalRoute();
 await testSignedOutWithoutLocalRouteStaysGated();
