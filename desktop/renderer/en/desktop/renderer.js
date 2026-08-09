@@ -1981,10 +1981,17 @@ function viewportNearBottom() {
 // jumping — where "take me to the newest" is exactly what they asked for.
 // Streaming deltas pass no force: they follow only a reader who is already
 // following, and otherwise light the jump affordance instead.
+// formatTurnDuration speaks in the units a person watches a turn in.
+function formatTurnDuration(ms) {
+  const secs = Math.max(0, Math.round(ms / 1000));
+  if (secs < 60) return `${secs}s`;
+  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+}
+
 // setTurnState is the one place the pill's text and colour change together.
 // The class is derived from the label so the two can never disagree.
-function setTurnState(label) {
-  turnState.textContent = label;
+function setTurnState(label, detail = "") {
+  turnState.textContent = detail ? `${label} · ${detail}` : label;
   const tone =
     label === "Working" || label === "Resuming" || label === "Stopping"
       ? "busy"
@@ -3134,6 +3141,7 @@ function submitChat(event) {
   const optimistic = appendOptimisticTurn(userText);
   const activeTurn = {
     turnID: "",
+    startedAt: Date.now(),
     threadUUID: thread.uuid,
     userText,
     chatMode: state.selectedMode,
@@ -3281,6 +3289,7 @@ function resumeRecoverableTurn() {
   state.turnGeneration += 1;
   const activeTurn = {
     turnID: "",
+    startedAt: Date.now(),
     threadUUID: recoverable.thread_uuid,
     userText: recoverable.user_text,
     chatMode: recoverable.chat_mode,
@@ -3654,13 +3663,17 @@ function finishActiveTurn(activeTurn, label, canceled) {
       activeTurn.assistantText
     );
   }
-  setTurnState(label);
+  // How long the turn took, shown where its outcome is shown. Computed once
+  // at the terminal — a live ticker would be noise next to the pulsing pill.
+  const duration = activeTurn.startedAt ? formatTurnDuration(Date.now() - activeTurn.startedAt) : "";
+  setTurnState(label, duration);
   updateComposerState();
   // Freeze the turn's work log before the repaint erases the live strip.
   contextState.lastTurnLog = {
     threadUUID: activeTurn.threadUUID,
     steps: contextState.toolActivity.slice(),
     produced: [],
+    duration,
   };
   const before = new Map(
     contextState.deliverables.map((f) => [f.path, f.modified_at])
@@ -3686,6 +3699,7 @@ function finishActiveTurnWithError(activeTurn, message) {
   clearPendingIndicator(activeTurn);
   state.activeTurn = null;
   if (activeTurn.recoveryTurn) state.resumingTurn = false;
+  const errorDuration = activeTurn.startedAt ? formatTurnDuration(Date.now() - activeTurn.startedAt) : "";
   const safeMessage = sanitizeErrorMessage(message || "The Agent turn failed.");
   if (!activeTurn.assistantText) {
     activeTurn.assistantBubble.textContent = safeMessage;
@@ -3695,7 +3709,7 @@ function finishActiveTurnWithError(activeTurn, message) {
     // look like a different kind of object from a complete one.
     renderMarkdownInto(activeTurn.assistantBubble, activeTurn.assistantText);
   }
-  setTurnState("Error");
+  setTurnState("Error", errorDuration);
   renderTaskContext();
   updateComposerState();
   setStatus(safeMessage, "error");
@@ -3798,7 +3812,7 @@ async function stopActiveTurn() {
     }
     activeTurn.stopRequested = false;
     setTurnState("Working");
-  renderTaskContext();
+    renderTaskContext();
     updateComposerState();
   } catch {
     clearCancelConfirmation(activeTurn);
@@ -3807,7 +3821,10 @@ async function stopActiveTurn() {
       activeTurn.sessionGeneration === state.sessionGeneration
     ) {
       if (isTurnContextCurrent(activeTurn)) {
-        setTurnState("Stopped locally");
+        setTurnState(
+          "Stopped locally",
+          activeTurn.startedAt ? formatTurnDuration(Date.now() - activeTurn.startedAt) : ""
+        );
         setStatus(
           "The stream stopped locally, but persistent dismissal was not confirmed. Checking interrupted responses...",
           "error"
@@ -3823,7 +3840,7 @@ async function stopActiveTurn() {
     }
     activeTurn.stopRequested = false;
     setTurnState("Working");
-  renderTaskContext();
+    renderTaskContext();
     updateComposerState();
     setStatus("The Agent turn could not be stopped yet.", "error");
   }
@@ -4431,7 +4448,7 @@ const WORKLOG_COLLAPSE_AFTER = 3;
 // "N steps · K blocked"; produced rows stay visible either way — they are
 // the deliverable, not the plumbing. Expansion survives re-renders by
 // reading the outgoing strip before replacing it.
-function renderWorkLog(wrapper, steps, produced, live = false) {
+function renderWorkLog(wrapper, steps, produced, live = false, duration = "") {
   if (!wrapper) return;
   let wasExpanded = false;
   for (const child of Array.from(wrapper.children || [])) {
@@ -4457,11 +4474,12 @@ function renderWorkLog(wrapper, steps, produced, live = false) {
     toggle.className = "worklog-toggle";
     const parts = [`${steps.length} steps`];
     if (denied > 0) parts.push(`${denied} blocked`);
+    if (duration) parts.push(duration);
     toggle.textContent = `${expanded ? "▾" : "▸"} ${parts.join(" · ")}`;
     toggle.addEventListener("click", () => {
       strip.classList.toggle("expanded");
       // Re-render through the same path so the glyph and rows agree.
-      renderWorkLog(wrapper, steps, produced, live);
+      renderWorkLog(wrapper, steps, produced, live, duration);
     });
     header.appendChild(toggle);
     strip.appendChild(header);
@@ -4525,7 +4543,7 @@ function attachLastTurnLog() {
     n.classList?.contains("assistant")
   );
   const last = assistants[assistants.length - 1];
-  if (last) renderWorkLog(last, log.steps, log.produced);
+  if (last) renderWorkLog(last, log.steps, log.produced, false, log.duration);
 }
 
 function formatRetrievalScore(score) {
@@ -4547,7 +4565,10 @@ function buildRunSteps() {
   const running = Boolean(state.activeTurn);
   const messageCount = messageList ? messageList.children.length : 0;
   const sourceCount = contextState.sources.length + state.pendingFiles.length;
-  const failed = turnState && turnState.textContent === "Error";
+  // The tone class, not the text: the pill's label now carries a duration
+  // suffix, and deriving state from prose is how this comparison silently
+  // broke the moment the label grew.
+  const failed = turnState && turnState.classList?.contains("is-error");
 
   const brief = messageCount > 0 || running;
   return [

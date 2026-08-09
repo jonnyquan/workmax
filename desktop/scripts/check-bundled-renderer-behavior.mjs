@@ -1818,6 +1818,65 @@ async function testTurnStatePillCarriesItsTone() {
   assert.equal(pill.classList.contains("is-busy"), false, "and stop pulsing");
 }
 
+// A failed turn must say so everywhere at once: red pill with its duration,
+// and the run overview's execution step flipping to Failed. The duration is
+// made deterministic by rewinding the turn's start stamp — real elapsed time
+// in a test rounds to 0s and cannot catch a broken clock.
+async function testFailedTurnStateAndDuration() {
+  let emit = null;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("fail-thread", "Doomed run")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input, callback) {
+        emit = (event) => callback({ ...event, turnID: "fail-turn" });
+        return { turnID: "fail-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+  const { document, context } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  const input = document.byId.get("chat-input");
+  input.value = "doomed";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  vm.runInContext("state.activeTurn.startedAt -= 65000", context);
+  emit({
+    type: "proxy_error",
+    error: { kind: "service_unavailable", message: "endpoint is down", retryable: true },
+  });
+  await settle();
+
+  assert.match(
+    document.byId.get("turn-state").textContent,
+    /^Error · 1m \d+s$/,
+    "the pill must carry the real elapsed time, minutes and all",
+  );
+  assert.equal(document.byId.get("turn-state").classList.contains("is-error"), true);
+  assert.match(
+    document.byId.get("run-overview-list").textContent,
+    /Failed/,
+    "the execution step must flip to Failed — it reads the tone class, not the pill's prose",
+  );
+}
+
 // The protocol picker answers its own question at the moment of choice.
 async function testModelProtocolHintFollowsTheChoice() {
   const { document } = await runRenderer(undefined);
@@ -3208,7 +3267,7 @@ async function testSynchronousTurnCallbacksAreBufferedUntilOpenResult() {
   document.byId.get("chat-form").submit();
   assert.match(document.byId.get("message-list").textContent, /Buffered live answer/);
   assert.doesNotMatch(document.byId.get("message-list").textContent, /sync-callback-secret/);
-  assert.equal(document.byId.get("turn-state").textContent, "Done");
+  assert.match(document.byId.get("turn-state").textContent, /^Done · \d+s$/);
   await settle();
   assert.match(document.byId.get("message-list").textContent, /Cached sync answer/);
 }
@@ -3353,7 +3412,7 @@ async function testAgentTurnStreamsAndReconciles() {
   });
   await settle();
   await settle();
-  assert.equal(document.byId.get("turn-state").textContent, "Done");
+  assert.match(document.byId.get("turn-state").textContent, /^Done · \d+s$/);
   assert.equal(document.byId.get("stop-button").hidden, true);
   assert.equal(document.byId.get("chat-input").disabled, false);
   assert.equal(messageReads, 2, "done must reconcile the cached message history");
@@ -3525,7 +3584,7 @@ async function testStopTurnIsSingleShot() {
   stop.click();
   await settle();
   assert.equal(cancelCalls, 1);
-  assert.equal(document.byId.get("turn-state").textContent, "Stopped");
+  assert.match(document.byId.get("turn-state").textContent, /^Stopped · \d+s$/);
   assert.equal(stop.hidden, true);
   assert.equal(document.byId.get("chat-input").disabled, false);
 }
@@ -3686,7 +3745,7 @@ async function testCancelAckFailureShowsLocalStopAndRefreshesRecovery() {
   assert.equal(cancelCalls, 1);
   assert.equal(resumeCalls, 0);
   assert.equal(recoveryReads, 2, "cancel ACK failure must refresh recoverable turns once");
-  assert.equal(document.byId.get("turn-state").textContent, "Stopped locally");
+  assert.match(document.byId.get("turn-state").textContent, /^Stopped locally · \d+s$/);
   assert.match(
     document.byId.get("status-card").textContent,
     /stopped locally.*persistent dismissal was not confirmed/i
@@ -3895,7 +3954,7 @@ async function testRejectsMalformedAgentContractsWithoutLeakingPayload() {
   assert.doesNotMatch(document.byId.get("message-list").textContent, /malformed-event-secret/);
   assert.doesNotMatch(document.byId.get("status-card").textContent, /malformed-event-secret/);
   assert.match(document.byId.get("status-card").textContent, /invalid event/i);
-  assert.equal(document.byId.get("turn-state").textContent, "Error");
+  assert.match(document.byId.get("turn-state").textContent, /^Error( · \d+s)?$/);
 }
 
 async function testRejectsLegacyOpenAgentEventShapes() {
@@ -4162,7 +4221,7 @@ async function testRecoverableTurnRequiresExplicitResumeAndHandlesBusy() {
   assert.equal(startCalls, 0);
   assert.equal(document.byId.get("turn-recovery-card").hidden, true);
   assert.equal(vm.runInContext("state.recoverableTurns.length", context), 0);
-  assert.equal(document.byId.get("turn-state").textContent, "Done");
+  assert.match(document.byId.get("turn-state").textContent, /^Done · \d+s$/);
   assert.match(document.byId.get("message-list").textContent, /Recovered final/);
   assert.doesNotMatch(document.byId.get("message-list").textContent, /must-not-render/);
   assert.equal(messageReads, 2);
@@ -4283,7 +4342,7 @@ async function testRecoverableErrorResultIsSanitized() {
 
   assert.equal(vm.runInContext("state.recoverableTurns.length", context), 0);
   assert.equal(document.byId.get("turn-recovery-card").hidden, true);
-  assert.equal(document.byId.get("turn-state").textContent, "Error");
+  assert.match(document.byId.get("turn-state").textContent, /^Error( · \d+s)?$/);
   assert.match(document.byId.get("status-card").textContent, /PLUGIN_FAILED.*render/);
   assert.doesNotMatch(document.byId.get("status-card").textContent, /error-result-secret/);
   assert.doesNotMatch(document.byId.get("message-list").textContent, /error-result-secret/);
@@ -4921,6 +4980,7 @@ await testEscapeStopsAStreamingTurn();
 await testComposerCapacityNote();
 await testStreamingDoesNotYankAScrolledUpReader();
 await testTurnStatePillCarriesItsTone();
+await testFailedTurnStateAndDuration();
 await testModelProtocolHintFollowsTheChoice();
 await testToolLoopActivityAndDeliverables();
 await testStarterPromptLandsInTheComposer();
