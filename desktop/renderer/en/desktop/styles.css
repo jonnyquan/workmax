@@ -1166,6 +1166,68 @@ textarea:focus-visible {
   50% { opacity: 1; }
 }
 
+/* The inline work log: what the agent did, above the words that explain it.
+   Reads like a checklist, quiet mono for targets, red for refusals. */
+.message-worklog {
+  display: grid;
+  gap: 3px;
+  width: fit-content;
+  max-width: min(720px, 100%);
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid hsl(var(--border) / 0.7);
+  border-radius: 10px;
+  background: hsl(var(--secondary) / 0.35);
+  list-style: none;
+}
+
+.worklog-step {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+}
+
+.worklog-step::before {
+  content: "›";
+  color: hsl(var(--primary));
+  font-weight: 700;
+}
+
+.worklog-verb {
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+
+.worklog-target {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.worklog-step.denied::before {
+  content: "×";
+  color: hsl(var(--destructive));
+}
+
+.worklog-denied {
+  color: hsl(var(--destructive));
+  font-size: 11px;
+}
+
+.worklog-step.produced {
+  cursor: pointer;
+}
+
+.worklog-step.produced::before {
+  content: "＋";
+  color: hsl(var(--success));
+}
+
+.worklog-step.produced:hover .worklog-target {
+  text-decoration: underline;
+}
+
 /* Per-message actions. The row keeps its height at rest (no layout jump) but
    fades until the message is hovered or a button is focused — present enough
    to be discovered, quiet enough not to compete with the answer. */

@@ -145,6 +145,14 @@ class FakeElement {
     return node;
   }
 
+  insertBefore(node, reference) {
+    node.parentNode = this;
+    const at = this.children.indexOf(reference);
+    if (at < 0) this.children.push(node);
+    else this.children.splice(at, 0, node);
+    return node;
+  }
+
   remove() {
     if (!this.parentNode) return;
     this.parentNode.children = this.parentNode.children.filter(
@@ -1343,6 +1351,11 @@ async function testTaskContextPanelRendersOnLoad() {
     false,
     "with no sources the empty note must be visible",
   );
+  assert.equal(
+    document.byId.get("open-workspace-button").hidden,
+    true,
+    "nothing to open, no button",
+  );
   assert.equal(document.byId.get("sources-meta").textContent, "0");
 }
 
@@ -1838,6 +1851,17 @@ async function testToolLoopActivityAndDeliverables() {
       if (pathname === "/agent/threads?include_paused=false") {
         return response({ items: [thread("00000000-0000-4000-8000-0000000d2c01", "Tool loop")] });
       }
+      if (pathname === "/agent/threads/00000000-0000-4000-8000-0000000d2c01/messages") {
+        return response({
+          items: turnDone
+            ? [{
+                uuid: "l2c-msg", user_text: "Build the deck", ai_text: "Deck ready.",
+                streaming_state: "complete",
+                created_at: "2026-08-09T10:00:00Z", updated_at: "2026-08-09T10:00:00Z",
+              }]
+            : [],
+        });
+      }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
       throw new Error(`unexpected fetch path ${pathname}`);
     },
@@ -1851,14 +1875,19 @@ async function testToolLoopActivityAndDeliverables() {
         return typedSuccess({ revealed: true });
       },
       async listWorkspaceFiles() {
+        // One file predates the turn (same path, same mtime in both
+        // listings): it must be in the panel but NOT among what this turn
+        // "produced" — the produced rows are a diff, not the inventory.
+        const old = { path: "old-draft.txt", size: 100, modified_at: "2026-08-01T00:00:00Z" };
         return typedSuccess({
           items: turnDone
             ? [
                 { path: "deck/outline.md", size: 2048, modified_at: "2026-08-09T10:00:00Z" },
                 { path: "notes.txt", size: 512, modified_at: "2026-08-09T09:59:00Z" },
+                old,
               ]
-            : [],
-          count: turnDone ? 2 : 0,
+            : [old],
+          count: turnDone ? 3 : 1,
           truncated: false,
         });
       },
@@ -1876,13 +1905,8 @@ async function testToolLoopActivityAndDeliverables() {
 
   assert.equal(
     document.byId.get("deliverables-meta").textContent,
-    "0",
-    "an empty workspace is an empty panel",
-  );
-  assert.equal(
-    document.byId.get("open-workspace-button").hidden,
-    true,
-    "nothing to open, no button",
+    "1",
+    "the pre-existing file is inventory",
   );
 
   const input = document.byId.get("chat-input");
@@ -1891,7 +1915,7 @@ async function testToolLoopActivityAndDeliverables() {
   document.byId.get("chat-form").submit();
   await settle();
 
-  emit({ type: "tool_use", name: "Write" });
+  emit({ type: "tool_use", name: "Write", target: "outline.md" });
   await settle();
   assert.match(
     document.byId.get("run-overview-list").textContent,
@@ -1899,15 +1923,28 @@ async function testToolLoopActivityAndDeliverables() {
     "a running tool must be narrated in the execution step",
   );
 
-  emit({ type: "tool_denied", name: "Write", reason: "outside the workspace" });
+  // The step also lands inline: the transcript is a work log, not a chat
+  // with a hidden engine room.
+  {
+    const steps = walk(document.byId.get("message-list"), (n) => n.classList?.contains("worklog-step"));
+    assert.equal(steps.length, 1, "the running tool must appear as an inline step");
+    assert.match(steps[0].textContent, /Write.*outline\.md/su, "the step names its target");
+  }
+
+  emit({ type: "tool_denied", name: "Write", target: "escape.txt", reason: "outside the workspace" });
   await settle();
   assert.match(
     document.byId.get("run-overview-list").textContent,
     /Write blocked/,
     "a denial must be visible, not silently absorbed",
   );
+  {
+    const denied = walk(document.byId.get("message-list"), (n) => n.classList?.contains("denied"));
+    assert.equal(denied.length, 1, "the denial must appear inline too");
+    assert.match(denied[0].textContent, /blocked — outside the workspace/su);
+  }
 
-  emit({ type: "tool_use", name: "Edit" });
+  emit({ type: "tool_use", name: "Edit", target: "outline.md" });
   emit({ type: "text_delta", delta: "Deck ready." });
   turnDone = true;
   emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
@@ -1918,7 +1955,7 @@ async function testToolLoopActivityAndDeliverables() {
     /2 tool calls · 1 blocked/,
     "the finished step must count what ran and what was blocked",
   );
-  assert.equal(document.byId.get("deliverables-meta").textContent, "2");
+  assert.equal(document.byId.get("deliverables-meta").textContent, "3");
   assert.match(document.byId.get("deliverables-list").textContent, /deck\/outline\.md/);
   assert.equal(
     document.byId.get("deliverables-empty").hidden,
@@ -1937,6 +1974,20 @@ async function testToolLoopActivityAndDeliverables() {
     ["00000000-0000-4000-8000-0000000d2c01"],
     "reveal must name the selected thread",
   );
+
+  // After the turn, the reconcile repaints the transcript from cache — which
+  // stores none of this. The work log must survive on the final assistant
+  // message: steps, denial, and the files this turn produced.
+  {
+    const strips = walk(document.byId.get("message-list"), (n) => n.classList?.contains("message-worklog"));
+    assert.equal(strips.length, 1, "the work log must survive the post-turn repaint");
+    assert.match(strips[0].textContent, /Write.*outline\.md/su, "steps survive");
+    assert.match(strips[0].textContent, /blocked — outside the workspace/su, "the denial survives");
+    const produced = walk(strips[0], (n) => n.classList?.contains("produced"));
+    assert.equal(produced.length, 2, "produced rows are a DIFF against the pre-turn workspace, not the inventory");
+    assert.match(produced[0].textContent, /Produced.*deck\/outline\.md/su);
+    assert.doesNotMatch(strips[0].textContent, /old-draft\.txt/, "a file that predates the turn is not this turn's work");
+  }
 
   // A new turn starts its own story: the last turn's activity is not what
   // this turn is doing.

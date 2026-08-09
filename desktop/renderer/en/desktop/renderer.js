@@ -725,23 +725,28 @@ function parseAgentTurnEvent(value) {
       return { type: value.type, turnID: value.turnID, delta: value.delta };
     case "tool_use":
       if (
-        !hasExactKeys(value, ["type", "turnID", "name"]) ||
-        !isSafeProtocolString(value.name, 64)
+        !hasExactKeys(value, ["type", "turnID", "name", "target"]) ||
+        !isSafeProtocolString(value.name, 64) ||
+        typeof value.target !== "string" ||
+        !hasWellFormedUTF16(value.target) ||
+        value.target.length > 80
       ) {
         throw new Error("Malformed agent turn event");
       }
-      return { type: value.type, turnID: value.turnID, name: value.name };
+      return { type: value.type, turnID: value.turnID, name: value.name, target: value.target };
     case "tool_denied":
       if (
-        !hasExactKeys(value, ["type", "turnID", "name", "reason"]) ||
+        !hasExactKeys(value, ["type", "turnID", "name", "target", "reason"]) ||
         !isSafeProtocolString(value.name, 64) ||
+        typeof value.target !== "string" ||
+        value.target.length > 80 ||
         typeof value.reason !== "string" ||
         !hasWellFormedUTF16(value.reason) ||
         value.reason.length > 300
       ) {
         throw new Error("Malformed agent turn event");
       }
-      return { type: value.type, turnID: value.turnID, name: value.name, reason: value.reason };
+      return { type: value.type, turnID: value.turnID, name: value.name, target: value.target, reason: value.reason };
     case "retrieval":
       if (
         !hasExactKeys(value, ["type", "turnID", "sources"]) ||
@@ -1434,6 +1439,7 @@ function renderCachedMessages(items) {
       );
     }
   }
+  attachLastTurnLog();
   scrollMessagesToEnd(true);
 }
 
@@ -3544,10 +3550,10 @@ function handleParsedTurnEvent(activeTurn, event) {
       return;
     }
     case "tool_use":
-      recordToolActivity({ name: event.name, denied: false });
+      recordToolActivity({ name: event.name, target: event.target, denied: false }, activeTurn);
       return;
     case "tool_denied":
-      recordToolActivity({ name: event.name, denied: true, reason: event.reason });
+      recordToolActivity({ name: event.name, target: event.target, denied: true, reason: event.reason }, activeTurn);
       return;
     case "retrieval":
       // What the local model was given from the knowledge base, announced
@@ -3650,10 +3656,29 @@ function finishActiveTurn(activeTurn, label, canceled) {
   }
   setTurnState(label);
   updateComposerState();
+  // Freeze the turn's work log before the repaint erases the live strip.
+  contextState.lastTurnLog = {
+    threadUUID: activeTurn.threadUUID,
+    steps: contextState.toolActivity.slice(),
+    produced: [],
+  };
+  const before = new Map(
+    contextState.deliverables.map((f) => [f.path, f.modified_at])
+  );
   const context = selectionContext(activeTurn.threadUUID);
-  void reconcileCompletedTurn(activeTurn.threadUUID, context);
-  // A completed turn is the only time new workspace files can exist.
-  void loadWorkspaceDeliverables(activeTurn.threadUUID);
+  void reconcileCompletedTurn(activeTurn.threadUUID, context).then(() => {
+    attachLastTurnLog();
+  });
+  // A completed turn is the only time new workspace files can exist. What is
+  // new or changed against the pre-turn snapshot is what THIS turn made.
+  void loadWorkspaceDeliverables(activeTurn.threadUUID).then(() => {
+    const log = contextState.lastTurnLog;
+    if (!log || log.threadUUID !== activeTurn.threadUUID) return;
+    log.produced = contextState.deliverables.filter(
+      (f) => before.get(f.path) !== f.modified_at
+    );
+    attachLastTurnLog();
+  });
 }
 
 function finishActiveTurnWithError(activeTurn, message) {
@@ -4357,6 +4382,11 @@ const contextState = {
   // completes (that is when new files can exist).
   deliverables: [],
   deliverablesTruncated: false,
+  // The finished turn's work log: its tool steps plus the files that
+  // appeared. Kept because the post-turn reconcile repaints the transcript
+  // from cache, and the cache stores none of this — without a survivor copy
+  // the story would vanish the moment the turn ended.
+  lastTurnLog: null,
   // File ids the user has checked in the Sources panel to send with the NEXT
   // request. Per-request on purpose — the label says "next request", so the
   // set clears once a turn owns the ids, exactly like the upload tray.
@@ -4373,12 +4403,89 @@ function setRetrievedContext(sources) {
   renderTaskContext();
 }
 
-function recordToolActivity(entry) {
+function recordToolActivity(entry, activeTurn) {
   // Bounded: a pathological turn making thousands of calls must not grow an
   // unbounded array behind the panel.
   if (contextState.toolActivity.length >= 200) return;
   contextState.toolActivity.push(entry);
   renderTaskContext();
+  // The step also lands inline, Codex-style: the transcript is a work log,
+  // not a chat with a hidden engine room.
+  if (activeTurn?.assistantBubble?.parentNode) {
+    renderWorkLog(activeTurn.assistantBubble.parentNode, contextState.toolActivity, []);
+  }
+}
+
+// renderWorkLog paints the step strip on one assistant message: tool steps
+// in order, then the files the turn produced. Idempotent — it replaces the
+// strip it finds, so streaming updates and post-repaint re-attachment share
+// one code path.
+function renderWorkLog(wrapper, steps, produced) {
+  if (!wrapper) return;
+  for (const child of Array.from(wrapper.children || [])) {
+    if (child.classList?.contains("message-worklog")) child.remove();
+  }
+  if (steps.length === 0 && produced.length === 0) return;
+  const strip = document.createElement("ul");
+  strip.className = "message-worklog";
+  for (const step of steps) {
+    const row = document.createElement("li");
+    row.className = "worklog-step" + (step.denied ? " denied" : "");
+    const verb = document.createElement("span");
+    verb.className = "worklog-verb";
+    verb.textContent = step.name;
+    row.appendChild(verb);
+    if (step.target) {
+      const target = document.createElement("span");
+      target.className = "worklog-target";
+      target.textContent = step.target;
+      row.appendChild(target);
+    }
+    if (step.denied) {
+      const why = document.createElement("span");
+      why.className = "worklog-denied";
+      why.textContent = step.reason ? `blocked — ${step.reason}` : "blocked";
+      row.appendChild(why);
+    }
+    strip.appendChild(row);
+  }
+  for (const file of produced) {
+    const row = document.createElement("li");
+    row.className = "worklog-step produced";
+    const verb = document.createElement("span");
+    verb.className = "worklog-verb";
+    verb.textContent = "Produced";
+    const target = document.createElement("span");
+    target.className = "worklog-target";
+    target.textContent = file.path;
+    row.append(verb, target);
+    row.addEventListener("click", () => {
+      const agent = window.desktopBridge?.agent;
+      if (state.selectedThreadUUID && typeof agent?.revealWorkspace === "function") {
+        void agent.revealWorkspace(state.selectedThreadUUID);
+      }
+    });
+    strip.appendChild(row);
+  }
+  // Above the bubble: the steps happen before the words that explain them.
+  const bubble = Array.from(wrapper.children || []).find((c) => c.classList?.contains("bubble"));
+  if (bubble && typeof wrapper.insertBefore === "function") {
+    wrapper.insertBefore(strip, bubble);
+  } else {
+    wrapper.appendChild(strip);
+  }
+}
+
+// attachLastTurnLog re-hangs the survivor copy on the transcript's final
+// assistant message — the one the cache repaint just rebuilt.
+function attachLastTurnLog() {
+  const log = contextState.lastTurnLog;
+  if (!log || log.threadUUID !== state.selectedThreadUUID) return;
+  const assistants = Array.from(messageList.children || []).filter((n) =>
+    n.classList?.contains("assistant")
+  );
+  const last = assistants[assistants.length - 1];
+  if (last) renderWorkLog(last, log.steps, log.produced);
 }
 
 function formatRetrievalScore(score) {
@@ -4688,6 +4795,7 @@ async function loadThreadSources(threadUUID) {
   contextState.toolActivity = [];
   contextState.deliverables = [];
   contextState.deliverablesTruncated = false;
+  contextState.lastTurnLog = null;
   // Redundant with renderSources' pruning-to-current-sources, deliberately:
   // either alone prevents one thread's ids riding into another's turn, and
   // the negative test only fails when both are removed.

@@ -374,12 +374,14 @@ func (e *Engine) pump(ctx context.Context, iter claudesdk.MessageIterator, dst c
 						return assistant.String(), werr
 					}
 				case *claudesdk.ToolUseBlock:
-					// Non-terminal activity event. Today's renderer surfaces
-					// it as a tolerated unknown; L2c teaches the Run overview
-					// to narrate it. Name only — inputs can hold user data.
+					// Non-terminal activity event, narrated inline by the
+					// renderer as a work-log step. Name plus the target's
+					// BASENAME only: enough to read "Write · outline.md",
+					// while full paths and every other input stay out of the
+					// stream — inputs can hold anything.
 					if werr := dst.WriteEvent(cloudproxy.SSEEvent{
 						Type: "tool_use",
-						Data: mustJSON(map[string]string{"name": b.Name}),
+						Data: mustJSON(toolUseEventPayload(b)),
 					}); werr != nil {
 						return assistant.String(), werr
 					}
@@ -437,6 +439,23 @@ func (e *Engine) indexCompletedTurn(turnUUID, userText, assistantText string) {
 	if err := e.hooks.IndexTurn(ctx, turnUUID, userText, assistantText); err != nil {
 		log.Printf("knowledge: index turn %s: %v", turnUUID, err)
 	}
+}
+
+// toolUseEventPayload names the step the way a work log would: the tool, and
+// the basename of the file it touches when there is one.
+func toolUseEventPayload(b *claudesdk.ToolUseBlock) map[string]string {
+	payload := map[string]string{"name": b.Name}
+	for _, key := range []string{"file_path", "path", "filepath"} {
+		if raw, ok := b.Input[key].(string); ok && raw != "" {
+			base := filepath.Base(raw)
+			if len(base) > 80 {
+				base = base[:80]
+			}
+			payload["target"] = base
+			break
+		}
+	}
+	return payload
 }
 
 // emitProxyError mirrors local_inference's helper: send the typed error, and

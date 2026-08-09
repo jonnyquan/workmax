@@ -369,6 +369,7 @@ function dispatchAgentSSEFrame(active, eventName, rawData) {
       return;
     }
     const event = { type: eventName, turnID: active.turnID, name: value.name };
+    event.target = typeof value.target === "string" ? value.target.slice(0, 80) : "";
     if (eventName === "tool_denied") {
       event.reason = typeof value.reason === "string" ? value.reason.slice(0, 300) : "";
     }
