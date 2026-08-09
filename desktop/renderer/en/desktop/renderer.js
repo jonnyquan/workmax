@@ -3881,7 +3881,7 @@ async function applyLoginTransactionResult(result, pollSubmitting = false, gener
   switch (result.state) {
     case "idle":
       setLoginFormState(false);
-      setStatus(`Auth state: ${state.auth?.state || "unauthenticated"}. Sign in to sync cloud history.`);
+      setStatus("Signed out. Sign in to sync your cloud history.");
       return;
     case "awaiting_password":
       setLoginFormState(true);
@@ -4219,7 +4219,11 @@ async function refresh() {
         return;
       }
       updateComposerState();
-      setStatus(`Auth state: ${auth.state}. Sign in to sync cloud history.`);
+      setStatus(
+        auth.state === "expired"
+          ? "Your session expired. Sign in again to sync your cloud history."
+          : "Signed out. Sign in to sync your cloud history."
+      );
       await restoreLoginTransaction();
       return;
     }

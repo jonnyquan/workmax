@@ -602,7 +602,7 @@ async function testUnauthenticatedLogin() {
   rendererDocument = document;
   assert.equal(document.byId.get("login-button").hidden, false);
   assert.equal(document.byId.get("login-form").hidden, true);
-  assert.match(document.byId.get("status-card").textContent, /Auth state: unauthenticated/);
+  assert.match(document.byId.get("status-card").textContent, /Signed out\. Sign in to sync/);
   assert.deepEqual(statusCalls, [[]]);
 
   document.byId.get("login-button").click();

@@ -1179,6 +1179,17 @@ textarea:focus-visible {
   color: hsl(var(--muted-foreground));
 }
 
+/* The answer flows on the page, the question sits in a bubble — the reading
+   grammar of every major agent client. The model's prose gets the whole
+   column and no frame; structure inside it (code, quotes, the work log)
+   keeps its own chrome, so the border was double-packaging. */
+.message.assistant .bubble {
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .message.user .bubble {
   margin-left: auto;
   border-color: hsl(var(--primary));
