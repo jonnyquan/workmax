@@ -4412,23 +4412,63 @@ function recordToolActivity(entry, activeTurn) {
   // The step also lands inline, Codex-style: the transcript is a work log,
   // not a chat with a hidden engine room.
   if (activeTurn?.assistantBubble?.parentNode) {
-    renderWorkLog(activeTurn.assistantBubble.parentNode, contextState.toolActivity, []);
+    renderWorkLog(activeTurn.assistantBubble.parentNode, contextState.toolActivity, [], true);
   }
 }
+
+// Past this many steps, a finished log collapses to its summary — the
+// Codex idiom: the work is a receipt once it is done, a narration only while
+// it is happening.
+const WORKLOG_COLLAPSE_AFTER = 3;
 
 // renderWorkLog paints the step strip on one assistant message: tool steps
 // in order, then the files the turn produced. Idempotent — it replaces the
 // strip it finds, so streaming updates and post-repaint re-attachment share
 // one code path.
-function renderWorkLog(wrapper, steps, produced) {
+//
+// live=true is a streaming turn: always expanded, because watching the agent
+// work is the point. A finished log longer than the threshold collapses to
+// "N steps · K blocked"; produced rows stay visible either way — they are
+// the deliverable, not the plumbing. Expansion survives re-renders by
+// reading the outgoing strip before replacing it.
+function renderWorkLog(wrapper, steps, produced, live = false) {
   if (!wrapper) return;
+  let wasExpanded = false;
   for (const child of Array.from(wrapper.children || [])) {
-    if (child.classList?.contains("message-worklog")) child.remove();
+    if (child.classList?.contains("message-worklog")) {
+      wasExpanded = child.classList.contains("expanded");
+      child.remove();
+    }
   }
   if (steps.length === 0 && produced.length === 0) return;
   const strip = document.createElement("ul");
   strip.className = "message-worklog";
-  for (const step of steps) {
+
+  const collapsible = !live && steps.length > WORKLOG_COLLAPSE_AFTER;
+  const expanded = live || !collapsible || wasExpanded;
+  if (expanded) strip.classList.add("expanded");
+
+  if (collapsible) {
+    const denied = steps.filter((s) => s.denied).length;
+    const header = document.createElement("li");
+    header.className = "worklog-summary";
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "worklog-toggle";
+    const parts = [`${steps.length} steps`];
+    if (denied > 0) parts.push(`${denied} blocked`);
+    toggle.textContent = `${expanded ? "▾" : "▸"} ${parts.join(" · ")}`;
+    toggle.addEventListener("click", () => {
+      strip.classList.toggle("expanded");
+      // Re-render through the same path so the glyph and rows agree.
+      renderWorkLog(wrapper, steps, produced, live);
+    });
+    header.appendChild(toggle);
+    strip.appendChild(header);
+  }
+
+  const stepRows = expanded ? steps : [];
+  for (const step of stepRows) {
     const row = document.createElement("li");
     row.className = "worklog-step" + (step.denied ? " denied" : "");
     const verb = document.createElement("span");

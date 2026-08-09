@@ -1181,6 +1181,25 @@ textarea:focus-visible {
   list-style: none;
 }
 
+.worklog-summary {
+  display: flex;
+}
+
+.worklog-toggle {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.worklog-toggle:hover {
+  color: hsl(var(--foreground));
+  background: transparent;
+}
+
 .worklog-step {
   display: flex;
   align-items: baseline;

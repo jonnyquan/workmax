@@ -73,11 +73,14 @@ class FakeClassList {
   }
 
   toggle(name, force) {
-    if (force) {
+    // Real DOM semantics: one-argument toggle flips; the force form sets.
+    const shouldAdd = force === undefined ? !this.values.has(name) : Boolean(force);
+    if (shouldAdd) {
       this.values.add(name);
     } else {
       this.values.delete(name);
     }
+    return shouldAdd;
   }
 
   add(name) {
@@ -1945,6 +1948,20 @@ async function testToolLoopActivityAndDeliverables() {
   }
 
   emit({ type: "tool_use", name: "Edit", target: "outline.md" });
+  emit({ type: "tool_use", name: "Read", target: "notes.txt" });
+  emit({ type: "tool_use", name: "Grep", target: "" });
+  // Five steps now — live, every one must be on screen: watching the agent
+  // work is the point of a streaming log.
+  assert.equal(
+    walk(document.byId.get("message-list"), (n) => n.classList?.contains("worklog-step")).length,
+    5,
+    "a streaming log never collapses",
+  );
+  assert.equal(
+    walk(document.byId.get("message-list"), (n) => n.classList?.contains("worklog-toggle")).length,
+    0,
+    "a streaming log offers no collapse control — watching the work is the point",
+  );
   emit({ type: "text_delta", delta: "Deck ready." });
   turnDone = true;
   emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
@@ -1952,7 +1969,7 @@ async function testToolLoopActivityAndDeliverables() {
 
   assert.match(
     document.byId.get("run-overview-list").textContent,
-    /2 tool calls · 1 blocked/,
+    /4 tool calls · 1 blocked/,
     "the finished step must count what ran and what was blocked",
   );
   assert.equal(document.byId.get("deliverables-meta").textContent, "3");
@@ -1977,16 +1994,41 @@ async function testToolLoopActivityAndDeliverables() {
 
   // After the turn, the reconcile repaints the transcript from cache — which
   // stores none of this. The work log must survive on the final assistant
-  // message: steps, denial, and the files this turn produced.
+  // message — and, five steps long, it arrives COLLAPSED: a finished log is
+  // a receipt, not a narration. Produced rows stay out in the open.
   {
     const strips = walk(document.byId.get("message-list"), (n) => n.classList?.contains("message-worklog"));
     assert.equal(strips.length, 1, "the work log must survive the post-turn repaint");
-    assert.match(strips[0].textContent, /Write.*outline\.md/su, "steps survive");
-    assert.match(strips[0].textContent, /blocked — outside the workspace/su, "the denial survives");
+    const summary = walk(strips[0], (n) => n.classList?.contains("worklog-toggle"));
+    assert.equal(summary.length, 1, "a long finished log must offer its summary");
+    assert.match(summary[0].textContent, /5 steps · 1 blocked/, "the summary counts steps and refusals");
+    assert.equal(
+      walk(strips[0], (n) => n.classList?.contains("worklog-step") && !n.classList?.contains("produced")).length,
+      0,
+      "collapsed means the step rows are gone, not merely styled away",
+    );
     const produced = walk(strips[0], (n) => n.classList?.contains("produced"));
     assert.equal(produced.length, 2, "produced rows are a DIFF against the pre-turn workspace, not the inventory");
     assert.match(produced[0].textContent, /Produced.*deck\/outline\.md/su);
     assert.doesNotMatch(strips[0].textContent, /old-draft\.txt/, "a file that predates the turn is not this turn's work");
+
+    // Expand: the full story, denial included. Collapse again: back to the
+    // receipt. The toggle must survive its own re-render.
+    summary[0].click();
+    const expandedStrip = walk(document.byId.get("message-list"), (n) => n.classList?.contains("message-worklog"))[0];
+    assert.match(expandedStrip.textContent, /blocked — outside the workspace/su, "expansion shows the denial");
+    assert.equal(
+      walk(expandedStrip, (n) => n.classList?.contains("worklog-step") && !n.classList?.contains("produced")).length,
+      5,
+      "expansion shows every step",
+    );
+    walk(expandedStrip, (n) => n.classList?.contains("worklog-toggle"))[0].click();
+    const recollapsed = walk(document.byId.get("message-list"), (n) => n.classList?.contains("message-worklog"))[0];
+    assert.equal(
+      walk(recollapsed, (n) => n.classList?.contains("worklog-step") && !n.classList?.contains("produced")).length,
+      0,
+      "and folds back to the receipt",
+    );
   }
 
   // A new turn starts its own story: the last turn's activity is not what
