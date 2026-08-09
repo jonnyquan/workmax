@@ -104,9 +104,20 @@
   background: hsl(var(--primary) / 0.2);
 }
 
+html {
+  height: 100%;
+}
+
 body {
+  height: 100%;
   margin: 0;
   min-width: 780px;
+  /* The page itself never scrolls — every column manages its own overflow.
+     Without this, "show scrollbars: always" puts a vertical bar on the body,
+     100vw then overflows by that bar's width, a horizontal bar appears and
+     eats height, which forces the vertical bar for real: two scrollbars and
+     a dead strip at the bottom of the window, forever. */
+  overflow: hidden;
   background: hsl(var(--background));
 }
 
@@ -167,8 +178,8 @@ textarea:focus-visible {
      the run. The middle one is the only one that flexes — the rails carry
      fixed-width lists and reading them is easier at a stable width. */
   grid-template-columns: 340px minmax(0, 1fr) 340px;
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -565,10 +576,11 @@ textarea:focus-visible {
 
 .empty-state {
   display: grid;
-  place-content: center;
+  place-content: safe center;
   justify-items: center;
   height: 100%;
   padding: 40px;
+  overflow-y: auto;
   text-align: center;
 }
 
