@@ -2850,10 +2850,15 @@ function buildStarterCards() {
 
 function renderEmptyState() {
   const authenticated = canUseAgent();
+  // First run, neither path chosen yet: the two ways of working are equal
+  // citizens shown side by side, not a sign-in wall with the local path
+  // buried in a settings button. 登录 = 本地模型 + 远程授权, at first sight.
+  const onboarding = document.querySelector("#onboarding-paths");
+  if (onboarding) onboarding.hidden = authenticated;
   if (!authenticated) {
-    emptyTitle.textContent = "Sign in to use WorkMax Agent";
+    emptyTitle.textContent = "How do you want to work?";
     emptyDescription.textContent =
-      "Sign in to sync presentation threads — or point Models at a local endpoint and work without an account.";
+      "Both paths lead to the same app. You can sign in later, or switch models any time.";
   } else {
     // One question, Codex-style: the app is usable, so the headline invites
     // work instead of describing machinery. The identity joins the question
@@ -4806,6 +4811,18 @@ if (modelSettingsCancelButton) {
 loginButton.addEventListener("click", () => {
   void login();
 });
+const onboardingSignin = document.querySelector("#onboarding-signin");
+if (onboardingSignin) {
+  onboardingSignin.addEventListener("click", () => {
+    void login();
+  });
+}
+const onboardingLocal = document.querySelector("#onboarding-local");
+if (onboardingLocal) {
+  onboardingLocal.addEventListener("click", () => {
+    void openModelSettings();
+  });
+}
 loginForm.addEventListener("submit", (event) => {
   void submitLogin(event);
 });

@@ -898,6 +898,61 @@ textarea:focus-visible {
   max-width: 520px;
 }
 
+.onboarding-paths {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  width: min(620px, 100%);
+  margin-top: 26px;
+}
+
+.onboarding-paths[hidden] {
+  display: none;
+}
+
+.onboarding-card {
+  display: grid;
+  gap: 7px;
+  height: auto;
+  padding: 18px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  background: hsl(var(--card));
+  text-align: left;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.onboarding-card:hover {
+  border-color: hsl(var(--primary) / 0.45);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 7%);
+}
+
+.onboarding-icon {
+  font-size: 19px;
+  line-height: 1;
+}
+
+.onboarding-icon.tone-blue { color: hsl(211 74% 48%); }
+.onboarding-icon.tone-green { color: hsl(152 46% 38%); }
+
+.onboarding-card strong {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.onboarding-card > span:last-child {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+@media (max-width: 1320px) {
+  .onboarding-paths {
+    grid-template-columns: 1fr;
+    width: min(360px, 100%);
+  }
+}
+
 .starter-prompts {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

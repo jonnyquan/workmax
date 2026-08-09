@@ -3080,6 +3080,76 @@ async function testComposerChipsNameRuntimeAndIdentity() {
 // Content search: the title filter answers instantly from memory; message
 // bodies are the sidecar's to search. The two layers must compose without
 // the async one ever lying about which query it answers.
+// First run, neither signed in nor a local model configured: the two ways
+// of working are presented as equals, and each card leads somewhere real.
+async function testOnboardingPathsLeadSomewhere() {
+  let beginCalls = 0;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
+      }
+      if (pathname === "/settings/model-route") {
+        return response({
+          preferred_route: "official",
+          local: { protocol: "", base_url: "", model_id: "", api_key_configured: false },
+          updated_at: "2026-08-08T00:00:00Z",
+        });
+      }
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const { desktopBridge } = localModeBridge({ localRoute: false });
+  desktopBridge.settings = {
+    async getModelRoute() {
+      return typedSuccess({
+        preferred_route: "official",
+        local: { protocol: "", base_url: "", model_id: "", api_key_configured: false },
+        updated_at: "2026-08-08T00:00:00Z",
+      });
+    },
+    async putModelRoute() { throw new Error("not exercised"); },
+  };
+  desktopBridge.auth = {
+    async beginLogin() {
+      beginCalls += 1;
+      return { state: "awaiting_password" };
+    },
+    async loginStatus() { return { state: "idle" }; },
+    async submitLoginPassword() { throw new Error("not exercised"); },
+    async cancelLogin() { return { state: "idle" }; },
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  assert.equal(document.byId.get("onboarding-paths").hidden, false, "first run shows both paths");
+
+  // The local path opens the Models form — the actual next step, not a hint.
+  document.byId.get("onboarding-local").click();
+  await settle();
+  assert.equal(
+    document.byId.get("model-settings-form").hidden,
+    false,
+    "choosing local opens the model settings form",
+  );
+
+  // The sign-in path starts the real login transaction.
+  document.byId.get("onboarding-signin").click();
+  await settle();
+  assert.equal(beginCalls, 1, "choosing sign-in begins the login transaction");
+}
+
+async function testOnboardingHiddenOnceUsable() {
+  const { bridge, desktopBridge } = localModeBridge({ localRoute: true });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+  assert.equal(
+    document.byId.get("onboarding-paths").hidden,
+    true,
+    "a usable app must not re-ask a question the user already answered",
+  );
+}
+
 async function testSidebarContentSearch() {
   const searchCalls = [];
   let pendingResolve = null;
@@ -3481,8 +3551,13 @@ async function testSignedOutWithoutLocalRouteStaysGated() {
   assert.equal(document.byId.get("chat-input").disabled, true);
   assert.match(
     document.byId.get("empty-title").textContent,
-    /Sign in/,
-    "the empty state must still ask for a sign-in",
+    /How do you want to work/,
+    "the empty state must offer a way forward",
+  );
+  assert.equal(
+    document.byId.get("onboarding-paths").hidden,
+    false,
+    "both ways of working are presented side by side, not a sign-in wall",
   );
 }
 
@@ -5753,6 +5828,8 @@ await testLocalAccountDeleteIsArmedAndScoped();
 await testComposerChipsNameRuntimeAndIdentity();
 await testComposerAccountChipSkipsTheDefaultIdentity();
 await testExportThreadWritesAndReveals();
+await testOnboardingPathsLeadSomewhere();
+await testOnboardingHiddenOnceUsable();
 await testSidebarContentSearch();
 await testPaletteRunsCommands();
 await testPaletteOpensWithoutThreads();

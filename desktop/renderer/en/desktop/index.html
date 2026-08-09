@@ -236,6 +236,18 @@
           <p class="eyebrow">PPT Agent</p>
           <h2 id="empty-title">Continue from local history</h2>
           <p id="empty-description">Select a synced thread to read its cached messages and continue the conversation.</p>
+          <div id="onboarding-paths" class="onboarding-paths" hidden>
+            <button id="onboarding-signin" class="onboarding-card" type="button">
+              <span class="onboarding-icon tone-blue" aria-hidden="true">☁</span>
+              <strong>Sign in to WorkMax</strong>
+              <span>Sync conversations across devices and use cloud models.</span>
+            </button>
+            <button id="onboarding-local" class="onboarding-card" type="button">
+              <span class="onboarding-icon tone-green" aria-hidden="true">⌂</span>
+              <strong>Use a local model</strong>
+              <span>No account. Point WorkMax at a local endpoint — everything stays on this machine.</span>
+            </button>
+          </div>
           <div id="starter-prompts" class="starter-prompts" hidden></div>
           <button id="empty-new-thread-button" class="primary empty-action" type="button" disabled>New thread</button>
         </div>
