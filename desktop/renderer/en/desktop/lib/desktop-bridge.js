@@ -17,6 +17,8 @@ const ROUTES = {
     localListAccounts: defineTypedRoute("local.listAccounts", "local.accounts.list", "GET", "/local/accounts", "none", null),
     localCreateAccount: defineTypedRoute("local.createAccount", "local.accounts.create", "POST", "/local/accounts", "json", "application/json"),
     localSelectAccount: defineTypedRoute("local.selectAccount", "local.accounts.select", "POST", "/local/accounts/:id/select", "none", null),
+    localRenameAccount: defineTypedRoute("local.renameAccount", "local.accounts.rename", "PATCH", "/local/accounts/:id", "json", "application/json"),
+    localDeleteAccount: defineTypedRoute("local.deleteAccount", "local.accounts.delete", "DELETE", "/local/accounts/:id", "none", null),
     agentListModes: defineTypedRoute("agent.listModes", "agent.skills.modes", "GET", "/agent/skills/modes", "none", null),
     agentCreateThread: defineTypedRoute("agent.createThread", "agent.thread-put", "PUT", "/agent/threads/:uuid", "json", "application/json"),
     agentDeleteThread: defineTypedRoute("agent.deleteThread", "agent.thread-delete", "DELETE", "/agent/threads/:uuid", "none", null),
@@ -66,6 +68,20 @@ function createDesktopBridge(deps) {
                 }
                 const path = ROUTES.localSelectAccount.path.replace(":id", String(id));
                 return execute(deps, ROUTES.localSelectAccount, path);
+            },
+            renameAccount: async (id, name) => {
+                if (!Number.isInteger(id) || id <= 0) {
+                    throw new Error("renameAccount id must be a positive integer");
+                }
+                const path = ROUTES.localRenameAccount.path.replace(":id", String(id));
+                return execute(deps, ROUTES.localRenameAccount, path, { name });
+            },
+            deleteAccount: async (id) => {
+                if (!Number.isInteger(id) || id <= 0) {
+                    throw new Error("deleteAccount id must be a positive integer");
+                }
+                const path = ROUTES.localDeleteAccount.path.replace(":id", String(id));
+                return execute(deps, ROUTES.localDeleteAccount, path);
             },
         },
         history: {
@@ -197,7 +213,13 @@ function buildCapabilities() {
             },
             local: {
                 supported: true,
-                methods: ["listAccounts", "createAccount", "selectAccount"],
+                methods: [
+                    "listAccounts",
+                    "createAccount",
+                    "selectAccount",
+                    "renameAccount",
+                    "deleteAccount",
+                ],
             },
             history: {
                 supported: true,

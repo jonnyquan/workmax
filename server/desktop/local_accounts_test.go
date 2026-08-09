@@ -203,3 +203,30 @@ func TestLocalAccountThreadIsolation(t *testing.T) {
 		t.Fatalf("second account sees %q, want its own thread", name)
 	}
 }
+
+func TestRenameLocalAccount(t *testing.T) {
+	db := openLocalAccountsTestDB(t)
+	created, err := createLocalAccount(db, "Ming")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	renamed, err := renameLocalAccount(db, created.ID, "  明  ")
+	if err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if renamed.Name != "明" {
+		t.Fatalf("name = %q, want trimmed 明", renamed.Name)
+	}
+	if renamed.UID != created.UID {
+		t.Fatalf("rename moved the uid: %d → %d — the name is a label, not the identity", created.UID, renamed.UID)
+	}
+	if _, err := renameLocalAccount(db, created.ID, defaultLocalAccountName); !errors.Is(err, errLocalAccountTaken) {
+		t.Fatalf("rename onto existing name: %v, want errLocalAccountTaken", err)
+	}
+	if _, err := renameLocalAccount(db, 99, "x"); !errors.Is(err, errLocalAccountNotFound) {
+		t.Fatalf("rename missing: %v, want errLocalAccountNotFound", err)
+	}
+	if _, err := renameLocalAccount(db, created.ID, "\n"); !errors.Is(err, errLocalAccountName) {
+		t.Fatalf("rename invalid: %v, want errLocalAccountName", err)
+	}
+}

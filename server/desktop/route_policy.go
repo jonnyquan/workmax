@@ -105,6 +105,8 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	newCurrentSidecarRoutePolicy("local.accounts.list", http.MethodGet, "/local/accounts", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("local.accounts.create", http.MethodPost, "/local/accounts", SidecarBodyRequired, maxLocalAccountBodyBytes, "application/json"),
 	newCurrentSidecarRoutePolicy("local.accounts.select", http.MethodPost, "/local/accounts/:id/select", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("local.accounts.rename", http.MethodPatch, "/local/accounts/:id", SidecarBodyRequired, maxLocalAccountBodyBytes, "application/json"),
+	newCurrentSidecarRoutePolicy("local.accounts.delete", http.MethodDelete, "/local/accounts/:id", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.threads", http.MethodGet, "/agent/threads", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-messages", http.MethodGet, "/agent/threads/:uuid/messages", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("system.network-state", http.MethodGet, "/system/network-state", SidecarBodyForbidden, 0),
@@ -315,6 +317,10 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handleCreateLocalAccount, true
 	case "local.accounts.select":
 		return s.handleSelectLocalAccount, true
+	case "local.accounts.rename":
+		return s.handleRenameLocalAccount, true
+	case "local.accounts.delete":
+		return s.handleDeleteLocalAccount, true
 	case "agent.threads":
 		return s.handleListThreads, true
 	case "agent.thread-messages":

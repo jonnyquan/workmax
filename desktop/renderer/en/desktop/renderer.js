@@ -42,11 +42,20 @@ const state = {
   // path only; the active one decides which uid the local route runs as.
   localAccounts: [],
   localAccountPanelOpen: false,
+  // The id being renamed inline, or null. While set, background repaints
+  // (auth polling → updateComposerState) must NOT rebuild the account list —
+  // a repaint that eats the user's half-typed name is data loss in miniature.
+  localAccountRenamingID: null,
+  // True when /agent/modes answered but this UI could not parse it — version
+  // skew between renderer and sidecar. Surfaced instead of the generic
+  // signed-out status, which would bury the real problem.
+  modesParseSkew: false,
   // Whether a local turn right now runs the L2 tool loop or pure chat. The
   // dispatch falls back silently; the composer must not.
   toolLoop: false,
 };
 
+const defaultLocalAccountLabel = "Local";
 const AUTH_POLL_INTERVAL_MS = 1000;
 const AUTH_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const AUTH_STATES = new Set(["authenticated", "unauthenticated", "expired"]);
@@ -1333,8 +1342,14 @@ async function loadLocalModes(expectedSessionGeneration = state.sessionGeneratio
   try {
     modes = parseAgentModes(result.data);
   } catch {
+    // The sidecar ANSWERED — in a shape this UI cannot read. That is version
+    // skew (stale binary, newer renderer, or vice versa), and silently
+    // falling back to the sign-in wall buries the real problem. The flag is
+    // read wherever boot writes its final status, so the message wins.
+    state.modesParseSkew = true;
     return false;
   }
+  state.modesParseSkew = false;
   state.localRoute = modes.local_route;
   state.toolLoop = modes.tool_loop;
   void loadLocalAccounts(expectedSessionGeneration);
@@ -1424,6 +1439,7 @@ function renderLocalAccountArea() {
   localAccountRow.hidden = !visible;
   if (!visible) {
     state.localAccountPanelOpen = false;
+    state.localAccountRenamingID = null;
     localAccountPanel.hidden = true;
     return;
   }
@@ -1433,25 +1449,193 @@ function renderLocalAccountArea() {
   }
   localAccountPanel.hidden = !state.localAccountPanelOpen;
   if (!state.localAccountPanelOpen || !localAccountListEl) return;
+  if (state.localAccountRenamingID !== null) return;
   localAccountListEl.textContent = "";
   for (const account of state.localAccounts) {
-    const item = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "local-account-item";
-    button.classList.toggle("active", account.active);
-    button.dataset.accountId = String(account.id);
-    button.textContent = account.active ? account.name + " · active" : account.name;
-    button.addEventListener("click", () => {
-      void selectLocalAccountByID(account.id);
-    });
-    item.appendChild(button);
-    localAccountListEl.appendChild(item);
+    localAccountListEl.appendChild(renderLocalAccountItem(account));
   }
+}
+
+// The context chips above the input, Codex-style: where the turn will run
+// and who it will run as. Facts the dispatch already knows, surfaced where
+// the typing happens instead of buried in Models/settings.
+function renderComposerChips() {
+  const runtime = document.querySelector("#runtime-chip");
+  const accountChip = document.querySelector("#account-chip");
+  if (runtime) {
+    if (!canUseAgent()) {
+      runtime.hidden = true;
+    } else if (state.localRoute) {
+      runtime.textContent = state.toolLoop ? "⌂ Local · tools" : "⌂ Local · chat";
+      runtime.hidden = false;
+    } else {
+      runtime.textContent = "☁ Cloud";
+      runtime.hidden = false;
+    }
+  }
+  if (accountChip) {
+    const account = isLocalOnlySession() ? activeLocalAccount() : null;
+    // The default identity is nobody in particular; naming it next to a
+    // "Local" runtime chip would just say Local twice.
+    if (account && account.name !== defaultLocalAccountLabel) {
+      accountChip.textContent = account.name;
+      accountChip.hidden = false;
+    } else {
+      accountChip.hidden = true;
+    }
+  }
+}
+
+function renderLocalAccountItem(account) {
+  const item = document.createElement("li");
+  item.className = "local-account-entry";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "local-account-item";
+  button.classList.toggle("active", account.active);
+  button.dataset.accountId = String(account.id);
+  button.textContent = account.active ? account.name + " · active" : account.name;
+  button.addEventListener("click", () => {
+    void selectLocalAccountByID(account.id);
+  });
+  item.appendChild(button);
+
+  const rename = document.createElement("button");
+  rename.type = "button";
+  rename.className = "local-account-action";
+  rename.textContent = "Rename";
+  rename.setAttribute("aria-label", "Rename " + account.name);
+  rename.addEventListener("click", () => {
+    startLocalAccountRename(item, account);
+  });
+  item.appendChild(rename);
+
+  // Deleting an identity deletes everything it owns — but never the one you
+  // are: switching away first keeps "delete who I am right now" impossible.
+  if (!account.active) {
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "local-account-action danger";
+    del.textContent = "Delete";
+    del.setAttribute("aria-label", "Delete " + account.name + " and all its data");
+    del.addEventListener("click", () => {
+      if (!del.classList.contains("armed")) {
+        del.classList.add("armed");
+        del.textContent = "Delete all its data?";
+        setTimeout(() => {
+          del.classList.remove("armed");
+          del.textContent = "Delete";
+        }, DELETE_ARM_MS);
+        return;
+      }
+      del.disabled = true;
+      void deleteLocalAccountByID(account);
+    });
+    item.appendChild(del);
+  }
+  return item;
+}
+
+// startLocalAccountRename swaps the row into an inline form, mirroring the
+// thread rename interaction so there is one editing idiom in the app.
+function startLocalAccountRename(item, account) {
+  state.localAccountRenamingID = account.id;
+  item.textContent = "";
+  const form = document.createElement("form");
+  form.className = "local-account-rename";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = account.name;
+  input.maxLength = 64;
+  input.setAttribute("aria-label", "New name for " + account.name);
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.className = "primary";
+  save.textContent = "Save";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => {
+    state.localAccountRenamingID = null;
+    renderLocalAccountArea();
+  });
+  form.appendChild(input);
+  form.appendChild(save);
+  form.appendChild(cancel);
+  form.addEventListener("submit", (event) => {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+    void submitLocalAccountRename(account, input.value);
+  });
+  item.appendChild(form);
+  if (typeof input.focus === "function") input.focus();
+}
+
+async function submitLocalAccountRename(account, rawName) {
+  state.localAccountRenamingID = null;
+  const local = desktopLocalAccountsBridge();
+  if (!local || typeof local.renameAccount !== "function") return;
+  const name = String(rawName || "").trim();
+  if (!name || name === account.name) {
+    renderLocalAccountArea();
+    return;
+  }
+  try {
+    const result = parseDesktopBridgeResult(
+      await local.renameAccount(account.id, name),
+      "rename local account result"
+    );
+    if (!result.ok) {
+      const raw = isRecord(result.error) ? result.error.error : result.error;
+      const reason = sanitizeErrorMessage(raw);
+      throw new Error(
+        reason === "name_taken"
+          ? "An account with that name already exists"
+          : reason || "Could not rename account"
+      );
+    }
+  } catch (error) {
+    setStatus(String(error.message || error), "error");
+    renderLocalAccountArea();
+    return;
+  }
+  setStatus('Renamed to "' + name + '"');
+  await loadLocalAccounts();
+}
+
+async function deleteLocalAccountByID(account) {
+  const local = desktopLocalAccountsBridge();
+  if (!local || typeof local.deleteAccount !== "function") return;
+  try {
+    const result = parseDesktopBridgeResult(
+      await local.deleteAccount(account.id),
+      "delete local account result"
+    );
+    if (!result.ok) {
+      const raw = isRecord(result.error) ? result.error.error : result.error;
+      const reason = sanitizeErrorMessage(raw);
+      throw new Error(
+        reason === "account_busy"
+          ? "That account has a turn running — stop it first"
+          : reason === "account_active"
+            ? "Switch away from an account before deleting it"
+            : reason || "Could not delete account"
+      );
+    }
+    const data = isRecord(result.data) ? result.data : {};
+    const threads = Number.isInteger(data.threads) ? data.threads : 0;
+    setStatus(
+      'Deleted "' + account.name + '"' +
+        (threads > 0 ? " and its " + threads + " conversation" + (threads === 1 ? "" : "s") : "")
+    );
+  } catch (error) {
+    setStatus(String(error.message || error), "error");
+  }
+  await loadLocalAccounts();
 }
 
 function toggleLocalAccountPanel() {
   state.localAccountPanelOpen = !state.localAccountPanelOpen;
+  state.localAccountRenamingID = null;
   renderLocalAccountArea();
   if (state.localAccountPanelOpen && localAccountNameInput) {
     localAccountNameInput.value = "";
@@ -2434,6 +2618,7 @@ function updateRecoveryState() {
 
 function updateComposerState() {
   renderLocalAccountArea();
+  renderComposerChips();
   const authenticated = canUseAgent();
   const hasThread = Boolean(state.selectedThreadUUID);
   const hasMode = state.allowedModes.includes(state.selectedMode);
@@ -2459,6 +2644,13 @@ function updateComposerState() {
   agentMode.hidden = singleSkill;
   const modeLabel = document.querySelector("#agent-mode-label");
   if (modeLabel) modeLabel.hidden = singleSkill;
+  // The chip keeps the mode visible when the selector has nothing to select.
+  const modeChip = document.querySelector("#mode-chip");
+  if (modeChip) {
+    const shown = singleSkill && authenticated && state.selectedMode !== "";
+    modeChip.hidden = !shown;
+    if (shown) modeChip.textContent = state.selectedMode.toUpperCase();
+  }
   chatInput.disabled = !ready;
   sendButton.disabled = !ready || !isValidChatText(chatInput.value);
   stopButton.hidden = !active;
@@ -2559,14 +2751,20 @@ function canOpenNewThread() {
 const STARTER_PROMPTS = [
   {
     title: "Quarterly business review",
+    icon: "▤",
+    tone: "tone-blue",
     prompt: "Turn my Q3 numbers into an 8-slide business review. Ask me for the figures you need first.",
   },
   {
     title: "Product launch deck",
+    icon: "▶",
+    tone: "tone-violet",
     prompt: "Outline a product launch deck, then draft speaker notes for each slide.",
   },
   {
     title: "Brief from documents",
+    icon: "≡",
+    tone: "tone-green",
     prompt: "Summarize the documents I attach into a one-page executive brief.",
   },
 ];
@@ -2578,11 +2776,16 @@ function buildStarterCards() {
     const card = document.createElement("button");
     card.type = "button";
     card.className = "starter-card";
+    const icon = document.createElement("span");
+    icon.className = "starter-icon " + starter.tone;
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = starter.icon;
     const title = document.createElement("strong");
     title.textContent = starter.title;
     const preview = document.createElement("span");
+    preview.className = "starter-preview";
     preview.textContent = starter.prompt;
-    card.append(title, preview);
+    card.append(icon, title, preview);
     card.addEventListener("click", () => {
       state.starterPrompt = starter.prompt;
       openNewThreadForm();
@@ -2597,23 +2800,25 @@ function renderEmptyState() {
     emptyTitle.textContent = "Sign in to use WorkMax Agent";
     emptyDescription.textContent =
       "Sign in to sync presentation threads — or point Models at a local endpoint and work without an account.";
-  } else if (isLocalOnlySession() && state.threads.length === 0) {
-    emptyTitle.textContent = "Start a local thread";
-    emptyDescription.textContent =
-      "No account needed. Turns run on the model configured under Models, and the history stays in this app's own database.";
-  } else if (state.threads.length === 0 && state.createAvailable) {
-    emptyTitle.textContent = "Start a presentation thread";
-    emptyDescription.textContent = "Create a synced thread, then describe the deck you want to build.";
-  } else if (state.threads.length === 0) {
-    emptyTitle.textContent = "No synced threads yet";
-    emptyDescription.textContent = "This Desktop build can continue existing threads after they appear in local history.";
-  } else if (isLocalOnlySession()) {
-    emptyTitle.textContent = "Continue from local history";
-    emptyDescription.textContent =
-      "Select a thread to read it and keep going. Nothing here is synced — it lives in this app's own database.";
   } else {
-    emptyTitle.textContent = "Continue from local history";
-    emptyDescription.textContent = "Select a synced thread to read its cached messages and continue the conversation.";
+    // One question, Codex-style: the app is usable, so the headline invites
+    // work instead of describing machinery. The identity joins the question
+    // when it is a real name — "What should we make, Local?" is nobody.
+    const account = isLocalOnlySession() ? activeLocalAccount() : null;
+    emptyTitle.textContent =
+      account && account.name !== defaultLocalAccountLabel
+        ? "What should we make, " + account.name + "?"
+        : "What should we make today?";
+    if (isLocalOnlySession()) {
+      emptyDescription.textContent = state.toolLoop
+        ? "Runs on your local model with tools. Everything stays in this app's own database."
+        : "Runs on your local model. Everything stays in this app's own database.";
+    } else if (state.threads.length === 0 && !state.createAvailable) {
+      emptyDescription.textContent =
+        "This Desktop build can continue existing threads after they appear in local history.";
+    } else {
+      emptyDescription.textContent = "Pick a conversation on the left, or start fresh below.";
+    }
   }
   emptyNewThreadButton.hidden = !authenticated || !state.createAvailable;
   const starters = document.querySelector("#starter-prompts");
@@ -4094,7 +4299,11 @@ async function applyLoginTransactionResult(result, pollSubmitting = false, gener
   switch (result.state) {
     case "idle":
       setLoginFormState(false);
-      setStatus("Signed out. Sign in to sync your cloud history.");
+      if (state.modesParseSkew) {
+        setStatus("App and sidecar are out of sync: the sidecar's answers no longer match this UI. Restart the app; if this persists, reinstall.", "error");
+      } else {
+        setStatus("Signed out. Sign in to sync your cloud history.");
+      }
       return;
     case "awaiting_password":
       setLoginFormState(true);
@@ -4438,6 +4647,14 @@ async function refresh() {
           : "Signed out. Sign in to sync your cloud history."
       );
       await restoreLoginTransaction();
+      // Last word on purpose: whatever the login machinery wrote above, a
+      // version skew is the thing the user actually needs to know about.
+      if (state.modesParseSkew && generation === state.sessionGeneration) {
+        setStatus(
+          "App and sidecar are out of sync: the sidecar's answers no longer match this UI. Restart the app; if this persists, reinstall.",
+          "error"
+        );
+      }
       return;
     }
     state.localRoute = false;

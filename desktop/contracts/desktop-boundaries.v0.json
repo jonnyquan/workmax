@@ -79,6 +79,14 @@
         "routeId": "local.accounts.select"
       },
       {
+        "bridgeMethod": "local.renameAccount",
+        "routeId": "local.accounts.rename"
+      },
+      {
+        "bridgeMethod": "local.deleteAccount",
+        "routeId": "local.accounts.delete"
+      },
+      {
         "bridgeMethod": "agent.createThread",
         "routeId": "agent.thread-put"
       },
@@ -565,6 +573,33 @@
       "id": "local.accounts.select",
       "method": "POST",
       "path": "/local/accounts/:id/select",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "local.accounts.rename",
+      "method": "PATCH",
+      "path": "/local/accounts/:id",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 2048,
+        "bodyTooLargeError": "request body too large"
+      }
+    },
+    {
+      "id": "local.accounts.delete",
+      "method": "DELETE",
+      "path": "/local/accounts/:id",
       "credential": "local-token",
       "requestPolicy": {
         "origin": "absent",

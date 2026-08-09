@@ -265,6 +265,13 @@ export interface LocalAccount {
   last_used_at: string;
 }
 
+export interface LocalAccountDeletion {
+  deleted: boolean;
+  threads: number;
+  messages: number;
+  files: number;
+}
+
 export interface LocalAccountList {
   items: LocalAccount[];
   count: number;
@@ -469,6 +476,13 @@ export interface DesktopBridge {
     selectAccount: (
       id: number
     ) => Promise<DesktopBridgeResult<{ selected: boolean }>>;
+    renameAccount: (
+      id: number,
+      name: string
+    ) => Promise<DesktopBridgeResult<LocalAccount>>;
+    deleteAccount: (
+      id: number
+    ) => Promise<DesktopBridgeResult<LocalAccountDeletion>>;
   };
   history: {
     listThreads: (
@@ -660,6 +674,22 @@ const ROUTES = {
     "none",
     null
   ),
+  localRenameAccount: defineTypedRoute(
+    "local.renameAccount",
+    "local.accounts.rename",
+    "PATCH",
+    "/local/accounts/:id",
+    "json",
+    "application/json"
+  ),
+  localDeleteAccount: defineTypedRoute(
+    "local.deleteAccount",
+    "local.accounts.delete",
+    "DELETE",
+    "/local/accounts/:id",
+    "none",
+    null
+  ),
   agentListModes: defineTypedRoute(
     "agent.listModes",
     "agent.skills.modes",
@@ -842,6 +872,20 @@ export function createDesktopBridge(
         }
         const path = ROUTES.localSelectAccount.path.replace(":id", String(id));
         return execute<{ selected: boolean }>(deps, ROUTES.localSelectAccount, path);
+      },
+      renameAccount: async (id, name) => {
+        if (!Number.isInteger(id) || id <= 0) {
+          throw new Error("renameAccount id must be a positive integer");
+        }
+        const path = ROUTES.localRenameAccount.path.replace(":id", String(id));
+        return execute<LocalAccount>(deps, ROUTES.localRenameAccount, path, { name });
+      },
+      deleteAccount: async (id) => {
+        if (!Number.isInteger(id) || id <= 0) {
+          throw new Error("deleteAccount id must be a positive integer");
+        }
+        const path = ROUTES.localDeleteAccount.path.replace(":id", String(id));
+        return execute<LocalAccountDeletion>(deps, ROUTES.localDeleteAccount, path);
       },
     },
     history: {
@@ -1037,7 +1081,13 @@ function buildCapabilities(): DesktopBridgeCapabilities {
       },
       local: {
         supported: true,
-        methods: ["listAccounts", "createAccount", "selectAccount"],
+        methods: [
+          "listAccounts",
+          "createAccount",
+          "selectAccount",
+          "renameAccount",
+          "deleteAccount",
+        ],
       },
       history: {
         supported: true,

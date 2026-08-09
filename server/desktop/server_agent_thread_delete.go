@@ -7,6 +7,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -100,12 +102,43 @@ func (s *Server) handleDeleteAgentThread(c *gin.Context) {
 		return
 	}
 
+	purge, err := s.purgeLocalThread(uid, threadID, threadUUID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "thread_delete_failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, deleteAgentThreadResponse{
+		Deleted:       true,
+		Messages:      purge.messages,
+		Files:         purge.files,
+		TurnIntents:   purge.intents,
+		IndexCleanups: purge.indexCleanups,
+	})
+}
+
+// threadPurgeResult reports what one thread's cascade actually removed.
+type threadPurgeResult struct {
+	messages      int64
+	intents       int64
+	files         int
+	indexCleanups int
+}
+
+// purgeLocalThread removes everything one thread owns: file rows and bytes,
+// conversational rows (atomically), the L2 agent workspace directory, and the
+// RAG chunks. Shared by thread delete and local-account delete — the cascade
+// must be one piece of code, or the two paths will rot apart.
+//
+// The caller has already verified ownership and that no turn is running.
+func (s *Server) purgeLocalThread(uid uint64, threadID uint64, threadUUID string) (threadPurgeResult, error) {
+	var purge threadPurgeResult
+
 	// Collected before the rows go away: the knowledge index is keyed by turn
 	// UUID and file id, and after the transaction there is nothing left to ask.
 	turnUUIDs, err := listThreadTurnUUIDs(s.cfg.DB, uid, threadUUID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "thread_delete_failed"})
-		return
+		return purge, err
 	}
 
 	// Files first (rows + bytes), because the store owns both halves and
@@ -114,37 +147,48 @@ func (s *Server) handleDeleteAgentThread(c *gin.Context) {
 	if s.cfg.LocalFiles != nil {
 		fileIDs, err = s.cfg.LocalFiles.DeleteThreadFiles(uid, threadID, threadUUID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "thread_delete_failed"})
-			return
+			return purge, err
 		}
 	}
+	purge.files = len(fileIDs)
 
 	// The conversational rows, atomically: a thread must not survive its
 	// messages or vice versa.
-	var messages, intents int64
 	txErr := s.cfg.DB.Transaction(func(tx *gorm.DB) error {
 		res := tx.Exec(`DELETE FROM w_workagent_message WHERE uid = ? AND thread_id = ?`, uid, threadID)
 		if res.Error != nil {
 			return res.Error
 		}
-		messages = res.RowsAffected
+		purge.messages = res.RowsAffected
 		res = tx.Exec(`DELETE FROM w_desktop_agent_turn_intent WHERE uid = ? AND thread_uuid = ?`, uid, threadUUID)
 		if res.Error != nil {
 			return res.Error
 		}
-		intents = res.RowsAffected
+		purge.intents = res.RowsAffected
 		return tx.Exec(`DELETE FROM w_workagent_thread WHERE uid = ? AND id = ?`, uid, threadID).Error
 	})
 	if txErr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "thread_delete_failed"})
-		return
+		return purge, txErr
+	}
+
+	// The L2 workspace directory: files the tool loop produced. Until this
+	// call they outlived every deletion — "your data leaves when you say so"
+	// has to include what the agent wrote, not only what you uploaded. The
+	// uuid is canonical v4 (validated at every entry point), so the joined
+	// path cannot point anywhere but this thread's own directory.
+	if s.cfg.DataDir != "" {
+		dir := filepath.Join(s.cfg.DataDir, "agent_workspace", "thread_"+threadUUID)
+		if err := os.RemoveAll(dir); err != nil {
+			// Best-effort like the knowledge cleanup: the rows are gone, and
+			// a directory that resists deletion is logged residue.
+			log.Printf("workspace: remove %s after thread delete: %v", dir, err)
+		}
 	}
 
 	// Knowledge cleanup last and best-effort: the user asked for the thread to
 	// be gone, and it is. Chunks that fail to delete are logged residue, not a
 	// reason to report the deletion as failed — the rows they described no
 	// longer exist, so they can never again be attributed to anything.
-	cleanups := 0
 	if s.cfg.KnowledgeIndex != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -153,24 +197,17 @@ func (s *Server) handleDeleteAgentThread(c *gin.Context) {
 				log.Printf("knowledge: remove file %d after thread delete: %v", fileID, err)
 				continue
 			}
-			cleanups++
+			purge.indexCleanups++
 		}
 		for _, turnUUID := range turnUUIDs {
 			if _, err := s.cfg.KnowledgeIndex.RemoveTurn(ctx, turnUUID); err != nil {
 				log.Printf("knowledge: remove turn %s after thread delete: %v", turnUUID, err)
 				continue
 			}
-			cleanups++
+			purge.indexCleanups++
 		}
 	}
-
-	c.JSON(http.StatusOK, deleteAgentThreadResponse{
-		Deleted:       true,
-		Messages:      messages,
-		Files:         len(fileIDs),
-		TurnIntents:   intents,
-		IndexCleanups: cleanups,
-	})
+	return purge, nil
 }
 
 // listThreadTurnUUIDs returns every turn the thread has ever run, from the

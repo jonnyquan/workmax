@@ -150,6 +150,38 @@ func createLocalAccount(db *gorm.DB, rawName string) (LocalAccount, error) {
 	return LocalAccount{ID: id, Name: name, UID: localAccountUID(id), CreatedAt: now, LastUsedAt: now}, nil
 }
 
+// renameLocalAccount renames one identity. The uid does not move: the name
+// is a label on the identity, not the identity itself.
+func renameLocalAccount(db *gorm.DB, id int64, rawName string) (LocalAccount, error) {
+	name, err := normalizeLocalAccountName(rawName)
+	if err != nil {
+		return LocalAccount{}, err
+	}
+	res := db.Exec(`UPDATE w_desktop_local_account SET name = ? WHERE id = ?`, name, id)
+	if res.Error != nil {
+		if strings.Contains(strings.ToLower(res.Error.Error()), "unique") {
+			return LocalAccount{}, errLocalAccountTaken
+		}
+		return LocalAccount{}, fmt.Errorf("local accounts: rename: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return LocalAccount{}, errLocalAccountNotFound
+	}
+	var (
+		a      LocalAccount
+		active int
+	)
+	row := db.Raw(
+		`SELECT id, name, is_active, created_at, last_used_at FROM w_desktop_local_account WHERE id = ?`, id,
+	).Row()
+	if err := row.Scan(&a.ID, &a.Name, &active, &a.CreatedAt, &a.LastUsedAt); err != nil {
+		return LocalAccount{}, fmt.Errorf("local accounts: rename read back: %w", err)
+	}
+	a.Active = active == 1
+	a.UID = localAccountUID(a.ID)
+	return a, nil
+}
+
 // selectLocalAccount makes one account active — atomically exactly one.
 func selectLocalAccount(db *gorm.DB, id int64) error {
 	if err := ensureDefaultLocalAccount(db); err != nil {

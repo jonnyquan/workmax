@@ -228,6 +228,7 @@
       </aside>
       <section class="content" aria-live="polite">
         <div id="empty-state" class="empty-state">
+          <div class="empty-glyph" aria-hidden="true">✦</div>
           <p class="eyebrow">PPT Agent</p>
           <h2 id="empty-title">Continue from local history</h2>
           <p id="empty-description">Select a synced thread to read its cached messages and continue the conversation.</p>
@@ -284,10 +285,13 @@
           </section>
           <form id="chat-form" class="composer" novalidate>
             <div class="composer-toolbar">
-              <label id="agent-mode-label" for="agent-mode">Skill</label>
+              <label id="agent-mode-label" class="sr-only" for="agent-mode">Skill</label>
               <select id="agent-mode" aria-label="Agent skill" disabled>
                 <option value="">Loading...</option>
               </select>
+              <span id="mode-chip" class="composer-chip mode-chip" hidden></span>
+              <span id="runtime-chip" class="composer-chip" hidden></span>
+              <span id="account-chip" class="composer-chip" hidden></span>
               <span id="composer-status">Select a synced thread to continue.</span>
             </div>
             <label class="composer-input" for="chat-input">
@@ -307,7 +311,7 @@
               <span>⌘↵ to send</span>
               <span id="composer-capacity" hidden></span>
               <button id="stop-button" type="button" hidden>Stop</button>
-              <button id="send-button" class="primary" type="submit" disabled>Send</button>
+              <button id="send-button" class="primary send-round" type="submit" aria-label="Send" disabled>↑</button>
             </div>
           </form>
         </div>

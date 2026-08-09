@@ -2790,7 +2790,7 @@ function localModeBridge({ localRoute, accounts }) {
       async cancelTurn(turnID) { return { turnID, canceled: true }; },
     },
   };
-  const accountCalls = { list: 0, created: [], selected: [] };
+  const accountCalls = { list: 0, created: [], selected: [], renamed: [], deleted: [] };
   if (accounts) {
     desktopBridge.local = {
       async listAccounts() {
@@ -2807,6 +2807,18 @@ function localModeBridge({ localRoute, accounts }) {
         accountCalls.selected.push(id);
         for (const account of accounts) account.active = account.id === id;
         return typedSuccess({ selected: true });
+      },
+      async renameAccount(id, name) {
+        accountCalls.renamed.push([id, name]);
+        const target = accounts.find((account) => account.id === id);
+        if (target) target.name = name;
+        return typedSuccess(target ?? { id, name, active: false });
+      },
+      async deleteAccount(id) {
+        accountCalls.deleted.push(id);
+        const idx = accounts.findIndex((account) => account.id === id);
+        if (idx >= 0) accounts.splice(idx, 1);
+        return typedSuccess({ deleted: true, threads: 2, messages: 5, files: 1 });
       },
     };
   }
@@ -2911,6 +2923,180 @@ async function testLocalAccountCreateDoesNotSwitch() {
     document.byId.get("status-card").textContent,
     /Created "Ming"/,
     "the user is told what happened and what to do next",
+  );
+}
+
+async function testLocalAccountRenameIsALabelChange() {
+  const accounts = [
+    { id: 1, name: "Local", active: true },
+    { id: 2, name: "Ming", active: false },
+  ];
+  const { bridge, desktopBridge, accountCalls } = localModeBridge({
+    localRoute: true,
+    accounts,
+  });
+  const { context, document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  document.byId.get("local-account-row").click();
+  await settle();
+  const renameButtons = walk(
+    document.byId.get("local-account-list"),
+    (node) => node.classList?.contains("local-account-action") && node.textContent === "Rename",
+  );
+  assert.equal(renameButtons.length, 2, "every account can be renamed, active included");
+  renameButtons[1].click();
+  await settle();
+
+  const input = walk(
+    document.byId.get("local-account-list"),
+    (node) => node.tagName === "INPUT",
+  )[0];
+  assert.ok(input, "rename swaps the row into an inline form");
+  assert.equal(input.value, "Ming", "the form starts from the current name");
+  input.value = "  明  ";
+  // The auth poll repaints the sidebar every second; a repaint mid-edit must
+  // not eat the half-typed name. (Found live by the first rename E2E.)
+  vm.runInContext("updateComposerState()", context);
+  const inputAfterRepaint = walk(
+    document.byId.get("local-account-list"),
+    (node) => node.tagName === "INPUT",
+  )[0];
+  assert.ok(inputAfterRepaint, "a background repaint must not destroy the rename form");
+  assert.equal(
+    inputAfterRepaint.value,
+    "  明  ",
+    "the half-typed name survives the repaint",
+  );
+  const form = walk(
+    document.byId.get("local-account-list"),
+    (node) => node.tagName === "FORM",
+  )[0];
+  form.submit();
+  await settle();
+  await settle();
+
+  assert.deepEqual(accountCalls.renamed, [[2, "明"]], "the trimmed name is sent to the right account");
+  assert.deepEqual(accountCalls.selected, [], "renaming must not switch accounts");
+  const labels = walk(
+    document.byId.get("local-account-list"),
+    (node) => node.classList?.contains("local-account-item"),
+  ).map((node) => node.textContent);
+  assert.ok(labels.some((label) => label === "明"), "the switcher shows the new name");
+}
+
+async function testLocalAccountDeleteIsArmedAndScoped() {
+  const accounts = [
+    { id: 1, name: "Local", active: true },
+    { id: 2, name: "Ming", active: false },
+  ];
+  const { bridge, desktopBridge, accountCalls } = localModeBridge({
+    localRoute: true,
+    accounts,
+  });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  document.byId.get("local-account-row").click();
+  await settle();
+  const deleteButtons = walk(
+    document.byId.get("local-account-list"),
+    (node) => node.classList?.contains("local-account-action") && node.classList?.contains("danger"),
+  );
+  assert.equal(
+    deleteButtons.length,
+    1,
+    "only the inactive account offers Delete — deleting who you are right now must be impossible",
+  );
+
+  // Both clicks in one tick: the VM maps setTimeout to setImmediate, so the
+  // 4s disarm fires the moment the test yields. Arming is synchronous anyway.
+  deleteButtons[0].click();
+  assert.deepEqual(
+    accountCalls.deleted,
+    [],
+    "the first click only arms: no single misclick destroys an identity and its data",
+  );
+  assert.match(deleteButtons[0].textContent, /Delete all its data\?/);
+  deleteButtons[0].click();
+  await settle();
+  await settle();
+  assert.deepEqual(accountCalls.deleted, [2], "the second click deletes exactly the armed account");
+  const labels = walk(
+    document.byId.get("local-account-list"),
+    (node) => node.classList?.contains("local-account-item"),
+  ).map((node) => node.textContent);
+  assert.equal(labels.length, 1, "the deleted account leaves the switcher");
+  assert.match(
+    document.byId.get("status-card").textContent,
+    /Deleted "Ming" and its 2 conversations/,
+    "the user is told what left with the identity",
+  );
+}
+
+// Version skew (stale sidecar + newer renderer, or vice versa) used to be
+// indistinguishable from "not signed in": listModes answered, the strict
+// parse failed, and the app silently showed the sign-in wall. The failure
+// must name itself.
+// The composer context chips: where the turn runs and who it runs as, at
+// the place the user is typing. The dispatch already knows both facts;
+// hiding them in settings made "why did this answer come from there?" a
+// support question instead of a glance.
+async function testComposerChipsNameRuntimeAndIdentity() {
+  const accounts = [
+    { id: 1, name: "Local", active: false },
+    { id: 2, name: "Ming", active: true },
+  ];
+  const { bridge, desktopBridge } = localModeBridge({ localRoute: true, accounts });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  const threadButton = walk(
+    document.byId.get("thread-list"),
+    (node) => node.tagName === "BUTTON",
+  )[0];
+  threadButton.click();
+  await settle();
+
+  const runtime = document.byId.get("runtime-chip");
+  assert.equal(runtime.hidden, false, "a usable composer must say where the turn runs");
+  assert.match(runtime.textContent, /Local · chat/, "chat-only local mode is named as such");
+  const accountChip = document.byId.get("account-chip");
+  assert.equal(accountChip.hidden, false, "local-only sessions name the identity at the composer");
+  assert.equal(accountChip.textContent, "Ming");
+  const modeChip = document.byId.get("mode-chip");
+  assert.equal(modeChip.hidden, false, "a single skill is shown as a chip, not a one-option selector");
+  assert.equal(modeChip.textContent, "PPT");
+}
+
+async function testComposerAccountChipSkipsTheDefaultIdentity() {
+  const accounts = [{ id: 1, name: "Local", active: true }];
+  const { bridge, desktopBridge } = localModeBridge({ localRoute: true, accounts });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+  const threadButton = walk(
+    document.byId.get("thread-list"),
+    (node) => node.tagName === "BUTTON",
+  )[0];
+  threadButton.click();
+  await settle();
+  assert.equal(
+    document.byId.get("account-chip").hidden,
+    true,
+    'the default identity is nobody — naming it would just say "Local" twice',
+  );
+}
+
+async function testModesParseFailureNamesTheSkew() {
+  const { bridge, desktopBridge } = localModeBridge({ localRoute: true });
+  desktopBridge.agent.listModes = async () =>
+    typedSuccess({ allowed_modes: ["ppt"], totally_unexpected_shape: true });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+  assert.match(
+    document.byId.get("status-card").textContent,
+    /out of sync/i,
+    "a modes answer the UI cannot parse must be reported as skew, not silence",
   );
 }
 
@@ -4702,7 +4888,7 @@ async function testCreatesThreadOnceAndFocusesComposer() {
   };
 
   const { context, document } = await runRenderer(bridge, desktopBridge);
-  assert.equal(document.byId.get("empty-title").textContent, "Start a presentation thread");
+  assert.equal(document.byId.get("empty-title").textContent, "What should we make today?");
   assert.equal(document.byId.get("empty-new-thread-button").hidden, false);
   assert.equal(document.byId.get("empty-new-thread-button").disabled, false);
   document.byId.get("empty-new-thread-button").click();
@@ -5250,6 +5436,11 @@ await testStreamedAnswerGainsActionsWhenReconcileFails();
 await testSignedOutLocalRouteCanDriveTheAgent();
 await testLocalAccountSwitcherSwitchesAndReloads();
 await testLocalAccountCreateDoesNotSwitch();
+await testLocalAccountRenameIsALabelChange();
+await testLocalAccountDeleteIsArmedAndScoped();
+await testComposerChipsNameRuntimeAndIdentity();
+await testComposerAccountChipSkipsTheDefaultIdentity();
+await testModesParseFailureNamesTheSkew();
 await testLocalAccountRowHiddenWithoutLocalRoute();
 await testSignedOutWithoutLocalRouteStaysGated();
 await testAssistantMarkdownIsRenderedAsElements();
