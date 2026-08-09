@@ -215,6 +215,30 @@ textarea:focus-visible {
   background: hsl(var(--background));
 }
 
+/* Competitor grammar: conversations first, account state at the bottom.
+   Rearranged with order so the DOM (and every test that walks it) is
+   untouched — the sidebar is a flex column, so this is purely visual. */
+.sidebar > .brand { order: 0; }
+.sidebar > .sidebar > .thread-toolbar {
+  margin-top: 2px;
+}
+
+.thread-toolbar { order: 10; }
+.sidebar > .thread-search { order: 11; }
+.sidebar > #new-thread-form { order: 12; }
+.sidebar > .thread-list { order: 13; }
+.sidebar > #status-card { order: 20; }
+.sidebar > .sidebar-actions { order: 21; }
+.sidebar > #model-settings-form { order: 22; }
+.sidebar > #login-form { order: 23; }
+.sidebar > .sidebar-footer #runtime-label {
+  margin: 0 0 2px;
+  color: hsl(var(--muted-foreground) / 0.7);
+  font-size: 10px;
+}
+
+.sidebar-footer { order: 30; }
+
 .model-settings-form {
   margin: 0 12px 12px;
 }
@@ -283,8 +307,8 @@ textarea:focus-visible {
 }
 
 .status-card {
-  margin: 0 14px 12px;
-  padding: 8px 10px;
+  margin: 10px 14px 8px;
+  padding: 7px 10px;
   border: 1px solid hsl(var(--border) / 0.6);
   border-radius: 8px;
   background: hsl(var(--card));
@@ -372,6 +396,10 @@ textarea:focus-visible {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.sidebar > .thread-toolbar {
+  margin-top: 2px;
 }
 
 .thread-toolbar {
@@ -477,6 +505,12 @@ textarea:focus-visible {
   padding: 0 8px 12px;
   overflow: auto;
   list-style: none;
+}
+
+.sidebar-footer #runtime-label {
+  margin: 0 0 2px;
+  color: hsl(var(--muted-foreground) / 0.7);
+  font-size: 10px;
 }
 
 .sidebar-footer {
@@ -1423,6 +1457,17 @@ textarea:focus-visible {
 
 .composer-actions button {
   min-width: 72px;
+}
+
+/* The attach affordance is an icon button; give the glyph a proper optical
+   box instead of a squashed default button. */
+#attach-button {
+  min-width: 34px;
+  width: 34px;
+  padding: 0;
+  border-radius: 8px;
+  font-size: 16px;
+  line-height: 1;
 }
 
 .attachment-chips {

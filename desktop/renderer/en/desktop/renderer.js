@@ -2023,7 +2023,7 @@ function updateSelectedThreadHeading() {
   );
   if (!thread) return;
   threadTitle.textContent = thread.name || "Untitled thread";
-  threadMeta.textContent = `${thread.agent_mode || "agent"} · ${thread.message_count || 0} messages · ${formatDate(thread.updated_at)}`;
+  threadMeta.textContent = `${thread.agent_mode || "agent"} · ${thread.message_count || 0} messages · ${formatMessageTime(thread.updated_at) || formatDate(thread.updated_at)}`;
   // Rename lives where the title is read, and only where the sidecar would
   // accept it: a synced thread's name belongs to the cloud copy, which the
   // sync worker would restore over any local edit.
@@ -2833,7 +2833,7 @@ function renderThreadButton(thread) {
   const title = document.createElement("strong");
   title.textContent = thread.name || "Untitled thread";
   const meta = document.createElement("p");
-  meta.textContent = `${thread.message_count || 0} messages · ${formatDate(thread.updated_at)}`;
+  meta.textContent = `${thread.message_count || 0} messages · ${formatMessageTime(thread.updated_at) || formatDate(thread.updated_at)}`;
   button.append(title, meta);
   if (state.recoverableTurns.some((turn) => turn.thread_uuid === thread.uuid)) {
     const badge = document.createElement("span");
