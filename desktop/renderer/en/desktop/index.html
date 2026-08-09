@@ -11,6 +11,19 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <div id="quick-switcher" class="quick-switcher" hidden>
+      <div class="quick-switcher-panel">
+        <input
+          id="quick-switcher-input"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Jump to a conversation…"
+          aria-label="Jump to a conversation"
+        />
+        <ol id="quick-switcher-list" class="quick-switcher-list"></ol>
+      </div>
+    </div>
     <main class="shell">
       <aside class="sidebar">
         <div class="brand">
@@ -267,6 +280,7 @@
               <input id="file-input" type="file" multiple hidden />
               <button id="attach-button" type="button" aria-label="Attach files">＋</button>
               <span>⌘↵ to send</span>
+              <span id="composer-capacity" hidden></span>
               <button id="stop-button" type="button" hidden>Stop</button>
               <button id="send-button" class="primary" type="submit" disabled>Send</button>
             </div>

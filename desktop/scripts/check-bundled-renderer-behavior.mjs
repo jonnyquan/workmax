@@ -245,11 +245,31 @@ function parseRendererElements(html) {
 class FakeDocument {
   constructor(rendererHtml) {
     this.byId = new Map();
+    this.listeners = new Map();
     for (const [id, spec] of parseRendererElements(rendererHtml)) {
       const element = new FakeElement(spec.tagName);
       element.hidden = spec.hidden;
       this.byId.set(id, element);
     }
+  }
+
+  // Document-level listeners, for global keyboard shortcuts. dispatchKey is
+  // the test's way of typing at the app rather than at a specific element.
+  addEventListener(type, handler) {
+    this.listeners.set(type, handler);
+  }
+
+  dispatchKey(init) {
+    const handler = this.listeners.get("keydown");
+    if (!handler) return;
+    handler({
+      key: init.key,
+      metaKey: init.metaKey ?? false,
+      ctrlKey: init.ctrlKey ?? false,
+      repeat: init.repeat ?? false,
+      preventDefault: init.preventDefault ?? (() => {}),
+      target: init.target ?? null,
+    });
   }
 
   querySelector(selector) {
@@ -1473,6 +1493,168 @@ async function testThreadDeleteIsTwoStepAndLocalOnly() {
     true,
     "deleting the selected thread must close its workbench",
   );
+}
+
+// ⌘K: reach any conversation without leaving the keyboard. Filter, arrow,
+// Enter — and Escape closes the palette before it ever touches a turn.
+async function testQuickSwitcherJumpsBetweenThreads() {
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({
+          items: [
+            thread("00000000-0000-4000-8000-0000000ck001", "Quarterly deck"),
+            thread("00000000-0000-4000-8000-0000000ck002", "Launch notes"),
+            thread("00000000-0000-4000-8000-0000000ck003", "Quarterly review"),
+          ],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn() { return { turnID: "t" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  assert.equal(document.byId.get("quick-switcher").hidden, true, "closed at rest");
+
+  document.dispatchKey({ key: "k", metaKey: true });
+  assert.equal(document.byId.get("quick-switcher").hidden, false, "⌘K opens the palette");
+  assert.equal(
+    walk(document.byId.get("quick-switcher-list"), (n) => n.classList?.contains("quick-switcher-item")).length,
+    3,
+    "all conversations offered before any query",
+  );
+
+  const input = document.byId.get("quick-switcher-input");
+  input.value = "quarterly";
+  input.dispatch("input");
+  let items = walk(document.byId.get("quick-switcher-list"), (n) => n.classList?.contains("quick-switcher-item"));
+  assert.equal(items.length, 2, "the query narrows the list");
+  assert.equal(items[0].classList.contains("active"), true, "the first candidate starts active");
+
+  input.dispatch("keydown", { key: "ArrowDown" });
+  items = walk(document.byId.get("quick-switcher-list"), (n) => n.classList?.contains("quick-switcher-item"));
+  assert.equal(items[1].classList.contains("active"), true, "arrows move the selection");
+
+  input.dispatch("keydown", { key: "Enter" });
+  await settle();
+  assert.equal(document.byId.get("quick-switcher").hidden, true, "choosing closes the palette");
+  assert.match(
+    document.byId.get("thread-title").textContent,
+    /Quarterly review/,
+    "Enter lands in the highlighted conversation",
+  );
+
+  // Escape closes the palette and must NOT be treated as stop-the-turn.
+  document.dispatchKey({ key: "k", metaKey: true });
+  assert.equal(document.byId.get("quick-switcher").hidden, false);
+  document.dispatchKey({ key: "Escape" });
+  assert.equal(document.byId.get("quick-switcher").hidden, true, "Escape closes the palette first");
+}
+
+// Escape is the keyboard's Stop button — same act, no mouse.
+async function testEscapeStopsAStreamingTurn() {
+  const cancels = [];
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("esc-thread", "Escapable")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn() { return { turnID: "esc-turn" }; },
+      async cancelTurn(turnID) {
+        cancels.push(turnID);
+        return { turnID, canceled: true };
+      },
+    },
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  const input = document.byId.get("chat-input");
+  input.value = "long task";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+  assert.equal(document.byId.get("stop-button").hidden, false, "precondition: streaming");
+
+  // With the palette open, Escape means "close the palette" — the streaming
+  // turn must survive that keystroke untouched.
+  document.dispatchKey({ key: "k", metaKey: true });
+  assert.equal(document.byId.get("quick-switcher").hidden, false);
+  document.dispatchKey({ key: "Escape" });
+  await settle();
+  assert.equal(document.byId.get("quick-switcher").hidden, true);
+  assert.equal(cancels.length, 0, "closing the palette must not stop the turn");
+
+  document.dispatchKey({ key: "Escape" });
+  await settle();
+  assert.deepEqual(Array.from(cancels), ["esc-turn"], "Escape must stop the turn");
+}
+
+// The capacity note appears only when it matters, and speaks in percent —
+// the limit is bytes, and "characters left" would lie to CJK text by 3x.
+async function testComposerCapacityNote() {
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("cap-thread", "Capacity")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn() { return { turnID: "t" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  const input = document.byId.get("chat-input");
+  const note = document.byId.get("composer-capacity");
+  input.value = "short";
+  input.dispatch("input");
+  assert.equal(note.hidden, true, "quiet until it matters");
+
+  input.value = "x".repeat(60000); // ~92% of the 65536-byte limit
+  input.dispatch("input");
+  assert.equal(note.hidden, false);
+  assert.match(note.textContent, /9\d% of the message limit/, "percent, not a character count");
+
+  input.value = "back to short";
+  input.dispatch("input");
+  assert.equal(note.hidden, true, "and quiet again once there is room");
 }
 
 // A reader who scrolled up to check an earlier answer must not be yanked
@@ -4641,6 +4823,9 @@ await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
 await testThreadDeleteIsTwoStepAndLocalOnly();
 await testThreadRenameFlow();
+await testQuickSwitcherJumpsBetweenThreads();
+await testEscapeStopsAStreamingTurn();
+await testComposerCapacityNote();
 await testStreamingDoesNotYankAScrolledUpReader();
 await testTurnStatePillCarriesItsTone();
 await testModelProtocolHintFollowsTheChoice();

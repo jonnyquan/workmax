@@ -4286,6 +4286,16 @@ chatForm.addEventListener("submit", (event) => {
 });
 chatInput.addEventListener("input", () => {
   updateComposerState();
+  const capacity = document.querySelector("#composer-capacity");
+  if (capacity) {
+    const used = utf8ByteLength(chatInput.value) / MAX_CHAT_TEXT_BYTES;
+    if (used >= 0.8) {
+      capacity.hidden = false;
+      capacity.textContent = `${Math.min(100, Math.round(used * 100))}% of the message limit used`;
+    } else {
+      capacity.hidden = true;
+    }
+  }
 });
 chatInput.addEventListener("keydown", (event) => {
   if (
@@ -4747,6 +4757,124 @@ if (jumpLatestButton) {
     scrollMessagesToEnd(true);
   });
 }
+
+// --- Quick switcher (⌘K) ---------------------------------------------------
+// The sidebar is where conversations live; the switcher is how you reach one
+// without leaving the keyboard. Same data, same filter as the sidebar search.
+
+const quickSwitcher = document.querySelector("#quick-switcher");
+const quickSwitcherInput = document.querySelector("#quick-switcher-input");
+const quickSwitcherList = document.querySelector("#quick-switcher-list");
+let quickSwitcherIndex = 0;
+
+function quickSwitcherCandidates() {
+  const query = (quickSwitcherInput?.value || "").trim().toLowerCase();
+  return state.threads
+    .filter((thread) => threadMatchesQuery(thread, query))
+    .slice(0, 8);
+}
+
+function renderQuickSwitcher() {
+  if (!quickSwitcherList) return;
+  const candidates = quickSwitcherCandidates();
+  if (quickSwitcherIndex >= candidates.length) quickSwitcherIndex = Math.max(0, candidates.length - 1);
+  quickSwitcherList.textContent = "";
+  if (candidates.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "quick-switcher-empty";
+    empty.textContent = "No conversations match.";
+    quickSwitcherList.appendChild(empty);
+    return;
+  }
+  candidates.forEach((thread, index) => {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "quick-switcher-item" + (index === quickSwitcherIndex ? " active" : "");
+    const title = document.createElement("strong");
+    title.textContent = thread.name || "Untitled thread";
+    const meta = document.createElement("span");
+    meta.textContent = `${thread.message_count || 0} messages`;
+    button.append(title, meta);
+    button.addEventListener("click", () => {
+      commitQuickSwitcherChoice(thread);
+    });
+    item.appendChild(button);
+    quickSwitcherList.appendChild(item);
+  });
+}
+
+function openQuickSwitcher() {
+  if (!quickSwitcher || state.threads.length === 0) return;
+  quickSwitcherIndex = 0;
+  if (quickSwitcherInput) quickSwitcherInput.value = "";
+  quickSwitcher.hidden = false;
+  renderQuickSwitcher();
+  quickSwitcherInput?.focus();
+}
+
+function closeQuickSwitcher() {
+  if (quickSwitcher) quickSwitcher.hidden = true;
+}
+
+function commitQuickSwitcherChoice(thread) {
+  closeQuickSwitcher();
+  selectThread(thread);
+}
+
+if (quickSwitcherInput) {
+  quickSwitcherInput.addEventListener("input", () => {
+    quickSwitcherIndex = 0;
+    renderQuickSwitcher();
+  });
+  quickSwitcherInput.addEventListener("keydown", (event) => {
+    const candidates = quickSwitcherCandidates();
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      quickSwitcherIndex = Math.min(quickSwitcherIndex + 1, Math.max(0, candidates.length - 1));
+      renderQuickSwitcher();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      quickSwitcherIndex = Math.max(0, quickSwitcherIndex - 1);
+      renderQuickSwitcher();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const chosen = candidates[quickSwitcherIndex];
+      if (chosen) commitQuickSwitcherChoice(chosen);
+    } else if (event.key === "Escape") {
+      closeQuickSwitcher();
+    }
+  });
+}
+if (quickSwitcher) {
+  // Clicking the dimmed backdrop (not the panel) dismisses.
+  quickSwitcher.addEventListener("click", (event) => {
+    if (event.target === quickSwitcher) closeQuickSwitcher();
+  });
+}
+
+// Global keys. ⌘K opens the switcher; Escape stops a streaming turn — the
+// same act as the Stop button, reachable without the mouse. Escape prefers
+// the switcher when it is open, and never touches a turn from inside form
+// fields where it already means "abandon this input".
+document.addEventListener("keydown", (event) => {
+  if (event.repeat) return;
+  if ((event.metaKey || event.ctrlKey) && (event.key === "k" || event.key === "K")) {
+    event.preventDefault();
+    if (quickSwitcher && !quickSwitcher.hidden) closeQuickSwitcher();
+    else openQuickSwitcher();
+    return;
+  }
+  if (event.key === "Escape") {
+    if (quickSwitcher && !quickSwitcher.hidden) {
+      closeQuickSwitcher();
+      return;
+    }
+    if (state.activeTurn && !state.activeTurn.stopRequested) {
+      void stopActiveTurn();
+    }
+  }
+});
 
 const openWorkspaceButton = document.querySelector("#open-workspace-button");
 if (openWorkspaceButton) {

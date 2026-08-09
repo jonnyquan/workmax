@@ -783,6 +783,102 @@ textarea:focus-visible {
   color: hsl(var(--destructive));
 }
 
+/* Quick switcher: a keyboard-first jump between conversations. The overlay
+   dims the app; the panel floats high so the list can grow downward. */
+.quick-switcher {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 14vh;
+  background: rgb(0 0 0 / 32%);
+}
+
+.quick-switcher[hidden] {
+  display: none;
+}
+
+.quick-switcher-panel {
+  width: min(560px, calc(100vw - 80px));
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  background: hsl(var(--card));
+  box-shadow: 0 24px 64px rgb(0 0 0 / 24%);
+  overflow: hidden;
+}
+
+.quick-switcher-panel input {
+  width: 100%;
+  height: 48px;
+  padding: 0 16px;
+  border: 0;
+  border-bottom: 1px solid hsl(var(--border));
+  outline: none;
+  background: transparent;
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 15px;
+}
+
+.quick-switcher-list {
+  max-height: 320px;
+  margin: 0;
+  padding: 6px;
+  overflow: auto;
+  list-style: none;
+}
+
+.quick-switcher-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  height: auto;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+}
+
+.quick-switcher-item strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-switcher-item span {
+  flex: none;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.quick-switcher-item:hover {
+  background: hsl(var(--muted) / 0.6);
+}
+
+.quick-switcher-item.active {
+  background: hsl(var(--primary) / 0.1);
+  box-shadow: inset 2px 0 0 hsl(var(--primary));
+}
+
+.quick-switcher-empty {
+  padding: 14px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  text-align: center;
+}
+
+/* Nears-the-limit capacity note; absent until it matters. */
+#composer-capacity {
+  color: hsl(var(--warning));
+}
+
 /* Floating return-to-newest affordance: appears when the stream moves on
    without the reader, sits above the composer's shadow. */
 .jump-latest {
