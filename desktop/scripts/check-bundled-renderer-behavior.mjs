@@ -112,6 +112,7 @@ class FakeElement {
     this.focused = false;
     this.parentNode = null;
     this.scrollTop = 0;
+    this.style = {};
   }
 
   set className(value) {
@@ -189,6 +190,7 @@ class FakeElement {
     const handler = this.listeners.get(type);
     if (!handler) return;
     handler({
+      ...init,
       key: init.key,
       metaKey: init.metaKey ?? false,
       ctrlKey: init.ctrlKey ?? false,
@@ -1509,6 +1511,102 @@ async function testThreadDeleteIsTwoStepAndLocalOnly() {
     true,
     "deleting the selected thread must close its workbench",
   );
+}
+
+// Files arrive however the user's hands bring them — picker, drop, paste —
+// and all three must land in the same pipeline: chips, Sources, send union.
+async function testDropAndPasteAttachFiles() {
+  const uploaded = [];
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("drop-thread", "Droppable")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile(uuid, file) {
+        uploaded.push(file.name);
+        return typedSuccess({ file_id: 100 + uploaded.length, file_name: file.name, mime_type: "text/plain", file_type: "text", file_size: 10 });
+      },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn() { return { turnID: "t" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (n) => n.tagName === "BUTTON")[0].click();
+  await settle();
+
+  const panel = document.byId.get("thread-panel");
+  panel.dispatch("dragover", { dataTransfer: { files: [] } });
+  assert.equal(panel.classList.contains("drop-target"), true, "hovering files must light the target");
+  panel.dispatch("drop", { dataTransfer: { files: [{ name: "dropped.txt", size: 10 }] } });
+  await settle();
+  assert.equal(panel.classList.contains("drop-target"), false, "the drop retires the highlight");
+  assert.deepEqual(Array.from(uploaded), ["dropped.txt"], "a dropped file rides the same upload path");
+
+  document.byId.get("chat-input").dispatch("paste", {
+    clipboardData: { files: [{ name: "pasted.png", size: 22 }] },
+  });
+  await settle();
+  assert.deepEqual(Array.from(uploaded), ["dropped.txt", "pasted.png"], "a pasted file too");
+}
+
+// Regenerate re-runs the FINAL prompt — the click is the consent, and only
+// the last answer is re-runnable: forking an earlier exchange would create a
+// history the transcript cannot show.
+async function testRegenerateRunsTheLastPromptAgain() {
+  const started = [];
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("regen-thread", "Regen")] });
+      }
+      if (pathname === "/agent/threads/regen-thread/messages") {
+        return response({
+          items: [
+            message("r1", "first question", "first answer"),
+            message("r2", "second question", "second answer"),
+          ],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input) {
+        started.push(input.userText);
+        return { turnID: "regen-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (n) => n.tagName === "BUTTON")[0].click();
+  await settle();
+
+  const regens = walk(
+    document.byId.get("message-list"),
+    (n) => n.tagName === "BUTTON" && n.textContent === "Regenerate",
+  );
+  assert.equal(regens.length, 1, "only the final answer offers Regenerate");
+  regens[0].click();
+  await settle();
+  assert.deepEqual(Array.from(started), ["second question"], "the same words run again as a new turn");
 }
 
 // ⌘K: reach any conversation without leaving the keyboard. Filter, arrow,
@@ -4996,6 +5094,8 @@ await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
 await testThreadDeleteIsTwoStepAndLocalOnly();
 await testThreadRenameFlow();
+await testDropAndPasteAttachFiles();
+await testRegenerateRunsTheLastPromptAgain();
 await testQuickSwitcherJumpsBetweenThreads();
 await testEscapeStopsAStreamingTurn();
 await testComposerCapacityNote();

@@ -957,6 +957,27 @@ textarea:focus-visible {
   border-color: hsl(var(--primary) / 0.5);
 }
 
+/* The whole panel is a drop target while a file hovers over it. */
+.thread-panel.drop-target::after {
+  content: "Drop files to attach";
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  border: 2px dashed hsl(var(--primary));
+  border-radius: 12px;
+  background: hsl(var(--primary) / 0.06);
+  color: hsl(var(--primary));
+  font-size: 15px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.thread-panel {
+  position: relative;
+}
+
 .message-viewport {
   position: relative;
   flex: 1;

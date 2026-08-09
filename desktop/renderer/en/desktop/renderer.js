@@ -1424,17 +1424,23 @@ function renderCachedMessages(items) {
     messageList.appendChild(renderNotice("No cached messages for this thread yet."));
     return;
   }
-  for (const item of items) {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
     if (item.user_text) {
       messageList.appendChild(renderMessage("user", item.user_text, "complete", item.created_at));
     }
     if (item.ai_text || item.streaming_state !== "complete") {
+      // Only the final, completed answer can be re-run; see
+      // attachMessageActions for why earlier ones cannot.
+      const regenerable =
+        i === items.length - 1 && item.user_text && item.streaming_state === "complete";
       messageList.appendChild(
         renderMessage(
           "assistant",
           item.ai_text || "Response interrupted before text was cached.",
           item.streaming_state,
-          item.updated_at || item.created_at
+          item.updated_at || item.created_at,
+          regenerable ? { regenerateText: item.user_text } : {}
         )
       );
     }
@@ -1880,7 +1886,7 @@ function formatMessageTime(value) {
     : date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-function renderMessage(role, text, streamingState = "complete", timestamp = "") {
+function renderMessage(role, text, streamingState = "complete", timestamp = "", actionOptions = {}) {
   const wrapper = document.createElement("article");
   wrapper.className = `message ${role}`;
   wrapper.classList.toggle(
@@ -1924,14 +1930,14 @@ function renderMessage(role, text, streamingState = "complete", timestamp = "") 
   }
   wrapper.append(label, bubble);
 
-  attachMessageActions(wrapper, role, text);
+  attachMessageActions(wrapper, role, text, actionOptions);
   return wrapper;
 }
 
 // Built separately from the bubble because a streamed answer starts empty:
 // renderMessage cannot offer "copy" for text that has not arrived yet, so the
 // finished turn calls this once it has.
-function attachMessageActions(wrapper, role, text) {
+function attachMessageActions(wrapper, role, text, options = {}) {
   if (!wrapper) return;
   // Idempotent. No current path reaches this: renderMessage builds the
   // streaming bubble from empty text, which yields no row, so the finished
@@ -1945,6 +1951,23 @@ function attachMessageActions(wrapper, role, text) {
   actions.className = "message-actions";
   const copy = buildCopyButton(text, role === "assistant" ? "Copy answer" : "Copy");
   if (copy) actions.appendChild(copy);
+  if (role === "assistant" && options.regenerateText) {
+    // Only the FINAL answer is regenerable — re-running an earlier prompt
+    // mid-conversation would fork history the transcript cannot show. The
+    // click is the consent: unlike "Edit and resend", the whole point here
+    // is running the same words again.
+    const regen = document.createElement("button");
+    regen.type = "button";
+    regen.className = "message-action";
+    regen.textContent = "Regenerate";
+    regen.addEventListener("click", () => {
+      if (chatInput.disabled) return;
+      chatInput.value = options.regenerateText;
+      updateComposerState();
+      submitChat({ preventDefault() {} });
+    });
+    actions.appendChild(regen);
+  }
   if (role === "user" && text) {
     // Not a retry: it puts the words back in the composer so they can be
     // changed first. Re-running a prompt verbatim is rarely what someone wants
@@ -4333,11 +4356,50 @@ fileInput.addEventListener("change", () => {
     uploadThreadFile(file);
   }
 });
+
+// Files arrive however the user's hands bring them: the picker, a drop onto
+// the conversation, or a paste. All three land in the same upload path, so
+// the chips, the Sources panel, and the send-time union behave identically.
+function attachDroppedFiles(files) {
+  if (!state.selectedThreadUUID || !canUseAgent()) return;
+  for (const file of Array.from(files || [])) {
+    uploadThreadFile(file);
+  }
+}
+
+threadPanel.addEventListener("dragover", (event) => {
+  if (!event.dataTransfer) return;
+  event.preventDefault();
+  if (state.selectedThreadUUID && canUseAgent()) {
+    threadPanel.classList.add("drop-target");
+  }
+});
+threadPanel.addEventListener("dragleave", () => {
+  threadPanel.classList.remove("drop-target");
+});
+threadPanel.addEventListener("drop", (event) => {
+  event.preventDefault();
+  threadPanel.classList.remove("drop-target");
+  attachDroppedFiles(event.dataTransfer?.files);
+});
+chatInput.addEventListener("paste", (event) => {
+  const files = event.clipboardData?.files;
+  if (files && files.length > 0) {
+    event.preventDefault();
+    attachDroppedFiles(files);
+  }
+});
 chatForm.addEventListener("submit", (event) => {
   submitChat(event);
 });
 chatInput.addEventListener("input", () => {
   updateComposerState();
+  // The box grows with the words up to its cap, like every composer the
+  // user already types into; past the cap it scrolls.
+  if (chatInput.style) {
+    chatInput.style.height = "auto";
+    chatInput.style.height = `${Math.min(chatInput.scrollHeight || 0, 220)}px`;
+  }
   const capacity = document.querySelector("#composer-capacity");
   if (capacity) {
     const used = utf8ByteLength(chatInput.value) / MAX_CHAT_TEXT_BYTES;
