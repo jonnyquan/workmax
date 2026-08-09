@@ -338,7 +338,12 @@ function parseCreatedThread(value, expectedDraft, created) {
     !state.allowedModes.includes(value.agent_mode) ||
     !isNonNegativeInteger(value.message_count) ||
     !isParseableTimestamp(value.updated_at) ||
-    (value.cloud_sync_state !== "synced" && value.cloud_sync_state !== "paused")
+    // "local" = the signed-out local create branch (L3d). Two other copies
+    // of this set (both in the bridge lib) lagged the same way and silently
+    // broke every local create — keep all three in step.
+    (value.cloud_sync_state !== "synced" &&
+      value.cloud_sync_state !== "paused" &&
+      value.cloud_sync_state !== "local")
   ) {
     throw new Error("Malformed agent create thread result");
   }
@@ -2673,6 +2678,12 @@ function updateRecoveryState() {
 function updateComposerState() {
   renderLocalAccountArea();
   renderComposerChips();
+  // An open palette shows availability-gated commands; when availability
+  // changes under it (skills finish loading, a turn starts), the list must
+  // follow — otherwise it either hides a now-possible action or offers a
+  // now-impossible one.
+  const palette = document.querySelector("#quick-switcher");
+  if (palette && !palette.hidden) renderQuickSwitcher();
   const authenticated = canUseAgent();
   const hasThread = Boolean(state.selectedThreadUUID);
   const hasMode = state.allowedModes.includes(state.selectedMode);
@@ -2951,7 +2962,11 @@ function classifyCreateThreadFailure(result) {
 }
 
 function updateNewThreadState() {
-  const authenticated = state.auth?.state === "authenticated";
+  // canUseAgent, not the raw cloud-auth state: a signed-out session with a
+  // local route creates local threads. This was the one predicate left on
+  // the old check — the form would open (canOpenNewThread) but the submit
+  // stayed disabled forever, which the packaged-app smoke caught.
+  const authenticated = canUseAgent();
   const hasMode = state.allowedModes.includes(newThreadMode.value);
   const attempted = state.createDraft?.attempted === true;
   const pending = state.createDraft?.pending === true;
@@ -5552,7 +5567,11 @@ function quickSwitcherCommands(query) {
     (candidate) => candidate.uuid === state.selectedThreadUUID
   );
   const agent = window.desktopBridge?.agent;
-  if (canUseAgent() && state.createAvailable) {
+  // Gated by the SAME predicate the action itself checks: a command whose
+  // Enter would silently no-op is a dead end wearing a label. (Found live:
+  // during boot, before skills load, the weaker gate offered a New thread
+  // that went nowhere.)
+  if (canOpenNewThread()) {
     commands.push({
       kind: "command",
       label: "New thread",

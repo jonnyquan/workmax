@@ -1481,6 +1481,10 @@ function parseAgentCreateThreadData(
   }
 
   assertPlainObject(value.thread, "agent.createThread response thread");
+  // "pinned" joined LocalThreadRow with thread pins; a freshly created
+  // thread is never pinned, but the row shape is the row shape — an
+  // exact-keys check that lags the server's row is a create that fails
+  // for no user-visible reason (the packaged-app smoke caught exactly that).
   assertExactKeys(
     value.thread,
     [
@@ -1490,6 +1494,7 @@ function parseAgentCreateThreadData(
       "message_count",
       "updated_at",
       "cloud_sync_state",
+      "pinned",
     ],
     "agent.createThread response thread"
   );
@@ -1509,8 +1514,13 @@ function parseAgentCreateThreadData(
     typeof value.thread.updated_at !== "string" ||
     value.thread.updated_at.trim() === "" ||
     !Number.isFinite(Date.parse(value.thread.updated_at)) ||
+    // "local" joined the states with the signed-out local create branch
+    // (L3d): a thread that exists only on this machine. This validator
+    // predates it and silently made every local create "malformed" — the
+    // server did the work, the contract refused the receipt.
     (value.thread.cloud_sync_state !== "synced" &&
-      value.thread.cloud_sync_state !== "paused")
+      value.thread.cloud_sync_state !== "paused" &&
+      value.thread.cloud_sync_state !== "local")
   ) {
     throw new TypeError("agent.createThread response thread is invalid");
   }

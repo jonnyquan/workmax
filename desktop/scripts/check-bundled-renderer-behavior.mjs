@@ -3150,6 +3150,116 @@ async function testOnboardingHiddenOnceUsable() {
   );
 }
 
+// Signed-out local create: the form opens AND submits. The two predicates
+// (canOpenNewThread and updateNewThreadState) once disagreed — the form
+// opened but the submit stayed disabled forever. One predicate now, tested.
+// The BUILT bridge lib versus the sidecar's actual local-create response.
+// Every VM scenario fakes the bridge, so this contract had no test between
+// the Go suite (server half) and the fakes (renderer half) — and it broke
+// twice invisibly: the validator predated cloud_sync_state="local", then
+// predated "pinned". The packaged-app smoke found it; this keeps it found.
+async function testBridgeLibAcceptsLocalCreateContract() {
+  const libCode = fs.readFileSync(
+    new URL("../renderer/en/desktop/lib/desktop-bridge.js", import.meta.url),
+    "utf8"
+  );
+  const sandbox = { window: {}, console, Headers, TextEncoder };
+  vm.createContext(sandbox);
+  vm.runInContext(libCode, sandbox);
+  const { createDesktopBridge } = sandbox.window.__workmaxDesktopBridge;
+  const respond = (body) => ({
+    request: async () => ({
+      ok: true, status: 201, statusText: "Created", headers: {},
+      text: async () => JSON.stringify(body),
+    }),
+  });
+  const localThread = {
+    uuid: "00000000-0000-4000-8000-0000000000e3",
+    name: "probe",
+    agent_mode: "ppt",
+    message_count: 0,
+    updated_at: "2026-08-09T15:56:52.103724Z",
+    cloud_sync_state: "local",
+    pinned: false,
+  };
+  const input = { threadUUID: localThread.uuid, name: "probe", agentMode: "ppt" };
+
+  const good = await createDesktopBridge(
+    respond({ state: "ready", created: true, thread: localThread })
+  ).agent.createThread(input);
+  assert.equal(good.ok, true);
+  assert.equal(
+    good.data.thread.cloud_sync_state,
+    "local",
+    "the bridge must accept the sidecar's signed-out local create verbatim",
+  );
+
+  // And it must still REJECT what it does not know — accepting everything
+  // would be a different way of having no contract.
+  await assert.rejects(
+    createDesktopBridge(
+      respond({ state: "ready", created: true, thread: { ...localThread, cloud_sync_state: "bogus" } })
+    ).agent.createThread(input),
+    /malformed/,
+    "an unknown sync state must still be refused",
+  );
+}
+
+async function testSignedOutLocalCanCreateThread() {
+  const createCalls = [];
+  const newUUID = "00000000-0000-4000-8000-00000000c001";
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [] });
+      }
+      if (pathname === `/agent/threads/${newUUID}/messages`) {
+        return response({ items: [] });
+      }
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const { desktopBridge } = localModeBridge({ localRoute: true });
+  desktopBridge.agent.createThread = async (input) => {
+    createCalls.push(input.threadUUID);
+    // cloud_sync_state "local" — what the sidecar actually answers for a
+    // signed-out create. The fixture must not be politer than the server.
+    return typedSuccess(
+      {
+        state: "ready",
+        created: true,
+        thread: { ...createdThread(input.threadUUID, input.name, input.agentMode), cloud_sync_state: "local" },
+      },
+      201
+    );
+  };
+  const realRandomUUID = globalThis.crypto?.randomUUID;
+  const { context, document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+  vm.runInContext(`generateThreadUUID = () => "${newUUID}"`, context);
+
+  document.byId.get("empty-new-thread-button").click();
+  await settle();
+  assert.equal(document.byId.get("new-thread-form").hidden, false, "the form opens signed-out");
+  const nameInput = document.byId.get("new-thread-name");
+  nameInput.value = "EA 冒烟";
+  nameInput.dispatch("input");
+  assert.equal(
+    document.byId.get("new-thread-submit-button").disabled,
+    false,
+    "a valid name must enable the submit — the form and its button obey ONE predicate",
+  );
+  document.byId.get("new-thread-form").submit();
+  await settle();
+  await settle();
+  assert.deepEqual(createCalls, [newUUID], "the create goes out");
+  assert.equal(document.byId.get("thread-panel").hidden, false, "the new conversation opens");
+  if (realRandomUUID) globalThis.crypto.randomUUID = realRandomUUID;
+}
+
 async function testSidebarContentSearch() {
   const searchCalls = [];
   let pendingResolve = null;
@@ -5830,6 +5940,8 @@ await testComposerAccountChipSkipsTheDefaultIdentity();
 await testExportThreadWritesAndReveals();
 await testOnboardingPathsLeadSomewhere();
 await testOnboardingHiddenOnceUsable();
+await testBridgeLibAcceptsLocalCreateContract();
+await testSignedOutLocalCanCreateThread();
 await testSidebarContentSearch();
 await testPaletteRunsCommands();
 await testPaletteOpensWithoutThreads();
