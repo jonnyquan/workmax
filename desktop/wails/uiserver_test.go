@@ -72,6 +72,8 @@ func TestUIProxyBlocksTheModelGatewaySubtree(t *testing.T) {
 	for _, p := range []string{
 		"/" + cap + "/api/model-gateway/anthropic/v1/messages",
 		"/" + cap + "/api/model-gateway/anthropic/messages",
+		"/" + cap + "/api/model-gateway/anthropic/v1/messages/count_tokens",
+		"/" + cap + "/api/model-gateway/anthropic/messages/count_tokens",
 		"/" + cap + "/api/model-gateway/openai/v1/chat/completions",
 		"/" + cap + "/api/model-gateway/openai/chat/completions",
 		// A spelling nobody registered is refused too: the subtree is the

@@ -16,10 +16,17 @@ import (
 	cloudproxy "server/desktop/cloud_proxy"
 )
 
-// server_model_gateway.go is the loopback half of the official-model path: two
+// server_model_gateway.go is the loopback half of the official-model path:
 // routes shaped like the providers the local engines already know how to talk
 // to, authenticated by the in-memory gateway token, forwarded to the cloud on
 // the OAuth session the sidecar owns.
+//
+// Which routes is an EMPIRICAL question, not a design one — the clients are
+// somebody else's binaries. The set here is what the real ones were observed
+// to call: claude CLI 2.1.226 calls /v1/messages and /v1/messages/count_tokens
+// (see modelGatewayAnthropicCountTokens); pi's openai-completions transport
+// calls exactly one endpoint, {baseUrl}/chat/completions, and OpenAI has no
+// token-counting endpoint at all.
 //
 // Everything user-visible about failure lives here, and it is all explicit.
 // OSS-4 forbids a silent fallback across routes; the same rule applies one
@@ -35,22 +42,46 @@ import (
 // bound a runaway subprocess cannot walk past.
 const maxModelGatewayBodyBytes = 8 << 20
 
-// modelGatewayTarget is one protocol's routing and error vocabulary.
+// modelGatewayTarget is one endpoint's routing and error vocabulary.
 type modelGatewayTarget struct {
-	// Protocol is the gateway path segment ("anthropic" / "openai").
+	// Protocol is the gateway path segment ("anthropic" / "openai"), which
+	// also picks the error body shape the caller can read.
 	Protocol string
 	// CloudPath is the upstream endpoint this shape forwards to.
 	CloudPath string
+	// Accept is what we ask the cloud for. Completions stream; count_tokens
+	// answers one small JSON object, and asking it for SSE would be a lie we
+	// tell every request.
+	Accept string
 }
 
 var (
 	modelGatewayAnthropic = modelGatewayTarget{
 		Protocol:  modelGatewayProtocolAnthropic,
 		CloudPath: cloudproxy.CloudRouteModelGatewayAnthropic,
+		Accept:    "text/event-stream",
+	}
+	// modelGatewayAnthropicCountTokens exists because the packaged claude CLI
+	// calls a second endpoint, and we found that out by watching it rather
+	// than by reading about it: CLI 2.1.226, launched with the production
+	// recipe against a path-recording stub, issues
+	// POST /v1/messages/count_tokens?beta=true whenever a tool result is big
+	// enough to need sizing (a Read of a ~40 KiB workspace file did it).
+	//
+	// Before this route the call landed on the sidecar's whole-port local
+	// token perimeter and got a 403 the CLI could not parse. That is not a
+	// dead turn — the CLI catches the failure and falls back to a chars/4
+	// estimate — but it is a silent 403 on the official-model path, which is
+	// exactly the shape of bug the perimeter exists to make visible.
+	modelGatewayAnthropicCountTokens = modelGatewayTarget{
+		Protocol:  modelGatewayProtocolAnthropic,
+		CloudPath: cloudproxy.CloudRouteModelGatewayAnthropicCountTokens,
+		Accept:    "application/json",
 	}
 	modelGatewayOpenAI = modelGatewayTarget{
 		Protocol:  modelGatewayProtocolOpenAI,
 		CloudPath: cloudproxy.CloudRouteModelGatewayOpenAI,
+		Accept:    "text/event-stream",
 	}
 )
 
@@ -80,6 +111,10 @@ const (
 
 func (s *Server) handleModelGatewayAnthropicMessages(c *gin.Context) {
 	s.forwardModelGateway(c, modelGatewayAnthropic)
+}
+
+func (s *Server) handleModelGatewayAnthropicCountTokens(c *gin.Context) {
+	s.forwardModelGateway(c, modelGatewayAnthropicCountTokens)
 }
 
 func (s *Server) handleModelGatewayOpenAIChatCompletions(c *gin.Context) {
@@ -187,6 +222,18 @@ func (s *Server) forwardModelGateway(c *gin.Context, target modelGatewayTarget) 
 // sendModelGatewayRequest builds and performs the upstream POST. The Bearer
 // token stays inside this function's call: it is never echoed downstream, and
 // the loopback caller has no way to observe it.
+//
+// The caller's own headers are NOT forwarded, and anthropic-beta is the
+// deliberate case. The recording probe showed the CLI asking for seven betas
+// at once (claude-code-20250219, interleaved-thinking-2025-05-14,
+// thinking-token-count-2026-05-13, context-management-2025-06-27,
+// prompt-caching-scope-2026-01-05, mid-conversation-system-2026-04-07,
+// effort-2025-11-24) plus a ?beta=true query. Those are negotiated against
+// ANTHROPIC's API, and the official path lands on whichever pooled relay ops
+// configured — a relay that has never heard of one of them answers 400, which
+// would turn a working turn into a dead one for a feature the CLI degrades
+// gracefully without. So the betas stop here, and the turn runs on the
+// baseline protocol. The query string is dropped for the same reason.
 func (s *Server) sendModelGatewayRequest(
 	ctx context.Context,
 	cloud *cloudproxy.Client,
@@ -203,7 +250,11 @@ func (s *Server) sendModelGatewayRequest(
 		return nil, err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "text/event-stream")
+	accept := target.Accept
+	if accept == "" {
+		accept = "text/event-stream"
+	}
+	request.Header.Set("Accept", accept)
 	request.Header.Set("Authorization", "Bearer "+accessToken)
 	cloudproxy.SetClientHeaders(request.Header)
 	return s.cfg.ModelGateway.client.Do(request)

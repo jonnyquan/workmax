@@ -13,6 +13,7 @@ import (
 
 	agentruntime "server/desktop/agentruntime"
 	cloudproxy "server/desktop/cloud_proxy"
+	localinference "server/desktop/local_inference"
 )
 
 // claudeRuntime is the Claude Agent SDK engine behind the agentruntime seam:
@@ -159,7 +160,13 @@ func (r *claudeRuntime) buildQueryOptions(in agentruntime.TurnInput, emit agentr
 		claudesdk.WithCwd(in.Workspace),
 		claudesdk.WithModel(in.ModelID),
 		claudesdk.WithEnv(map[string]string{
-			"ANTHROPIC_BASE_URL": in.BaseURL,
+			// Canonicalized, not passed through: the CLI appends /v1/messages
+			// to whatever it is given, so a base the user typed WITH the
+			// version segment ("https://host/v1") would become
+			// https://host/v1/v1/messages. AnthropicBaseURL strips it, and the
+			// L1 adapter appends the same full path to the same base — one
+			// stored value, two engines, one URL.
+			"ANTHROPIC_BASE_URL": localinference.AnthropicBaseURL(in.BaseURL),
 			"ANTHROPIC_API_KEY":  apiKey,
 			"HOME":               filepath.Join(r.workspaceRoot, ".claude-home"),
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",

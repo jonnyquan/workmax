@@ -137,8 +137,14 @@ func newHarness(t *testing.T, cfg *config.ModelGateway, upstreamHandler http.Han
 	mux.HandleFunc("/anthropic", func(w http.ResponseWriter, r *http.Request) {
 		gw.Handle(w, r, ProtocolAnthropic, h.uid)
 	})
+	mux.HandleFunc("/anthropic/count_tokens", func(w http.ResponseWriter, r *http.Request) {
+		gw.HandleOperation(w, r, ProtocolAnthropic, OpCountTokens, h.uid)
+	})
 	mux.HandleFunc("/openai", func(w http.ResponseWriter, r *http.Request) {
 		gw.Handle(w, r, ProtocolOpenAI, h.uid)
+	})
+	mux.HandleFunc("/openai/count_tokens", func(w http.ResponseWriter, r *http.Request) {
+		gw.HandleOperation(w, r, ProtocolOpenAI, OpCountTokens, h.uid)
 	})
 	h.gateway = httptest.NewServer(mux)
 	t.Cleanup(h.gateway.Close)
@@ -1050,5 +1056,129 @@ func TestGateway_OpenAIRouteUsesOpenAIErrorShape(t *testing.T) {
 	}
 	if errObj["code"] != ErrClassInsufficientTier {
 		t.Errorf("error.code = %v, want %q", errObj["code"], ErrClassInsufficientTier)
+	}
+}
+
+// count_tokens exists here because the packaged claude CLI calls it — that is
+// an observation (CLI 2.1.226 against a path-recording stub), not a guess. It
+// has to go through the SAME admission the completion endpoint does, land on
+// the provider's own count_tokens path, and meter as a call that cost nothing.
+func TestGateway_CountTokensGoesUpstreamAndMetersZeroTokens(t *testing.T) {
+	h := newHarness(t, nil, jsonUpstream(http.StatusOK, `{"input_tokens":4242}`))
+	h.uid = seedUser(t, h.db, model.MEMBER_SUBSCRIPTION_NONE, time.Time{})
+	seedModels(t, h.db)
+
+	resp := h.post(t, "/anthropic/count_tokens", `{"model":"work-pro","messages":[{"role":"user","content":"hi"}]}`)
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d (%s)", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "4242") {
+		t.Errorf("the answer must reach the caller verbatim: %s", body)
+	}
+	if strings.Contains(string(body), providerAPIKey) {
+		t.Fatal("provider credential leaked into the response")
+	}
+
+	upstream := h.upstreamRequest(t)
+	if upstream.URL.Path != "/v1/messages/count_tokens" {
+		t.Errorf("upstream path = %q, want /v1/messages/count_tokens", upstream.URL.Path)
+	}
+	// The catalog id is a product name; the provider only knows the real one.
+	upstreamBody, _ := io.ReadAll(upstream.Body)
+	if !strings.Contains(string(upstreamBody), `"model":"claude-sonnet-5"`) {
+		t.Errorf("upstream body did not carry the resolved model: %s", upstreamBody)
+	}
+
+	record := h.recorder.last(t)
+	if record.Operation != OpCountTokens {
+		t.Errorf("usage operation = %q, want %q", record.Operation, OpCountTokens)
+	}
+	if record.Status != model.DesktopModelGatewayUsageStatusCompleted {
+		t.Errorf("usage status = %q", record.Status)
+	}
+	// The provider does not bill count_tokens, and its input_tokens field is
+	// the answer, not a charge. Metering it would inflate every spend report
+	// by everything the tool loop ever measured.
+	if record.Usage.Total() != 0 {
+		t.Errorf("count_tokens metered %d tokens; it must meter zero", record.Usage.Total())
+	}
+}
+
+// Entitlement is not endpoint-specific. A second endpoint must not become a
+// cheaper way past the tier check the first one enforces.
+func TestGateway_CountTokensStillChecksTier(t *testing.T) {
+	h := newHarness(t, nil, jsonUpstream(http.StatusOK, `{"input_tokens":1}`))
+	h.uid = seedUser(t, h.db, model.MEMBER_SUBSCRIPTION_NONE, time.Time{})
+	seedModels(t, h.db)
+
+	resp := h.post(t, "/anthropic/count_tokens", `{"model":"work-plus","messages":[]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	if h.upstreamCallCount() != 0 {
+		t.Error("a refused count_tokens must not reach the provider")
+	}
+	if got := h.recorder.last(t).ErrorClass; got != ErrClassInsufficientTier {
+		t.Errorf("error class = %q", got)
+	}
+}
+
+// OpenAI has no token-counting endpoint (pi's transport never asks for one).
+// Refuse in words rather than silently serving the completion endpoint, which
+// would answer a measurement with a model turn and a bill.
+func TestGateway_CountTokensIsRefusedOnOpenAI(t *testing.T) {
+	h := newHarness(t, nil, jsonUpstream(http.StatusOK, `{"input_tokens":1}`))
+	h.uid = seedUser(t, h.db, model.MEMBER_SUBSCRIPTION_NONE, time.Time{})
+	seedModels(t, h.db)
+
+	resp := h.post(t, "/openai/count_tokens", `{"model":"work-pro","messages":[]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	if h.upstreamCallCount() != 0 {
+		t.Error("an unsupported operation must not reach the provider")
+	}
+	record := h.recorder.last(t)
+	if record.ErrorClass != ErrClassOperationUnsupported {
+		t.Errorf("error class = %q, want %q", record.ErrorClass, ErrClassOperationUnsupported)
+	}
+	if record.Operation != OpCountTokens {
+		t.Errorf("usage operation = %q", record.Operation)
+	}
+}
+
+// The DB recorder is what production writes with; the operation column has to
+// survive the round trip or the metering distinction is decorative.
+func TestGateway_CountTokensUsageRowRecordsTheOperation(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	NewDBUsageRecorder(db).Record(UsageRecord{
+		UID: 5, RequestID: "req-ct-1", Protocol: ProtocolAnthropic, Operation: OpCountTokens,
+		ModelID: "work-pro", UpstreamModel: "claude-sonnet-5",
+		Status: model.DesktopModelGatewayUsageStatusCompleted, HTTPStatus: 200,
+		StartedAt: time.Now(),
+	})
+	// A caller that predates the field means the endpoint that was the only
+	// one there was.
+	NewDBUsageRecorder(db).Record(UsageRecord{
+		UID: 5, RequestID: "req-ct-2", Protocol: ProtocolAnthropic,
+		ModelID: "work-pro", Status: model.DesktopModelGatewayUsageStatusCompleted,
+		StartedAt: time.Now(),
+	})
+
+	for requestID, want := range map[string]string{
+		"req-ct-1": string(OpCountTokens),
+		"req-ct-2": string(OpMessages),
+	} {
+		var row model.DesktopModelGatewayUsage
+		if err := db.Where("request_id = ?", requestID).First(&row).Error; err != nil {
+			t.Fatalf("usage row %s not persisted: %v", requestID, err)
+		}
+		if row.Operation != want {
+			t.Errorf("row %s operation = %q, want %q", requestID, row.Operation, want)
+		}
 	}
 }

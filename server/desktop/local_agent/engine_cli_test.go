@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -44,6 +45,10 @@ func testCLIPath(t *testing.T) string {
 type fakeAnthropic struct {
 	workspace string
 	hang      bool
+	// readPath, when set, makes the first tool call a Read of that file
+	// instead of a Write. Used by the endpoint inventory test, where the
+	// point is to hand the CLI a large tool RESULT.
+	readPath string
 
 	mu       sync.Mutex
 	requests int
@@ -89,12 +94,18 @@ func (f *fakeAnthropic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"content": []any{}, "stop_reason": nil,
 		"usage": map[string]any{"input_tokens": 1, "output_tokens": 1}}})
 	if !hasToolResult {
-		input, _ := json.Marshal(map[string]string{
+		toolName := "Write"
+		payload := map[string]string{
 			"file_path": filepath.Join(f.workspace, "it-proof.txt"),
 			"content":   "written by the integration test tool loop",
-		})
+		}
+		if f.readPath != "" {
+			toolName = "Read"
+			payload = map[string]string{"file_path": f.readPath}
+		}
+		input, _ := json.Marshal(payload)
 		sseWrite(w, "content_block_start", map[string]any{"type": "content_block_start", "index": 0,
-			"content_block": map[string]any{"type": "tool_use", "id": "toolu_it", "name": "Write", "input": map[string]any{}}})
+			"content_block": map[string]any{"type": "tool_use", "id": "toolu_it", "name": toolName, "input": map[string]any{}}})
 		sseWrite(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": 0,
 			"delta": map[string]any{"type": "input_json_delta", "partial_json": string(input)}})
 		sseWrite(w, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
@@ -359,5 +370,126 @@ func TestIntegration_WorkspaceEscapeIsDeniedAndNarrated(t *testing.T) {
 	}
 	if !sawDenied {
 		t.Error("the denial must be narrated on the stream")
+	}
+}
+
+// endpointRecorder is the resident form of the probe that produced the
+// count_tokens finding: it answers ONLY the endpoints we proxy, records every
+// path the CLI asks for, and 404s anything else.
+//
+// The other fakes in this file are catch-all handlers — they answer whatever
+// path arrives, which is convenient and blind. That blindness is precisely why
+// the CLI's second endpoint went unnoticed until somebody pointed a recording
+// stub at it.
+type endpointRecorder struct {
+	inner *fakeAnthropic
+
+	mu    sync.Mutex
+	paths []string
+}
+
+func (r *endpointRecorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	r.mu.Lock()
+	r.paths = append(r.paths, req.URL.Path)
+	r.mu.Unlock()
+
+	switch req.URL.Path {
+	case "/v1/messages":
+		r.inner.ServeHTTP(w, req)
+	case "/v1/messages/count_tokens":
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"input_tokens":128}`)
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func (r *endpointRecorder) called(path string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range r.paths {
+		if p == path {
+			return true
+		}
+	}
+	return false
+}
+
+// The endpoint inventory: WHICH provider paths does the packaged CLI call?
+//
+// The answer decides how many routes the sidecar's loopback gateway and the
+// cloud gateway have to carry, and it is not knowable from our own source —
+// the CLI is somebody else's binary. Measured on 2026-08-11 with claude CLI
+// 2.1.226 driven through this exact production recipe:
+//
+//	POST /v1/messages?beta=true              — every turn
+//	POST /v1/messages/count_tokens?beta=true — when a tool result is large
+//	                                           enough to need sizing (a Read
+//	                                           of a ~40 KiB file did it; a
+//	                                           short turn never does)
+//
+// Nothing else: no model listing, no session or telemetry call on the
+// configured base URL. Both are now proxied end to end.
+//
+// This test is the guard on that claim. A path outside the inventory means the
+// CLI grew an endpoint we do NOT proxy — which in production is a 403 from the
+// sidecar's local-token perimeter and a silently degraded tool loop, so it
+// fails here loudly instead.
+func TestIntegration_CLIEndpointInventory(t *testing.T) {
+	db := openTestDB(t)
+	seedThreadRow(t, db)
+
+	recorder := &endpointRecorder{inner: &fakeAnthropic{}}
+	upstream := httptest.NewServer(recorder)
+	t.Cleanup(upstream.Close)
+
+	root := t.TempDir()
+	engine := NewEngine(
+		stubProfile{baseURL: upstream.URL, modelID: "fake-l2", apiKey: "sk-test"},
+		db, nil, nil, testCLIPath(t), root,
+	)
+	workspace := filepath.Join(root, "thread_thr_l2")
+	recorder.inner.workspace = workspace
+
+	// A file big enough that the CLI wants it sized before sending. Below the
+	// threshold it never asks; far above it, it refuses on characters alone
+	// without asking either. ~40 KiB sits in the window where it asks.
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var big strings.Builder
+	for big.Len() < 40<<10 {
+		big.WriteString("lorem ipsum dolor sit amet consectetur adipiscing elit\n")
+	}
+	bigPath := filepath.Join(workspace, "big.txt")
+	if err := os.WriteFile(bigPath, []byte(big.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	recorder.inner.readPath = bigPath
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if err := engine.Chat(ctx, chatReq(), &memSSEWriter{}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	known := map[string]struct{}{
+		"/v1/messages":              {},
+		"/v1/messages/count_tokens": {},
+	}
+	recorder.mu.Lock()
+	paths := append([]string(nil), recorder.paths...)
+	recorder.mu.Unlock()
+	for _, p := range paths {
+		if _, ok := known[p]; !ok {
+			t.Errorf("the CLI called %q, which the gateway does not proxy. "+
+				"Add it to server/desktop/route_policy.go, the cloud gateway "+
+				"router, and this inventory — or it is a 403 in production.", p)
+		}
+	}
+	if !recorder.called("/v1/messages/count_tokens") {
+		t.Errorf("the CLI no longer calls /v1/messages/count_tokens (paths: %v). "+
+			"If that is a deliberate CLI change, update this inventory and the "+
+			"comments that cite it; do not silently keep a route nobody proves.", paths)
 	}
 }

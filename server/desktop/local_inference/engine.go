@@ -264,7 +264,8 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 		_ = dst.WriteProxyError(cloudproxy.ProxyError{Kind: cloudproxy.KindBadRequest, Message: "本地推理请求构造失败"})
 		return berr
 	}
-	httpReq, herr := http.NewRequestWithContext(ctx, http.MethodPost, adapter.endpoint(baseURL), body)
+	endpoint := adapter.endpoint(baseURL)
+	httpReq, herr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
 	if herr != nil {
 		_ = dst.WriteProxyError(cloudproxy.ProxyError{Kind: cloudproxy.KindBadRequest, Message: "本地推理请求构造失败"})
 		return herr
@@ -290,8 +291,20 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		pe := cloudproxy.ClassifyHTTPResponse(resp, raw)
+		if resp.StatusCode == http.StatusNotFound {
+			// A 404 from a self-hosted endpoint is almost always the base_url
+			// spelling, not an outage — so name the URL we actually asked for.
+			// Without it the user reads "请求被拒绝" and has no way to tell
+			// whether we appended the path they expected.
+			pe.Message = "本地模型 endpoint 返回 404：请检查 base_url 是否正确"
+			if pe.Details == nil {
+				pe.Details = map[string]any{}
+			}
+			pe.Details["local_endpoint"] = endpoint
+			pe = cloudproxy.SanitizeProxyError(pe)
+		}
 		_ = dst.WriteProxyError(pe)
-		return fmt.Errorf("local inference: upstream status %d", resp.StatusCode)
+		return fmt.Errorf("local inference: upstream status %d for %s", resp.StatusCode, endpoint)
 	}
 
 	// 6. 归一化上游 SSE → workmax SSEEvent，写 dst + cache。同时累积 assistant

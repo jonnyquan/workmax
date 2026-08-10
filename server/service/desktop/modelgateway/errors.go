@@ -46,6 +46,51 @@ func (p Protocol) UpstreamPath() string {
 	}
 }
 
+// Operation names WHICH endpoint of a protocol a request is for. Protocol
+// alone was enough while every caller wanted a completion; it stopped being
+// enough when a real client turned out to call a second one.
+//
+// Measured, not guessed: claude CLI 2.1.226, driven through our own SDK with
+// the production launch recipe against a path-recording stub, calls
+// POST /v1/messages/count_tokens?beta=true whenever a tool result is large
+// enough to need sizing (a Read of a ~40 KiB file did it). Without this the
+// call met the sidecar's local-token perimeter and got a 403 with a body the
+// CLI cannot read — the tool loop silently degraded to a chars/4 estimate on
+// the very files where the estimate matters most. See
+// server/desktop/local_agent/engine_cli_test.go for the resident probe.
+//
+// OpenAI has no counterpart endpoint, and pi (packages/ai
+// openai-completions.ts) issues exactly one call — client.chat.completions
+// .create against {baseUrl}/chat/completions — so OpCountTokens is Anthropic
+// only and is refused on the OpenAI protocol rather than silently mapped.
+type Operation string
+
+const (
+	// OpMessages is the completion endpoint: the protocol's own root path.
+	OpMessages Operation = "messages"
+	// OpCountTokens is Anthropic's token counter. Not billed by the provider,
+	// so it meters as a call with zero tokens.
+	OpCountTokens Operation = "count_tokens"
+)
+
+// UpstreamPathFor is the full provider path for one protocol/operation pair.
+// An operation a protocol does not have returns ok=false: the gateway must
+// refuse it, not invent a path the provider will 404 on.
+func (p Protocol) UpstreamPathFor(op Operation) (string, bool) {
+	root := p.UpstreamPath()
+	switch op {
+	case "", OpMessages:
+		return root, true
+	case OpCountTokens:
+		if p == ProtocolOpenAI {
+			return "", false
+		}
+		return root + "/count_tokens", true
+	default:
+		return "", false
+	}
+}
+
 // Error classes. This is the complete vocabulary that can appear in a usage
 // row's error_class and in a client-visible error body's machine-readable
 // slot. It is deliberately small and closed: an operator greps it, and a
@@ -64,6 +109,10 @@ const (
 	ErrClassInsufficientTier = "insufficient_tier"
 	// ErrClassModelNotConfigured — catalog row has no upstreamModel mapping.
 	ErrClassModelNotConfigured = "model_not_configured"
+	// ErrClassOperationUnsupported — the route asked for an endpoint this
+	// protocol does not have (count_tokens on OpenAI). An explicit refusal,
+	// never a silent fall back to the completion endpoint.
+	ErrClassOperationUnsupported = "operation_unsupported"
 	// ErrClassProviderUnavailable — no healthy platform credential can serve
 	// this protocol/tier right now.
 	ErrClassProviderUnavailable = "provider_unavailable"

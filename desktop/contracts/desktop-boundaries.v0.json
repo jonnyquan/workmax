@@ -882,6 +882,40 @@
       }
     },
     {
+      "id": "model-gateway.anthropic.count-tokens",
+      "method": "POST",
+      "path": "/model-gateway/anthropic/v1/messages/count_tokens",
+      "credential": "gateway-token",
+      "credentialScheme": "x-api-key",
+      "rendererAccess": "forbidden",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 8388608,
+        "bodyTooLargeError": "model gateway request body too large"
+      }
+    },
+    {
+      "id": "model-gateway.anthropic.count-tokens-unversioned",
+      "method": "POST",
+      "path": "/model-gateway/anthropic/messages/count_tokens",
+      "credential": "gateway-token",
+      "credentialScheme": "x-api-key",
+      "rendererAccess": "forbidden",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 8388608,
+        "bodyTooLargeError": "model gateway request body too large"
+      }
+    },
+    {
       "id": "model-gateway.openai.chat-completions",
       "method": "POST",
       "path": "/model-gateway/openai/v1/chat/completions",
@@ -971,6 +1005,14 @@
       "id": "desktop.model-gateway.anthropic",
       "method": "POST",
       "path": "/api/desktop/model-gateway/anthropic/v1/messages",
+      "surface": "desktop-resource",
+      "status": "current",
+      "inventorySource": "sidecar-cloud-proxy"
+    },
+    {
+      "id": "desktop.model-gateway.anthropic.count-tokens",
+      "method": "POST",
+      "path": "/api/desktop/model-gateway/anthropic/v1/messages/count_tokens",
       "surface": "desktop-resource",
       "status": "current",
       "inventorySource": "sidecar-cloud-proxy"

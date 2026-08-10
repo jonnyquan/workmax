@@ -162,14 +162,20 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	newCurrentSidecarRoutePolicy("agent.thread-cloud-sync", http.MethodPut, "/agent/threads/:uuid/cloud-sync", SidecarBodyRequired, maxThreadCloudSyncBodyBytes, "application/json"),
 	newCurrentSidecarRoutePolicy("settings.model-catalog.get", http.MethodGet, "/settings/model-catalog", SidecarBodyForbidden, 0),
 
-	// The model gateway. Two protocols, two path spellings each, because the
-	// clients disagree about whether the version segment belongs to the base
-	// URL they were configured with: the claude CLI appends /v1/messages to
-	// ANTHROPIC_BASE_URL while this repo's own L1 adapter appends /messages,
-	// and the OpenAI-shaped clients split the same way. Registering both
-	// spellings lets one base string serve every caller — the alternative is a
-	// per-engine URL rule that is wrong the first time a client changes its
-	// mind, and wrong silently, as a 404 in the middle of a turn.
+	// The model gateway. Which routes exist here is an EMPIRICAL question:
+	// the callers are somebody else's binaries, so the set is what the real
+	// ones were observed to ask for, not what the protocol documents.
+	//
+	// Two path spellings each, because clients disagree about whether the
+	// version segment belongs to the base URL they were configured with. The
+	// claude CLI appends /v1/messages to ANTHROPIC_BASE_URL and cannot be
+	// argued with; pi's OpenAI transport appends /chat/completions to the
+	// base it is given. This repo's own L1 adapter now appends the full
+	// versioned path too, so the unversioned spellings are tolerance for a
+	// client that spells it the other way rather than a route we depend on —
+	// kept because the alternative is a per-engine URL rule that is wrong the
+	// first time a client changes its mind, and wrong silently, as a 404 in
+	// the middle of a turn.
 	newModelGatewayRoutePolicy(
 		"model-gateway.anthropic.messages",
 		"/model-gateway/anthropic/v1/messages",
@@ -178,6 +184,23 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	newModelGatewayRoutePolicy(
 		"model-gateway.anthropic.messages-unversioned",
 		"/model-gateway/anthropic/messages",
+		SidecarCredentialSchemeAnthropicAPIKey,
+	),
+	// The claude CLI's second endpoint. Measured, not assumed: CLI 2.1.226,
+	// launched with the production recipe against a path-recording stub,
+	// issues POST /v1/messages/count_tokens?beta=true whenever a tool result
+	// is large enough to need sizing before it is sent (a Read of a ~40 KiB
+	// workspace file did it; a short turn never does). Without these two the
+	// call met the whole-port local-token perimeter and got a 403 the CLI
+	// cannot read, and the tool loop silently degraded to a chars/4 estimate.
+	newModelGatewayRoutePolicy(
+		"model-gateway.anthropic.count-tokens",
+		"/model-gateway/anthropic/v1/messages/count_tokens",
+		SidecarCredentialSchemeAnthropicAPIKey,
+	),
+	newModelGatewayRoutePolicy(
+		"model-gateway.anthropic.count-tokens-unversioned",
+		"/model-gateway/anthropic/messages/count_tokens",
 		SidecarCredentialSchemeAnthropicAPIKey,
 	),
 	newModelGatewayRoutePolicy(
@@ -456,6 +479,8 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handleModelCatalog, true
 	case "model-gateway.anthropic.messages", "model-gateway.anthropic.messages-unversioned":
 		return s.handleModelGatewayAnthropicMessages, true
+	case "model-gateway.anthropic.count-tokens", "model-gateway.anthropic.count-tokens-unversioned":
+		return s.handleModelGatewayAnthropicCountTokens, true
 	case "model-gateway.openai.chat-completions", "model-gateway.openai.chat-completions-unversioned":
 		return s.handleModelGatewayOpenAIChatCompletions, true
 	case "agent.thread-file-upload":

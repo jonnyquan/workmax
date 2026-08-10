@@ -49,6 +49,15 @@ const (
 	CloudRouteModelGatewayAnthropic = "/api/desktop/model-gateway/anthropic/v1/messages"
 	CloudRouteModelGatewayOpenAI    = "/api/desktop/model-gateway/openai/v1/chat/completions"
 
+	// CloudRouteModelGatewayAnthropicCountTokens is the second endpoint the
+	// packaged claude CLI actually calls. Measured against CLI 2.1.226 with a
+	// path-recording stub in the production launch shape: a turn whose tool
+	// result is large enough to need sizing issues
+	// POST /v1/messages/count_tokens?beta=true before it sends. Anthropic does
+	// not bill it; the gateway still admits, limits and meters it like every
+	// other call, because it still spends a platform credential's quota.
+	CloudRouteModelGatewayAnthropicCountTokens = "/api/desktop/model-gateway/anthropic/v1/messages/count_tokens"
+
 	CloudRouteSkillsList  = "/api/work-agent/skills"
 	CloudRouteChatAgent   = "/api/work-agent/chat/agent"
 	CloudRouteAgentThread = "/api/desktop/agent/threads/:uuid"
@@ -79,6 +88,7 @@ var currentCloudRouteSpecs = []CloudRouteSpec{
 	newCloudRouteSpec("desktop.sync.messages", http.MethodGet, CloudRouteSyncMessages),
 	newCloudRouteSpec("desktop.models", http.MethodGet, CloudRouteModelsList),
 	newCloudRouteSpec("desktop.model-gateway.anthropic", http.MethodPost, CloudRouteModelGatewayAnthropic),
+	newCloudRouteSpec("desktop.model-gateway.anthropic.count-tokens", http.MethodPost, CloudRouteModelGatewayAnthropicCountTokens),
 	newCloudRouteSpec("desktop.model-gateway.openai", http.MethodPost, CloudRouteModelGatewayOpenAI),
 	newCloudRouteSpec("agent.skills", http.MethodGet, CloudRouteSkillsList),
 	newCloudRouteSpec("agent.chat", http.MethodPost, CloudRouteChatAgent),

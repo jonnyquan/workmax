@@ -12,6 +12,7 @@ import (
 // tool loop calls:
 //
 //	POST /api/desktop/model-gateway/anthropic/v1/messages
+//	POST /api/desktop/model-gateway/anthropic/v1/messages/count_tokens
 //	POST /api/desktop/model-gateway/openai/v1/chat/completions
 //
 // Credential is identical to /api/desktop/models and /api/desktop/sync/*:
@@ -40,6 +41,12 @@ func (DesktopModelGatewayRouter) InitDesktopModelGatewayRouter(router *gin.Route
 
 	apis := api.ApiGroupApp.DesktopApiGroup.ModelGatewayApi
 	g.POST("/anthropic/v1/messages", apis.AnthropicMessages)
+	// The packaged claude CLI calls this one too — measured, not assumed:
+	// a path-recording probe against CLI 2.1.226 caught
+	// POST /v1/messages/count_tokens?beta=true on a turn whose tool result
+	// was large enough to need sizing. Registering it here is what keeps the
+	// sidecar from having to answer a request it cannot forward.
+	g.POST("/anthropic/v1/messages/count_tokens", apis.AnthropicCountTokens)
 	g.POST("/openai/v1/chat/completions", apis.OpenAIChatCompletions)
 }
 

@@ -214,11 +214,13 @@ func (g *ModelGateway) BindContext(parent context.Context) (context.Context, fun
 
 // BaseURLFor is the endpoint a local engine points at for one local protocol.
 //
-// The version segment is deliberately NOT part of the base, because the
-// clients disagree about who owns it: the claude CLI appends /v1/messages to
-// ANTHROPIC_BASE_URL, while this repo's own L1 adapter appends /messages to
-// the base a user typed. Both conventions are registered as routes, so one
-// base string serves both and neither client needs special handling.
+// The version segment is deliberately NOT part of the base: the claude CLI
+// appends /v1/messages to ANTHROPIC_BASE_URL and cannot be told otherwise, so
+// the base it is handed must stop before the version. This repo's L1 adapter
+// now appends the same full path (local_inference.AnthropicBaseURL), so one
+// base string serves both engines and neither needs special handling. The
+// unversioned spellings stay registered as tolerance for a client that
+// disagrees — see route_policy.go.
 func (g *ModelGateway) BaseURLFor(localProtocol string) string {
 	if g == nil {
 		return ""

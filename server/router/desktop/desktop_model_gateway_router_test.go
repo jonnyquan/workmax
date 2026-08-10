@@ -43,8 +43,13 @@ func newGatewayRouter(t *testing.T) *gin.Engine {
 	return r
 }
 
+// Every gateway path, including count_tokens — the second endpoint the
+// packaged claude CLI was observed calling. It is on this list because it must
+// clear exactly the same bar: an endpoint that spends the platform's provider
+// quota is not made harmless by returning a number instead of prose.
 var gatewayPaths = []string{
 	"/api/desktop/model-gateway/anthropic/v1/messages",
+	"/api/desktop/model-gateway/anthropic/v1/messages/count_tokens",
 	"/api/desktop/model-gateway/openai/v1/chat/completions",
 }
 

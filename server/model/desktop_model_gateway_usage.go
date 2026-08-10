@@ -31,6 +31,12 @@ type DesktopModelGatewayUsage struct {
 	RequestID string `json:"requestId" gorm:"column:request_id;type:varchar(64);not null;uniqueIndex:uk_dmg_usage_request;comment:网关请求ID"`
 	// Protocol is the wire shape the caller used: anthropic | openai.
 	Protocol string `json:"protocol" gorm:"column:protocol;type:varchar(16);not null;comment:anthropic/openai"`
+	// Operation is WHICH endpoint of that protocol: messages | count_tokens.
+	// It exists because count_tokens is not billed by the provider and its
+	// response carries an input_tokens field that is an answer, not a bill —
+	// without this column a spend report could not tell the two apart, and
+	// the whole point of the table is that it can.
+	Operation string `json:"operation" gorm:"column:operation;type:varchar(24);not null;default:'messages';comment:messages/count_tokens"`
 	// ModelID is the catalog modelId the caller asked for (w_global_model).
 	ModelID string `json:"modelId" gorm:"column:model_id;type:varchar(128);not null;index:idx_dmg_usage_model;comment:目录modelId"`
 	// UpstreamModel is the real provider model name we sent out.

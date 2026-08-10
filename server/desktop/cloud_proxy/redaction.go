@@ -26,6 +26,13 @@ func redactProxyErrorString(value string) string {
 	return value
 }
 
+// SanitizeProxyError is the exported form of the redaction every classified
+// error already passes through. Callers that ENRICH a ProxyError after
+// classification (adding a detail of their own) must send it back through
+// here: the classifier's guarantee is about what it produced, not about what
+// somebody appended afterwards.
+func SanitizeProxyError(pe ProxyError) ProxyError { return sanitizeProxyError(pe) }
+
 func sanitizeProxyError(pe ProxyError) ProxyError {
 	pe.Message = redactProxyErrorString(pe.Message)
 	pe.LogID = redactProxyErrorString(pe.LogID)

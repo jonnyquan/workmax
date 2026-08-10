@@ -604,3 +604,100 @@ func TestGatewayTokensAreFreshPerProcessAndConstantTimeChecked(t *testing.T) {
 		t.Fatalf("a shut-down gateway must not authenticate anything")
 	}
 }
+
+// count_tokens is the second endpoint the packaged claude CLI actually calls
+// — measured against CLI 2.1.226 with a path-recording stub, not assumed. It
+// must reach the cloud on the same credential, in both path spellings, and
+// carry the sidecar's chosen model like every other forwarded request.
+func TestModelGatewayForwardsCountTokens(t *testing.T) {
+	fixture := newModelGatewayFixture(t, true)
+	fixture.chooseOfficialModel(t, LocalProtocolAnthropicCompatible, "work-pro")
+	fixture.upstream.Store(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"input_tokens":1234}`)
+	})
+
+	for _, path := range []string{
+		"/model-gateway/anthropic/v1/messages/count_tokens",
+		"/model-gateway/anthropic/messages/count_tokens",
+	} {
+		request, _ := http.NewRequest(http.MethodPost, fixture.base+path,
+			strings.NewReader(`{"model":"whatever-the-cli-said","messages":[]}`))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("x-api-key", fixture.gateway.Token())
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		body := readAllString(t, response)
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("POST %s = %d (%s)", path, response.StatusCode, body)
+		}
+		if !strings.Contains(body, "1234") {
+			t.Errorf("POST %s did not pass the answer through: %s", path, body)
+		}
+		if got := fixture.seenPath.Load().(string); got != cloudproxy.CloudRouteModelGatewayAnthropicCountTokens {
+			t.Errorf("POST %s forwarded to %q", path, got)
+		}
+		// The model is the sidecar's answer here too: a subprocess must not be
+		// able to size a request against a model the user is not entitled to.
+		if got := fixture.seenBody.Load().(string); !strings.Contains(got, `"model":"work-pro"`) {
+			t.Errorf("POST %s forwarded body %q, want the chosen model", path, got)
+		}
+	}
+}
+
+// The count_tokens routes are gateway routes like any other: no loopback
+// credential, no forward. A local process that guessed the port must not be
+// able to measure against the account's entitlement either.
+func TestModelGatewayCountTokensRefusesAWrongToken(t *testing.T) {
+	fixture := newModelGatewayFixture(t, true)
+	fixture.chooseOfficialModel(t, LocalProtocolAnthropicCompatible, "work-pro")
+
+	request, _ := http.NewRequest(http.MethodPost,
+		fixture.base+"/model-gateway/anthropic/v1/messages/count_tokens",
+		strings.NewReader(`{"messages":[]}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("x-api-key", "not-the-token")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	body := readAllString(t, response)
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d (%s), want 401", response.StatusCode, body)
+	}
+	if fixture.callCount.Load() != 0 {
+		t.Error("a refused request must not reach the cloud")
+	}
+}
+
+// The CLI does not send a bare path: every request carries ?beta=true (both
+// endpoints, observed on 2.1.226). Routing is on the path, so this passes —
+// but it passes by a property of the router rather than by intent, and a turn
+// that 404s on a query string is not a failure anybody would read correctly.
+func TestModelGatewayRoutesTheQueryStringTheCLIActuallySends(t *testing.T) {
+	fixture := newModelGatewayFixture(t, true)
+	fixture.chooseOfficialModel(t, LocalProtocolAnthropicCompatible, "work-pro")
+
+	for path, upstream := range map[string]string{
+		"/model-gateway/anthropic/v1/messages?beta=true": cloudproxy.CloudRouteModelGatewayAnthropic,
+		"/model-gateway/anthropic/v1/messages/count_tokens?beta=true": cloudproxy.
+			CloudRouteModelGatewayAnthropicCountTokens,
+	} {
+		request, _ := http.NewRequest(http.MethodPost, fixture.base+path, strings.NewReader(`{"messages":[]}`))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("x-api-key", fixture.gateway.Token())
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		body := readAllString(t, response)
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("POST %s = %d (%s)", path, response.StatusCode, body)
+		}
+		if got := fixture.seenPath.Load().(string); got != upstream {
+			t.Errorf("POST %s forwarded to %q, want %q", path, got, upstream)
+		}
+	}
+}

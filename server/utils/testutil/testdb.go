@@ -400,6 +400,7 @@ var testSchemaDDL = []string{
 		uid INTEGER NOT NULL,
 		request_id TEXT NOT NULL,
 		protocol TEXT NOT NULL,
+		operation TEXT NOT NULL DEFAULT 'messages',
 		model_id TEXT NOT NULL,
 		upstream_model TEXT NOT NULL DEFAULT '',
 		provider_account_id INTEGER NOT NULL DEFAULT 0,

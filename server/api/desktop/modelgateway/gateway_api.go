@@ -41,17 +41,30 @@ func NewGatewayApi(db *gorm.DB, cfg *config.ModelGateway) *GatewayApi {
 // append /v1/messages itself — no client-side URL assembly, no chance of the
 // two drifting apart.
 func (a *GatewayApi) AnthropicMessages(c *gin.Context) {
-	a.serve(c, gateway.ProtocolAnthropic)
+	a.serve(c, gateway.ProtocolAnthropic, gateway.OpMessages)
+}
+
+// AnthropicCountTokens handles
+// POST /api/desktop/model-gateway/anthropic/v1/messages/count_tokens.
+//
+// It is here because the packaged engine actually calls it: a path-recording
+// probe against the real claude CLI (2.1.226) showed the CLI issuing
+// POST /v1/messages/count_tokens?beta=true whenever a tool result needs
+// sizing. It is not optional politeness — without this route the call fell
+// off the end of the sidecar's gateway paths and the tool loop degraded
+// silently.
+func (a *GatewayApi) AnthropicCountTokens(c *gin.Context) {
+	a.serve(c, gateway.ProtocolAnthropic, gateway.OpCountTokens)
 }
 
 // OpenAIChatCompletions handles
 // POST /api/desktop/model-gateway/openai/v1/chat/completions, the shape the
 // pi engine speaks.
 func (a *GatewayApi) OpenAIChatCompletions(c *gin.Context) {
-	a.serve(c, gateway.ProtocolOpenAI)
+	a.serve(c, gateway.ProtocolOpenAI, gateway.OpMessages)
 }
 
-func (a *GatewayApi) serve(c *gin.Context, protocol gateway.Protocol) {
+func (a *GatewayApi) serve(c *gin.Context, protocol gateway.Protocol, op gateway.Operation) {
 	if a == nil || a.Gateway == nil {
 		// Route-catalog and offline composition tests register routes without
 		// a database. Fail closed and loudly rather than panicking.
@@ -75,7 +88,7 @@ func (a *GatewayApi) serve(c *gin.Context, protocol gateway.Protocol) {
 	// http.Flusher, and streaming correctness depends on flushing each SSE
 	// frame as it arrives. Anything that buffers here turns a streaming
 	// gateway into a batching one.
-	a.Gateway.Handle(c.Writer, c.Request, protocol, uid)
+	a.Gateway.HandleOperation(c.Writer, c.Request, protocol, op, uid)
 	// The service owns the whole response, so stop gin's middleware chain
 	// from appending anything after it.
 	c.Abort()

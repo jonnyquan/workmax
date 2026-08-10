@@ -206,11 +206,15 @@ func NewUpstream(responseHeaderTimeout time.Duration) *Upstream {
 	return &Upstream{client: &http.Client{Transport: transport}}
 }
 
+// errUnsupportedOperation is "this protocol has no such endpoint" — a refusal,
+// never a guess at a path the provider does not serve.
+var errUnsupportedOperation = errors.New("protocol does not support the requested operation")
+
 // upstreamURL joins an account base URL with the protocol's path, tolerating
 // bases that already carry a path prefix (relays commonly do) and bases that
 // already end in the protocol path (so a mis-configured account produces one
 // correct URL rather than /v1/messages/v1/messages).
-func upstreamURL(baseURL string, protocol Protocol) (string, error) {
+func upstreamURL(baseURL string, protocol Protocol, op Operation) (string, error) {
 	trimmed := strings.TrimSpace(baseURL)
 	if trimmed == "" {
 		return "", errors.New("provider base url is empty")
@@ -222,12 +226,22 @@ func upstreamURL(baseURL string, protocol Protocol) (string, error) {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return "", errors.New("provider base url must be http or https")
 	}
-	path := protocol.UpstreamPath()
+	full, ok := protocol.UpstreamPathFor(op)
+	if !ok {
+		return "", errUnsupportedOperation
+	}
+	root := protocol.UpstreamPath()
 	basePath := strings.TrimRight(parsed.Path, "/")
-	if strings.HasSuffix(basePath, path) {
+	switch {
+	case strings.HasSuffix(basePath, full):
 		parsed.Path = basePath
-	} else {
-		parsed.Path = basePath + path
+	case strings.HasSuffix(basePath, root):
+		// The account was configured down to the completion endpoint. Append
+		// only what the operation adds, so ".../v1/messages" produces
+		// ".../v1/messages/count_tokens" rather than a doubled path.
+		parsed.Path = basePath + strings.TrimPrefix(full, root)
+	default:
+		parsed.Path = basePath + full
 	}
 	return parsed.String(), nil
 }
@@ -237,11 +251,12 @@ func upstreamURL(baseURL string, protocol Protocol) (string, error) {
 func (u *Upstream) buildRequest(
 	ctx context.Context,
 	protocol Protocol,
+	op Operation,
 	account *ProviderAccount,
 	body []byte,
 	clientHeader http.Header,
 ) (*http.Request, error) {
-	endpoint, err := upstreamURL(account.BaseURL, protocol)
+	endpoint, err := upstreamURL(account.BaseURL, protocol, op)
 	if err != nil {
 		return nil, err
 	}
@@ -281,11 +296,12 @@ func (u *Upstream) buildRequest(
 func (u *Upstream) Do(
 	ctx context.Context,
 	protocol Protocol,
+	op Operation,
 	account *ProviderAccount,
 	body []byte,
 	clientHeader http.Header,
 ) (*http.Response, error) {
-	req, err := u.buildRequest(ctx, protocol, account, body, clientHeader)
+	req, err := u.buildRequest(ctx, protocol, op, account, body, clientHeader)
 	if err != nil {
 		return nil, err
 	}

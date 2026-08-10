@@ -92,10 +92,29 @@ type requestEnvelope struct {
 	Stream *bool  `json:"stream"`
 }
 
-// Handle serves one gateway call end to end. w must be the raw response
-// writer (gin's satisfies http.Flusher), because streaming correctness
-// depends on flushing frames as they arrive rather than at the end.
+// Handle serves one completion call end to end. Kept as the name for the
+// endpoint every caller means by default; HandleOperation is the general form.
 func (g *Gateway) Handle(w http.ResponseWriter, r *http.Request, protocol Protocol, uid uint) {
+	g.HandleOperation(w, r, protocol, OpMessages, uid)
+}
+
+// HandleOperation serves one gateway call end to end. w must be the raw
+// response writer (gin's satisfies http.Flusher), because streaming
+// correctness depends on flushing frames as they arrive rather than at the
+// end.
+//
+// op picks WHICH endpoint of the protocol is being called. Everything before
+// the upstream hop — enablement, identity, rate limit, body cap, catalog
+// admission, tier check, credential selection, model rewrite — is deliberately
+// identical for every operation: a second endpoint must not become a second,
+// cheaper way past the checks the first one passes.
+func (g *Gateway) HandleOperation(
+	w http.ResponseWriter,
+	r *http.Request,
+	protocol Protocol,
+	op Operation,
+	uid uint,
+) {
 	requestID := uuid.NewString()
 	w.Header().Set(GatewayRequestIDHeader, requestID)
 	startedAt := time.Now()
@@ -104,6 +123,7 @@ func (g *Gateway) Handle(w http.ResponseWriter, r *http.Request, protocol Protoc
 		UID:       uid,
 		RequestID: requestID,
 		Protocol:  protocol,
+		Operation: op,
 		Stream:    false,
 		Status:    model.DesktopModelGatewayUsageStatusFailed,
 		StartedAt: startedAt,
@@ -123,6 +143,14 @@ func (g *Gateway) Handle(w http.ResponseWriter, r *http.Request, protocol Protoc
 	}
 	if uid == 0 {
 		g.fail(w, protocol, &record, newError(http.StatusUnauthorized, ErrClassUnauthorized, "unauthorized"))
+		return
+	}
+	if _, ok := protocol.UpstreamPathFor(op); !ok {
+		// Fail closed and say so. The alternative — quietly serving the
+		// completion endpoint because that is the path we know — would answer
+		// a token-count question with a model turn and a bill.
+		g.fail(w, protocol, &record, newError(http.StatusNotFound, ErrClassOperationUnsupported,
+			"this protocol has no "+string(op)+" endpoint"))
 		return
 	}
 
@@ -177,7 +205,7 @@ func (g *Gateway) Handle(w http.ResponseWriter, r *http.Request, protocol Protoc
 		time.Duration(g.cfg.EffectiveRequestTimeoutSeconds())*time.Second)
 	defer cancel()
 
-	resp, err := g.upstream.Do(ctx, protocol, account, outbound, r.Header)
+	resp, err := g.upstream.Do(ctx, protocol, op, account, outbound, r.Header)
 	if err != nil {
 		g.accounts.RecordFailure(account.ID, err)
 		g.fail(w, protocol, &record, classifyTransportError(ctx, err))
@@ -202,7 +230,7 @@ func (g *Gateway) Handle(w http.ResponseWriter, r *http.Request, protocol Protoc
 	}
 
 	g.accounts.RecordSuccess(account.ID)
-	g.relay(w, resp, protocol, &record)
+	g.relay(w, resp, protocol, op, &record)
 }
 
 // dbFor scopes the shared handle to the request so a client disconnect
@@ -272,7 +300,7 @@ func rewriteModel(body []byte, upstreamModel string) ([]byte, *GatewayError) {
 // scanner. Nothing is held back to compute metering — the scanner is a
 // side-channel on bytes already in flight, so the Desktop sees frame N before
 // the upstream has produced frame N+1.
-func (g *Gateway) relay(w http.ResponseWriter, resp *http.Response, protocol Protocol, record *UsageRecord) {
+func (g *Gateway) relay(w http.ResponseWriter, resp *http.Response, protocol Protocol, op Operation, record *UsageRecord) {
 	copyResponseHeaders(w.Header(), resp.Header)
 	record.HTTPStatus = resp.StatusCode
 	record.Status = model.DesktopModelGatewayUsageStatusCompleted
@@ -288,7 +316,13 @@ func (g *Gateway) relay(w http.ResponseWriter, resp *http.Response, protocol Pro
 				"the upstream model provider closed the response early"))
 			return
 		}
-		record.Usage = ParseUsageJSON(body)
+		if op != OpCountTokens {
+			// count_tokens answers {"input_tokens": N}, which is an ANSWER,
+			// not a bill: the provider does not charge for it. Parsing it into
+			// the usage columns would inflate every spend report by the size
+			// of everything the tool loop measured but never sent.
+			record.Usage = ParseUsageJSON(body)
+		}
 		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(body)

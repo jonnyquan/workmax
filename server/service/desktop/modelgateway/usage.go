@@ -213,6 +213,7 @@ type UsageRecord struct {
 	UID               uint
 	RequestID         string
 	Protocol          Protocol
+	Operation         Operation
 	ModelID           string
 	UpstreamModel     string
 	ProviderAccountID uint64
@@ -223,6 +224,16 @@ type UsageRecord struct {
 	Usage             TokenUsage
 	StartedAt         time.Time
 	Duration          time.Duration
+}
+
+// operationOrDefault keeps the column non-empty for a caller that predates
+// the field. Every such caller meant the completion endpoint — it was the
+// only one there was.
+func operationOrDefault(op Operation) Operation {
+	if op == "" {
+		return OpMessages
+	}
+	return op
 }
 
 // UsageRecorder persists metering rows. An interface so the gateway can be
@@ -251,6 +262,7 @@ func (r *DBUsageRecorder) Record(record UsageRecord) {
 		UID:                 record.UID,
 		RequestID:           record.RequestID,
 		Protocol:            string(record.Protocol),
+		Operation:           string(operationOrDefault(record.Operation)),
 		ModelID:             record.ModelID,
 		UpstreamModel:       record.UpstreamModel,
 		ProviderAccountID:   record.ProviderAccountID,

@@ -12,13 +12,41 @@ import (
 // anthropicAPIVersion 是 Anthropic Messages API 的必选版本头。
 const anthropicAPIVersion = "2023-06-01"
 
-// anthropicAdapter 适配 Anthropic 兼容 endpoint（/messages 流式）。
+// AnthropicBaseURL canonicalizes a user-typed Anthropic endpoint to the ONE
+// spelling every consumer in this repo agrees on: no trailing slash, and no
+// trailing `/v1`.
+//
+// It exists because there are two consumers of the same stored base_url and
+// they used to disagree. This adapter (L1) appended `/messages`; the claude
+// CLI that L2 drives appends `/v1/messages` to ANTHROPIC_BASE_URL and there is
+// no way to talk it out of that. So whichever spelling the user typed, exactly
+// one of the two engines 404'd — and which one depended on a trailing path
+// segment nobody told them about.
+//
+// The fix is to make the stored value mean one thing. `/v1` is the API
+// version, which belongs to the endpoint path, not to the host the user
+// configured: strip it here, and let each caller append the full versioned
+// path it needs. Both spellings the user might type collapse to the same base,
+// so both engines reach the same URL.
+//
+// Normalizing on read rather than on write is deliberate: settings saved
+// before this change carry either spelling, and a read-side fix repairs them
+// without a migration or a re-save.
+func AnthropicBaseURL(raw string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if strings.HasSuffix(trimmed, "/v1") {
+		trimmed = strings.TrimSuffix(trimmed, "/v1")
+	}
+	return trimmed
+}
+
+// anthropicAdapter 适配 Anthropic 兼容 endpoint（/v1/messages 流式）。
 // 文本增量在 event:content_block_delta 的 data.delta.text；终态是
 // event:message_stop。
 type anthropicAdapter struct{}
 
 func (anthropicAdapter) endpoint(baseURL string) string {
-	return strings.TrimRight(baseURL, "/") + "/messages"
+	return AnthropicBaseURL(baseURL) + "/v1/messages"
 }
 
 func (anthropicAdapter) requestBody(modelID string, history []Message, userText string, atts []Attachment) (io.Reader, error) {

@@ -13,6 +13,7 @@ func TestUpstreamURL(t *testing.T) {
 		name     string
 		base     string
 		protocol Protocol
+		op       Operation
 		want     string
 		wantErr  bool
 	}{
@@ -35,11 +36,36 @@ func TestUpstreamURL(t *testing.T) {
 		// keeps a mis-typed row from becoming an SSRF primitive.
 		{name: "non-http scheme", base: "file:///etc/passwd", protocol: ProtocolAnthropic, wantErr: true},
 		{name: "no scheme", base: "api.example.com", protocol: ProtocolAnthropic, wantErr: true},
+
+		// count_tokens: the endpoint the packaged claude CLI actually calls.
+		{name: "count_tokens bare host", base: "https://api.example.com",
+			protocol: ProtocolAnthropic, op: OpCountTokens,
+			want: "https://api.example.com/v1/messages/count_tokens"},
+		{name: "count_tokens path prefix", base: "https://relay.example.com/anthropic",
+			protocol: ProtocolAnthropic, op: OpCountTokens,
+			want: "https://relay.example.com/anthropic/v1/messages/count_tokens"},
+		{
+			// The operator pasted the completion endpoint; count_tokens must
+			// extend it rather than double it.
+			name:     "count_tokens on a base that ends in the protocol path",
+			base:     "https://api.example.com/v1/messages",
+			protocol: ProtocolAnthropic, op: OpCountTokens,
+			want: "https://api.example.com/v1/messages/count_tokens",
+		},
+		{
+			name:     "count_tokens on a base that already ends in count_tokens",
+			base:     "https://api.example.com/v1/messages/count_tokens",
+			protocol: ProtocolAnthropic, op: OpCountTokens,
+			want: "https://api.example.com/v1/messages/count_tokens",
+		},
+		// OpenAI has no token counter. Refuse rather than invent a path.
+		{name: "count_tokens is not an OpenAI endpoint", base: "https://api.example.com",
+			protocol: ProtocolOpenAI, op: OpCountTokens, wantErr: true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := upstreamURL(tc.base, tc.protocol)
+			got, err := upstreamURL(tc.base, tc.protocol, tc.op)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("upstreamURL(%q) = %q, want an error", tc.base, got)
