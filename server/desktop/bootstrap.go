@@ -365,7 +365,15 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 	// packaged download; until then the operator points at a binary. No CLI
 	// simply means anthropic_compatible turns run as L1 pure chat.
 	var localAgent TurnRunner
+	// Interactive approvals stay behind a flag until the renderer's approval
+	// card ships: without the card, every write would sit on the 120s timeout
+	// and then be denied. One broker serves both engines (claude and pi), so
+	// session grants and the approve endpoint are shared.
 	var approvalBroker *agentruntime.ApprovalBroker
+	if os.Getenv("WORKMAX_L2_APPROVALS") == "1" {
+		approvalBroker = agentruntime.NewApprovalBroker()
+		log.Printf("local agent: interactive tool approvals ON")
+	}
 	if cliPath := os.Getenv("WORKMAX_CLAUDE_CLI_PATH"); cliPath != "" {
 		if info, statErr := os.Stat(cliPath); statErr != nil || info.IsDir() {
 			log.Printf("local agent: WORKMAX_CLAUDE_CLI_PATH=%q is not a usable binary (%v); tool loop disabled", cliPath, statErr)
@@ -378,13 +386,8 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 				cliPath,
 				filepath.Join(dbRes.DataDir, "agent_workspace"),
 			)
-			// Interactive approvals stay behind a flag until the renderer's
-			// approval card ships: without the card, every write would sit
-			// on the 120s timeout and then be denied.
-			if os.Getenv("WORKMAX_L2_APPROVALS") == "1" {
-				approvalBroker = agentruntime.NewApprovalBroker()
+			if approvalBroker != nil {
 				engine.EnableApprovals(approvalBroker)
-				log.Printf("local agent: interactive tool approvals ON")
 			}
 			localAgent = engine
 			log.Printf("local agent: tool loop available (cli=%s)", cliPath)
@@ -401,7 +404,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 		if info, statErr := os.Stat(piPath); statErr != nil || info.IsDir() {
 			log.Printf("pi agent: WORKMAX_PI_PATH=%q is not a usable binary (%v); pi tool loop disabled", piPath, statErr)
 		} else {
-			piAgent = localagent.NewEngineWithRuntime(
+			piEngine := localagent.NewEngineWithRuntime(
 				&LocalModelProfileReader{Store: modelSettings},
 				dbRes.DB,
 				localFiles,
@@ -412,6 +415,12 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 					WorkspaceRoot: filepath.Join(dbRes.DataDir, "agent_workspace"),
 				}),
 			)
+			if approvalBroker != nil {
+				// Same broker as the claude engine: one approval UI, one set
+				// of session/always grants, whichever runtime asks.
+				piEngine.EnableApprovals(approvalBroker)
+			}
+			piAgent = piEngine
 			log.Printf("pi agent: tool loop available (pi=%s)", piPath)
 		}
 	}

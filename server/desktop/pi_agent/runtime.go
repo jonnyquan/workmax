@@ -8,13 +8,14 @@
 // events — which is what finally gives openai_compatible endpoints a tool
 // loop instead of L1 pure chat.
 //
-// MVP shape, deliberately narrow:
+// Shape, deliberately narrow:
 //   - one subprocess per turn (start → prompt → agent_settled → shutdown);
 //     the process pool with idle reuse is a follow-up;
-//   - read-only tool surface (--tools read,grep,find,ls); the write surface
-//     arrives with the R3 approval extension;
-//   - extension_ui_request frames are ignored — nothing in the read-only
-//     profile asks for approval.
+//   - without approvals: read-only tool surface (--tools read,grep,find,ls)
+//     and extension_ui_request frames ignored — nothing asks;
+//   - with approvals (TurnInput.Approvals != nil): the R3 extension bridge in
+//     approvals.go widens the profile to write/edit and answers the
+//     extension's ui requests through the shared approval flow.
 //
 // Protocol authority is pi's src/modes/rpc/rpc-types.ts and docs/rpc.md:
 // strict LF-framed JSONL, responses routed by id (they may arrive out of
@@ -74,8 +75,8 @@ func (r *Runtime) Name() string { return "pi" }
 // workspaceRooter seam).
 func (r *Runtime) WorkspaceRoot() string { return r.cfg.WorkspaceRoot }
 
-// readOnlyToolProfile is the MVP tool allowlist: pi's read surface only.
-// Write/edit/bash wait for the approval extension (R3).
+// readOnlyToolProfile is the pre-approval tool allowlist: pi's read surface
+// only. Approval mode switches to approvalToolProfile (approvals.go).
 const readOnlyToolProfile = "read,grep,find,ls"
 
 // promptCommandID correlates our one prompt command with its response frame.
@@ -132,6 +133,25 @@ func (r *Runtime) RunTurn(ctx context.Context, in agentruntime.TurnInput, emit a
 		sessionPath = newSessionPath(sessionDir)
 	}
 
+	// Approval mode (R3): write surface enabled, gated by the embedded
+	// extension. The file is rewritten every turn — like models.json, the
+	// on-disk copy is a projection of the binary, never a source of truth.
+	toolProfile := readOnlyToolProfile
+	var extensionArgs []string
+	if in.Approvals != nil {
+		toolProfile = approvalToolProfile
+		extPath := filepath.Join(piHome, permissionsExtensionFile)
+		if err := os.WriteFile(extPath, permissionsExtension, 0o644); err != nil {
+			return &agentruntime.RuntimeError{
+				Kind:      cloudproxy.KindServiceUnavailable,
+				Message:   "无法写入 pi 审批扩展",
+				Retryable: false,
+				Details:   map[string]any{"reason": err.Error()},
+			}
+		}
+		extensionArgs = []string{"-e", extPath}
+	}
+
 	stderr := &tailBuffer{}
 	start := r.start
 	if start == nil {
@@ -139,16 +159,16 @@ func (r *Runtime) RunTurn(ctx context.Context, in agentruntime.TurnInput, emit a
 	}
 	proc, serr := start(ctx, procSpec{
 		Bin: r.cfg.BinPath,
-		Args: []string{
+		Args: append([]string{
 			"--mode", "rpc",
 			"--session", sessionPath,
 			"--session-dir", sessionDir,
 			"--provider", "workmax",
 			"--model", in.ModelID,
-			"--tools", readOnlyToolProfile,
+			"--tools", toolProfile,
 			"-na", // --no-approve: trust decisions are ours, not pi's
 			"-nc", // --no-context-files: no AGENTS.md surprises in the prompt
-		},
+		}, extensionArgs...),
 		Env: map[string]string{
 			// Local-first三件套 + config isolation: no version checks, no
 			// telemetry, and pi's config dir is ours, not the user's ~/.pi.
@@ -200,7 +220,12 @@ func (r *Runtime) RunTurn(ctx context.Context, in agentruntime.TurnInput, emit a
 		}
 	}
 
-	settled, perr := pump(ctx, proc.Stdout(), emit)
+	settled, perr := pump(ctx, proc.Stdout(), &framePump{
+		pending:   map[string]bool{promptCommandID: true},
+		emit:      emit,
+		approvals: in.Approvals,
+		stdin:     proc.Stdin(),
+	})
 	if perr != nil {
 		return perr
 	}
@@ -249,12 +274,18 @@ type piFrame struct {
 	// message_update
 	AssistantMessageEvent *assistantEvent `json:"assistantMessageEvent"`
 
-	// message_end
-	Message *assistantMessage `json:"message"`
+	// message_end carries an assistantMessage object here — but the same key
+	// is a plain string on confirm/notify extension_ui_request frames, so it
+	// stays raw and is decoded only where the object shape is expected.
+	Message json.RawMessage `json:"message"`
 
 	// tool_execution_end
 	ToolName string `json:"toolName"`
 	IsError  bool   `json:"isError"`
+
+	// extension_ui_request (approvals.go); ID doubles as the response key.
+	Method string `json:"method"`
+	Title  string `json:"title"`
 }
 
 type assistantEvent struct {
@@ -287,16 +318,13 @@ func writeCommand(w io.Writer, cmd map[string]any) error {
 // settled=true on the one good outcome. Frames are split on LF only, with a
 // trailing CR stripped — pi's jsonl.ts contract; generic line readers that
 // also split on U+2028/U+2029 would corrupt JSON strings.
-func pump(ctx context.Context, stdout io.Reader, emit agentruntime.EmitFunc) (bool, error) {
+func pump(ctx context.Context, stdout io.Reader, p *framePump) (bool, error) {
 	reader := bufio.NewReaderSize(stdout, stdoutBufferSize)
-	// pending routes response frames by id; responses may arrive out of
-	// order relative to events, and ids we never issued are ignored.
-	pending := map[string]bool{promptCommandID: true}
 	for {
 		line, rerr := reader.ReadBytes('\n')
 		line = trimFrame(line)
 		if len(line) > 0 {
-			settled, derr := dispatch(line, pending, emit)
+			settled, derr := p.dispatch(ctx, line)
 			if derr != nil || settled {
 				return settled, derr
 			}
@@ -326,9 +354,12 @@ func trimFrame(line []byte) []byte {
 }
 
 // dispatch is the three-way split from the design doc: responses by id,
-// extension_ui_request ignored (MVP), everything else an event. Unknown
-// types, unknown events, and unparseable lines are all tolerated silently.
-func dispatch(line []byte, pending map[string]bool, emit agentruntime.EmitFunc) (bool, error) {
+// extension_ui_request through the approval bridge (or ignored without
+// approvals — the pre-R3 behavior, when no extension is loaded), everything
+// else an event. Unknown types, unknown events, and unparseable lines are all
+// tolerated silently.
+func (p *framePump) dispatch(ctx context.Context, line []byte) (bool, error) {
+	emit := p.emit
 	var f piFrame
 	if err := json.Unmarshal(line, &f); err != nil {
 		log.Printf("pi agent: ignoring non-JSON stdout line (%d bytes)", len(line))
@@ -336,10 +367,10 @@ func dispatch(line []byte, pending map[string]bool, emit agentruntime.EmitFunc) 
 	}
 	switch f.Type {
 	case "response":
-		if !pending[f.ID] {
+		if !p.pending[f.ID] {
 			return false, nil // out-of-order or foreign id: not ours to fail on
 		}
-		delete(pending, f.ID)
+		delete(p.pending, f.ID)
 		if f.Success == nil || !*f.Success {
 			// The prompt was rejected before acceptance. Failures *after*
 			// acceptance never come back on this channel — they ride the
@@ -358,8 +389,12 @@ func dispatch(line []byte, pending map[string]bool, emit agentruntime.EmitFunc) 
 		}
 		return false, nil
 	case "extension_ui_request":
-		// MVP: the read-only tool profile ships no extensions that ask.
-		return false, nil
+		if p.approvals == nil {
+			// Read-only profile, no extension loaded: nothing of ours can ask,
+			// and ignoring foreign chatter is the pre-R3 behavior.
+			return false, nil
+		}
+		return false, p.handleUIRequest(ctx, &f)
 	case "message_update":
 		ev := f.AssistantMessageEvent
 		if ev == nil {
@@ -392,8 +427,14 @@ func dispatch(line []byte, pending map[string]bool, emit agentruntime.EmitFunc) 
 			Tool: agentruntime.ToolEvent{Name: f.ToolName, IsError: f.IsError},
 		})
 	case "message_end":
-		if f.Message != nil && f.Message.StopReason == "error" {
-			msg := strings.TrimSpace(f.Message.ErrorMessage)
+		var end assistantMessage
+		if len(f.Message) > 0 {
+			// Tolerant: an unparseable message object is somebody's new shape,
+			// not a turn failure.
+			_ = json.Unmarshal(f.Message, &end)
+		}
+		if end.StopReason == "error" {
+			msg := strings.TrimSpace(end.ErrorMessage)
 			if msg == "" {
 				msg = "pi 模型调用失败"
 			}

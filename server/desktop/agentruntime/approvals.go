@@ -5,6 +5,7 @@ package agentruntime
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -152,4 +153,79 @@ type ApprovalConfig struct {
 	Persist func(tool string)
 	// Timeout overrides DefaultApprovalTimeout when > 0.
 	Timeout time.Duration
+}
+
+// ConsultResult is the outcome of one Consult: whether the tool may run, the
+// effective decision (allow_once on an auto-allow/session short-circuit), and
+// an English denial reason for the model's benefit when it may not.
+type ConsultResult struct {
+	Allowed  bool
+	Decision ApprovalDecision
+	Reason   string
+}
+
+// Consult runs one tool call through the unified approval flow both engines
+// share: auto-allow the declared read surface and every stored grant, ask the
+// user for the write surface (Begin → EventApprovalReq → Await), deny
+// everything else outright. allow_session/allow_always answers apply their
+// grant bookkeeping here, so the two engines draw on the same grants.
+//
+// tool must already be in the config's vocabulary (the Claude tool names);
+// engines with different native names normalize before calling. The error
+// return is non-nil only when the EventApprovalReq emit failed — the client
+// is gone and the caller decides how to abort. Denial events for the other
+// paths are emitted best-effort: a denial is already terminal for the call.
+func (cfg *ApprovalConfig) Consult(ctx context.Context, emit EmitFunc, tool, target string) (ConsultResult, error) {
+	if cfg.AutoAllowed[tool] || cfg.Broker.SessionGranted(cfg.ThreadUUID, tool) {
+		return ConsultResult{Allowed: true, Decision: ApprovalAllowOnce}, nil
+	}
+	if !cfg.AskAllowed[tool] {
+		// Outside the declared surface entirely — no card, no appeal.
+		_ = emit(Event{
+			Kind: EventToolDenied,
+			Tool: ToolEvent{Name: tool, Target: target, Reason: "工具不在本地循环的许可面内"},
+		})
+		return ConsultResult{
+			Decision: ApprovalDeny,
+			Reason:   fmt.Sprintf("tool %s is outside the local loop's surface", tool),
+		}, nil
+	}
+
+	id, wait := cfg.Broker.Begin(cfg.TurnUUID)
+	if werr := emit(Event{
+		Kind:       EventApprovalReq,
+		ApprovalID: id,
+		Tool:       ToolEvent{Name: tool, Target: target},
+	}); werr != nil {
+		cfg.Broker.Abandon(cfg.TurnUUID, id)
+		return ConsultResult{}, werr
+	}
+	decision, aerr := cfg.Broker.Await(ctx, cfg.TurnUUID, id, wait, cfg.Timeout)
+	if aerr != nil {
+		log.Printf("agent approval: %s %s: %v", tool, id, aerr)
+		_ = emit(Event{
+			Kind: EventToolDenied,
+			Tool: ToolEvent{Name: tool, Target: target, Reason: "等待批准超时或中止"},
+		})
+		return ConsultResult{Decision: ApprovalDeny, Reason: "the user did not approve in time"}, nil
+	}
+	switch decision {
+	case ApprovalAllowOnce:
+		return ConsultResult{Allowed: true, Decision: decision}, nil
+	case ApprovalAllowSession:
+		cfg.Broker.GrantSession(cfg.ThreadUUID, tool)
+		return ConsultResult{Allowed: true, Decision: decision}, nil
+	case ApprovalAllowAlways:
+		cfg.Broker.GrantSession(cfg.ThreadUUID, tool)
+		if cfg.Persist != nil {
+			cfg.Persist(tool)
+		}
+		return ConsultResult{Allowed: true, Decision: decision}, nil
+	default:
+		_ = emit(Event{
+			Kind: EventToolDenied,
+			Tool: ToolEvent{Name: tool, Target: target, Reason: "用户拒绝了此操作"},
+		})
+		return ConsultResult{Decision: ApprovalDeny, Reason: "the user declined this tool call"}, nil
+	}
 }
