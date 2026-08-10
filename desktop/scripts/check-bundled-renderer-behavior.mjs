@@ -1560,6 +1560,223 @@ async function testDropAndPasteAttachFiles() {
   assert.deepEqual(Array.from(uploaded), ["dropped.txt", "pasted.png"], "a pasted file too");
 }
 
+// Picking several files at once must land several attachments. The old fence
+// was a single shared counter: each new upload invalidated every one already
+// in flight, so of a multi-select only the last file ever became "ready" and
+// the rest froze on "uploading". Each upload now completes independently.
+async function testMultiFileUploadCompletesEveryFile() {
+  const resolvers = [];
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("multi-thread", "Multi")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const sentFileIDs = [];
+  const desktopBridge = {
+    agent: {
+      uploadThreadFile(uuid, file) {
+        // Held open until the test releases them: both uploads must be in
+        // flight at once, or the shared-counter regression cannot show.
+        return new Promise((resolve) => {
+          resolvers.push({ name: file.name, resolve });
+        });
+      },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input, callback) {
+        sentFileIDs.push(Array.from(input.fileIDs ?? []));
+        callback({ type: "text_delta", turnID: "multi-turn", delta: "ok" });
+        callback({ type: "done", turnID: "multi-turn", result: { code: "", subtype: "", is_error: false } });
+        return { turnID: "multi-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[0].click();
+  await settle();
+
+  const input = document.byId.get("file-input");
+  input.files = [
+    { name: "first.txt", size: 10 },
+    { name: "second.txt", size: 20 },
+  ];
+  input.dispatch("change");
+  await settle();
+
+  const chips = () =>
+    walk(document.byId.get("attachment-chips"), (n) => n.classList?.contains("attachment-chip"));
+  assert.equal(chips().length, 2, "both picked files must get a chip");
+  assert.match(chips()[0].textContent, /first\.txt…/, "in flight: uploading");
+  assert.match(chips()[1].textContent, /second\.txt…/, "in flight: uploading");
+
+  // Resolve out of order: the first pick finishing last is exactly the shape
+  // the shared counter used to drop.
+  assert.equal(resolvers.length, 2, "both uploads must actually start");
+  resolvers[1].resolve(typedSuccess({ file_id: 202 }));
+  await settle();
+  resolvers[0].resolve(typedSuccess({ file_id: 201 }));
+  await settle();
+
+  assert.equal(chips().length, 2);
+  assert.equal(chips()[0].textContent, "first.txt", "every upload reaches ready, not only the last");
+  assert.equal(chips()[1].textContent, "second.txt", "every upload reaches ready, not only the last");
+
+  // "ready" must be real: both ids ride the next turn.
+  const chat = document.byId.get("chat-input");
+  chat.value = "Use both files";
+  chat.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+  assert.deepEqual(
+    Array.from(sentFileIDs[0]).sort(),
+    [201, 202],
+    "both completed uploads must reach startTurn",
+  );
+}
+
+// A rejected upload used to become an unhandled promise rejection and a chip
+// stuck on "uploading" forever. It must land in the failed state instead, and
+// the chip must offer a way back: retry the same file, or remove it.
+async function testRejectedUploadFailsTheChipWithoutUnhandledRejection() {
+  let uploadAttempts = 0;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("fail-thread", "Failing")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() {
+        uploadAttempts += 1;
+        if (uploadAttempts === 1) throw new Error("bridge transport failed");
+        return typedSuccess({ file_id: 301 });
+      },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn() { return { turnID: "t" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const unhandled = [];
+  const trap = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", trap);
+  try {
+    const { document } = await runRenderer(bridge, desktopBridge);
+    walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[0].click();
+    await settle();
+
+    const input = document.byId.get("file-input");
+    input.files = [{ name: "doomed.txt", size: 5 }];
+    input.dispatch("change");
+    await settle();
+    await settle();
+
+    const chips = () =>
+      walk(document.byId.get("attachment-chips"), (n) => n.classList?.contains("attachment-chip"));
+    assert.equal(chips().length, 1, "the failed file keeps its chip");
+    assert.equal(chips()[0].classList.contains("error"), true, "the chip must land in the failed state");
+    assert.match(chips()[0].textContent, /doomed\.txt ✗/, "the failure is visible, not a forever-spinner");
+    assert.deepEqual(unhandled, [], "a failed upload must not leak an unhandled rejection");
+
+    // Retry runs the same file again and can succeed.
+    const retry = walk(chips()[0], (n) => n.classList?.contains("attachment-chip-retry"))[0];
+    assert.ok(retry, "a failed chip offers retry");
+    retry.click();
+    await settle();
+    assert.equal(uploadAttempts, 2, "retry re-runs the upload");
+    assert.equal(chips()[0].textContent, "doomed.txt", "a successful retry reaches ready");
+
+    // And a failed chip can simply be taken out of the tray.
+    desktopBridge.agent.uploadThreadFile = async () => {
+      uploadAttempts += 1;
+      throw new Error("still failing");
+    };
+    input.files = [{ name: "unwanted.txt", size: 5 }];
+    input.dispatch("change");
+    await settle();
+    await settle();
+    assert.equal(chips().length, 2);
+    const remove = walk(chips()[1], (n) => n.classList?.contains("attachment-chip-remove"))[0];
+    assert.ok(remove, "a failed chip offers removal");
+    remove.click();
+    await settle();
+    assert.equal(chips().length, 1, "remove takes the failed chip out of the tray");
+    assert.deepEqual(unhandled, [], "no unhandled rejection across fail, retry, and remove");
+  } finally {
+    process.removeListener("unhandledRejection", trap);
+  }
+}
+
+// A half-written prompt must survive a thread switch: each thread keeps its
+// own draft, restored on the way back. Until this existed the composer was
+// one shared box — the outgoing thread's words leaked into the next thread
+// and were lost the moment anything was typed there.
+async function testComposerDraftSurvivesThreadSwitch() {
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({
+          items: [thread("draft-a", "Draft A"), thread("draft-b", "Draft B")],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn() { return { turnID: "t" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  const threadButtons = () =>
+    walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"));
+  const input = document.byId.get("chat-input");
+
+  threadButtons()[0].click();
+  await settle();
+  input.value = "half-written long prompt for A";
+  input.dispatch("input");
+
+  threadButtons()[1].click();
+  await settle();
+  assert.equal(input.value, "", "thread B starts with its own (empty) composer, not A's words");
+  input.value = "notes for B";
+  input.dispatch("input");
+
+  threadButtons()[0].click();
+  await settle();
+  assert.equal(
+    input.value,
+    "half-written long prompt for A",
+    "switching back must restore thread A's draft",
+  );
+
+  threadButtons()[1].click();
+  await settle();
+  assert.equal(input.value, "notes for B", "thread B's draft survives too");
+}
+
 // Regenerate re-runs the FINAL prompt — the click is the consent, and only
 // the last answer is re-runnable: forking an earlier exchange would create a
 // history the transcript cannot show.
@@ -6100,6 +6317,9 @@ await testShimInterceptsExternalLinks();
 await testThreadDeleteIsTwoStepAndLocalOnly();
 await testThreadRenameFlow();
 await testDropAndPasteAttachFiles();
+await testMultiFileUploadCompletesEveryFile();
+await testRejectedUploadFailsTheChipWithoutUnhandledRejection();
+await testComposerDraftSurvivesThreadSwitch();
 await testRegenerateRunsTheLastPromptAgain();
 await testQuickSwitcherJumpsBetweenThreads();
 await testEscapeStopsAStreamingTurn();

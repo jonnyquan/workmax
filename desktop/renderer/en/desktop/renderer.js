@@ -28,7 +28,11 @@ const state = {
   recoveringSession: false,
   pendingFiles: [],
   threadQuery: "",
-  uploadGeneration: 0,
+  // Half-written prompts, keyed by thread uuid. A thread switch or a refresh
+  // stashes the composer here and restores it when the thread is selected
+  // again; only a session change (a different signed-in account) clears it.
+  // In-memory on purpose: drafts do not outlive the window.
+  composerDrafts: new Map(),
   // A starter card's prompt, held while the new-thread form it opened is
   // completed. Consumed exactly once, into the composer of the thread it
   // created; cancelling the form drops it.
@@ -952,6 +956,11 @@ function desktopAgentBridge() {
 // uploadThreadFile uploads one file to the selected thread via the typed bridge
 // and tracks it as a pending attachment (chip). Only "ready" attachments are
 // sent with the next turn (fileIDs); "uploading" is excluded, "error" flagged.
+//
+// Each upload carries its own fence — the entry object itself plus the session
+// generation — NOT a shared counter. A shared counter meant that attaching
+// several files at once invalidated every in-flight upload except the last:
+// their completions were dropped and the chips sat on "uploading" forever.
 function uploadThreadFile(file) {
   const agent = desktopAgentBridge();
   if (!agent) {
@@ -962,34 +971,109 @@ function uploadThreadFile(file) {
   if (!threadUUID) {
     return;
   }
-  const entry = { id: 0, name: file.name, size: file.size, status: "uploading" };
+  const entry = {
+    id: 0,
+    name: file.name,
+    size: file.size,
+    status: "uploading",
+    // Kept for retry: a failed chip re-runs the same file against the thread
+    // it was originally attached to, even if the selection moved on.
+    threadUUID,
+    file,
+  };
   state.pendingFiles.push(entry);
   renderAttachments();
-  const generation = ++state.uploadGeneration;
-  agent.uploadThreadFile(threadUUID, file).then((result) => {
-    if (generation !== state.uploadGeneration || !isRecord(result)) return;
-    if (result.ok && result.data && typeof result.data.file_id === "number") {
-      entry.id = result.data.file_id;
-      entry.status = "ready";
-    } else {
+  startPendingFileUpload(agent, entry);
+}
+
+// startPendingFileUpload runs (or re-runs) one tray entry's upload. The
+// completion is fenced per upload: it applies only while the entry is still in
+// the tray (not removed, not consumed by a sent turn) and the session has not
+// changed — the same condition isCurrentSelection expresses for turns, scoped
+// to what an upload can actually outlive.
+function startPendingFileUpload(agent, entry) {
+  const sessionGeneration = state.sessionGeneration;
+  const isLive = () =>
+    sessionGeneration === state.sessionGeneration &&
+    state.pendingFiles.includes(entry);
+  agent
+    .uploadThreadFile(entry.threadUUID, entry.file)
+    .then((result) => {
+      if (!isLive()) return;
+      if (
+        isRecord(result) &&
+        result.ok &&
+        result.data &&
+        typeof result.data.file_id === "number"
+      ) {
+        entry.id = result.data.file_id;
+        entry.status = "ready";
+      } else {
+        entry.status = "error";
+      }
+      renderAttachments();
+    })
+    .catch(() => {
+      // Without this, a rejected bridge call became an unhandled rejection
+      // and the chip froze on "uploading". A failed upload is a failed
+      // attachment: mark it and let the chip offer retry or removal.
+      if (!isLive()) return;
       entry.status = "error";
-    }
-    renderAttachments();
-  });
+      renderAttachments();
+    });
+}
+
+function retryPendingFileUpload(entry) {
+  const agent = desktopAgentBridge();
+  if (!agent) {
+    setStatus("File upload unavailable", "error");
+    return;
+  }
+  if (!state.pendingFiles.includes(entry) || entry.status !== "error") return;
+  entry.status = "uploading";
+  renderAttachments();
+  startPendingFileUpload(agent, entry);
+}
+
+function removePendingFile(entry) {
+  state.pendingFiles = state.pendingFiles.filter((file) => file !== entry);
+  renderAttachments();
 }
 
 function renderAttachments() {
   if (!attachmentChips) return;
-  attachmentChips.innerHTML = "";
+  attachmentChips.textContent = "";
   for (const file of state.pendingFiles) {
     const chip = document.createElement("span");
-    chip.className = "attachment-chip";
-    chip.textContent =
+    chip.className = `attachment-chip ${file.status}`;
+    const label = document.createElement("span");
+    label.className = "attachment-chip-name";
+    label.textContent =
       file.status === "uploading"
         ? `${file.name}…`
         : file.status === "error"
           ? `${file.name} ✗`
           : file.name;
+    chip.appendChild(label);
+    if (file.status === "error") {
+      // A failed upload is actionable, not terminal: run the same file again,
+      // or take the chip out of the tray.
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "attachment-chip-retry";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", () => {
+        retryPendingFileUpload(file);
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "attachment-chip-remove";
+      remove.textContent = "Remove";
+      remove.addEventListener("click", () => {
+        removePendingFile(file);
+      });
+      chip.append(retry, remove);
+    }
     attachmentChips.appendChild(chip);
   }
   attachmentChips.hidden = state.pendingFiles.length === 0;
@@ -1848,6 +1932,21 @@ function renderCachedMessages(items) {
   scrollMessagesToEnd(true);
 }
 
+// stashComposerDraft remembers the composer's unsent text for the thread that
+// owns it. Called before anything rewrites chatInput.value on a thread switch
+// or a refresh: silently dropping a half-written long prompt is data loss.
+// An emptied composer clears the stash — keeping a stale draft would resurrect
+// words the user deliberately deleted.
+function stashComposerDraft() {
+  const threadUUID = state.selectedThreadUUID;
+  if (!threadUUID) return;
+  if (chatInput.value.trim() !== "") {
+    state.composerDrafts.set(threadUUID, chatInput.value);
+  } else {
+    state.composerDrafts.delete(threadUUID);
+  }
+}
+
 function selectThread(thread) {
   if (state.activeTurn && thread.uuid === state.selectedThreadUUID) {
     return;
@@ -1869,8 +1968,13 @@ function selectThread(thread) {
   if (state.activeTurn) {
     invalidateActiveTurn(true);
   }
+  stashComposerDraft();
   state.selectionGeneration += 1;
   state.selectedThreadUUID = thread.uuid;
+  // Restore this thread's stashed draft, or a clean box. Before the map the
+  // outgoing thread's words simply stayed in the composer — leaking into the
+  // next thread, and overwritten the moment anything typed there.
+  chatInput.value = state.composerDrafts.get(thread.uuid) ?? "";
   // The context panel follows the selection: its sources belong to a thread,
   // not to the session.
   void loadThreadSources(thread.uuid);
@@ -3559,6 +3663,11 @@ function clearWorkbenchForSessionChange() {
   state.selectedMode = "";
   state.skillsLoading = false;
   state.skillsDegraded = false;
+  // Deliberately NOT stashed: a session change means a different signed-in
+  // account, and the previous account's half-written prompts must not
+  // resurface under the new one. Every other path preserves drafts via
+  // stashComposerDraft; this one drops them with the rest of the workbench.
+  state.composerDrafts.clear();
   chatInput.value = "";
   messageList.textContent = "";
   renderThreads();
@@ -3717,6 +3826,9 @@ function submitChat(event) {
   };
   state.activeTurn = activeTurn;
   chatInput.value = "";
+  // The draft was consumed by this turn; a stale stash would resurrect an
+  // already-sent prompt on the next switch back to this thread.
+  state.composerDrafts.delete(thread.uuid);
   // Read the attachments before clearing the tray: startTurn below needs the
   // ids, and clearing first meant every turn was sent with an empty file list
   // — the attachment feature looked like it worked and silently dropped every
@@ -4749,6 +4861,10 @@ async function refresh() {
   state.createDraft = null;
   newThreadName.value = "Untitled presentation";
   setCreateFeedback("");
+  // A refresh empties the composer but must not lose its words: stash the
+  // draft so re-selecting the thread restores it. Only a session change
+  // (clearWorkbenchForSessionChange) drops drafts outright.
+  stashComposerDraft();
   state.selectionGeneration += 1;
   state.selectedThreadUUID = null;
   state.skills = [];
