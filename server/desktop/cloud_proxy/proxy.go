@@ -73,6 +73,11 @@ type Proxy struct {
 	// Distinct from cloud.HTTPClient (which has a 10s overall timeout
 	// suited to /token exchange) — SSE turns live for minutes.
 	HTTPClient *http.Client
+
+	// idleTimeout bounds how long the upstream SSE body may stay silent
+	// before the relay force-closes it (see IdleWatchdogReader). Zero means
+	// SSEIdleTimeout; tests shrink it to keep stalled-upstream cases fast.
+	idleTimeout time.Duration
 }
 
 // CloudClient returns the underlying Client (the snug-timeout HTTP
@@ -84,8 +89,9 @@ func (p *Proxy) CloudClient() *Client { return p.cloud }
 
 // NewProxy wires the proxy. Production callers pass a fresh Client
 // (configured with BaseURL pointing at workmax.app) + the shared
-// TokenStore. The internal SSE HTTP client uses no overall timeout
-// (only per-read deadlines on the upstream body).
+// TokenStore. The internal SSE HTTP client uses no overall timeout;
+// dead upstreams are bounded by the idle watchdog wrapped around the
+// response body in Chat (see IdleWatchdogReader).
 func NewProxy(cloud *Client, tokenStore *TokenStore, db *gorm.DB) *Proxy {
 	return &Proxy{
 		cloud:      cloud,
@@ -93,12 +99,34 @@ func NewProxy(cloud *Client, tokenStore *TokenStore, db *gorm.DB) *Proxy {
 		db:         db,
 		HTTPClient: &http.Client{
 			// No overall timeout — SSE responses live for the duration
-			// of a chat turn (potentially minutes). Idle-detection is
-			// handled by SSE keepalive comments at the protocol level,
-			// not by HTTP timeouts.
+			// of a chat turn (potentially minutes). A silent upstream is
+			// detected by the idle watchdog on the body, not by an HTTP
+			// timeout that would also kill healthy long turns.
 			Timeout: 0,
 		},
 	}
+}
+
+// sseIdleTimeout resolves the effective idle bound for this Proxy.
+func (p *Proxy) sseIdleTimeout() time.Duration {
+	if p.idleTimeout > 0 {
+		return p.idleTimeout
+	}
+	return SSEIdleTimeout
+}
+
+// pipeUpstreamWithWatchdog runs PipeUpstream with the idle watchdog armed
+// around the response body. When the pipe fails because the watchdog closed
+// the body, the error is rewritten to ErrSSEUpstreamIdle so classification
+// reports a retryable interrupted stream instead of a generic read failure.
+func (p *Proxy) pipeUpstreamWithWatchdog(ctx context.Context, body io.ReadCloser, dst SSEWriter, cache *CacheWriter) error {
+	watchdog := NewIdleWatchdogReader(body, p.sseIdleTimeout(), func() { _ = body.Close() })
+	defer watchdog.Stop()
+	err := PipeUpstream(ctx, watchdog, dst, cache)
+	if err != nil && watchdog.TimedOut() {
+		return fmt.Errorf("%w (silent for %s): %v", ErrSSEUpstreamIdle, p.sseIdleTimeout(), err)
+	}
+	return err
 }
 
 // Chat is the relay entry point. The flow:
@@ -229,8 +257,9 @@ func (p *Proxy) Chat(ctx context.Context, req ChatRequest, dst SSEWriter) error 
 
 	// 4. Pipe SSE → renderer + cache. PipeUpstream returns nil only
 	//    after a terminal done event, ctx.Err() on cancellation, or a
-	//    stream/truncation error otherwise.
-	if err := PipeUpstream(leaseCtx, resp.Body, dst, cache); err != nil {
+	//    stream/truncation error otherwise. The idle watchdog bounds a
+	//    half-open upstream that would otherwise hang the turn forever.
+	if err := p.pipeUpstreamWithWatchdog(leaseCtx, resp.Body, dst, cache); err != nil {
 		pipeErr = err
 		if chatLeaseSessionChanged(leaseCtx, lease, err) {
 			pipeErr = ErrChatSessionChanged
@@ -338,7 +367,7 @@ func (p *Proxy) tryAuthRecover(
 		}
 		return p.emitErrorAndClose(dst, ClassifyHTTPResponse(resp, body), nil), true
 	}
-	if err := PipeUpstream(ctx, resp.Body, dst, cache); err != nil {
+	if err := p.pipeUpstreamWithWatchdog(ctx, resp.Body, dst, cache); err != nil {
 		if chatLeaseSessionChanged(ctx, lease, err) {
 			return p.emitSessionChanged(dst), true
 		}
@@ -412,17 +441,12 @@ func (p *Proxy) buildUpstreamRequest(ctx context.Context, req ChatRequest, acces
 // renderer always learns *why* a turn failed. Returns an error so
 // callers can `return p.emitErrorAndClose(...)` in one line.
 //
-// cache parameter is optional — pass nil when the cache row hasn't
-// been created yet (we'd rather not introduce a row just to mark it
-// partial).
-func (p *Proxy) emitErrorAndClose(dst SSEWriter, pe ProxyError, cache *CacheWriter) error {
+// The cache parameter is accepted (and ignored) for call-site symmetry:
+// finalization is owned solely by the defer in Chat(), never here.
+func (p *Proxy) emitErrorAndClose(dst SSEWriter, pe ProxyError, _ *CacheWriter) error {
 	pe = sanitizeProxyError(pe)
 	if dst != nil {
 		_ = dst.WriteProxyError(pe)
-	}
-	if cache != nil {
-		// Don't finalize here — defer in Chat() owns the lifecycle.
-		// emitErrorAndClose just emits the event.
 	}
 	// Tag the returned error with the kind so caller logs are useful.
 	raw, _ := json.Marshal(pe)

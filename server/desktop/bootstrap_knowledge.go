@@ -3,7 +3,9 @@
 package desktop
 
 import (
+	"context"
 	"log"
+	"sync"
 
 	"gorm.io/gorm"
 
@@ -72,5 +74,49 @@ func resolveKnowledge(deps KnowledgeDeps) KnowledgeWiring {
 	// is enabled here would misreport both the memory in use and when the
 	// startup cost is actually paid.
 	log.Printf("knowledge: local RAG available (%d-dim embeddings, loaded on first use)", wiring.Dim)
+	if wiring.Hooks != nil {
+		wiring.Hooks = &multiAccountRetrievalGate{inner: wiring.Hooks, db: deps.DB}
+	}
 	return wiring
+}
+
+// multiAccountRetrievalGate is the Phase 0 privacy stopgap for the vec0 table
+// having no uid column: retrieval is un-partitioned, so with more than one
+// local account, account A's indexed content would be injected into account
+// B's conversation. Until the Phase 3.1 schema rebuild adds uid to the KNN
+// filter, Retrieve is disabled whenever w_desktop_local_account holds more
+// than one row. Index writes keep flowing untouched — chunks already record
+// their source uid, so everything indexed now becomes retrievable again the
+// moment the partitioned schema lands.
+type multiAccountRetrievalGate struct {
+	inner localinference.KnowledgeHooks
+	db    *gorm.DB
+
+	// logOnce keeps the "retrieval disabled" explanation to one line per boot
+	// instead of one per turn.
+	logOnce sync.Once
+}
+
+func (g *multiAccountRetrievalGate) IndexTurn(ctx context.Context, turnUUID, userText, assistantText string) error {
+	return g.inner.IndexTurn(ctx, turnUUID, userText, assistantText)
+}
+
+func (g *multiAccountRetrievalGate) Retrieve(ctx context.Context, uid uint64, query string, topK int) ([]localinference.RetrievedSource, error) {
+	var count int64
+	if err := g.db.Raw(`SELECT COUNT(*) FROM w_desktop_local_account`).Row().Scan(&count); err != nil {
+		// Fail closed: if single-account cannot be proven, skipping retrieval
+		// costs one turn some context; guessing wrong leaks another account's
+		// documents into this conversation.
+		g.logOnce.Do(func() {
+			log.Printf("knowledge: retrieval disabled: cannot count local accounts (%v); the shared vector index is not uid-partitioned yet", err)
+		})
+		return nil, nil
+	}
+	if count > 1 {
+		g.logOnce.Do(func() {
+			log.Printf("knowledge: retrieval disabled: %d local accounts share one un-partitioned vector index; indexing continues, retrieval returns once the schema rebuild (Phase 3.1) adds uid filtering", count)
+		})
+		return nil, nil
+	}
+	return g.inner.Retrieve(ctx, uid, query, topK)
 }

@@ -78,6 +78,35 @@ func (s *Server) agentTurnLock(turnUUID string) *sync.Mutex {
 	return value.(*sync.Mutex)
 }
 
+// acquireAgentTurnLock claims the per-turn mutex, or reports false when the
+// turn is already running. Entries are deleted on release (turn_uuids are
+// renderer-minted v4 UUIDs, so a keep-forever registry grew by one mutex per
+// turn for the process lifetime); the LoadOrStore re-check closes the window
+// where a concurrent release retires the mutex between our fetch and TryLock —
+// a lock confirmed to still be the registered entry is authoritative, a
+// retired one is dropped and the claim retried against the current entry.
+func (s *Server) acquireAgentTurnLock(turnUUID string) (*sync.Mutex, bool) {
+	for {
+		lock := s.agentTurnLock(turnUUID)
+		if !lock.TryLock() {
+			return nil, false
+		}
+		if current, _ := s.agentTurnLocks.LoadOrStore(turnUUID, lock); current == lock {
+			return lock, true
+		}
+		lock.Unlock()
+	}
+}
+
+// releaseAgentTurnLock retires the turn's registry entry and releases the
+// mutex. Delete-before-Unlock: a waiter that already fetched this mutex will
+// fail its post-TryLock registry check and retry against a fresh entry instead
+// of streaming on a retired lock.
+func (s *Server) releaseAgentTurnLock(turnUUID string, lock *sync.Mutex) {
+	s.agentTurnLocks.Delete(turnUUID)
+	lock.Unlock()
+}
+
 func (s *Server) handleListRecoverableAgentTurns(c *gin.Context) {
 	if s.cfg.DB == nil || s.cfg.TokenStore == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "agent_turn_recovery_unavailable"})
@@ -133,12 +162,12 @@ func (s *Server) handleReplayAgentTurn(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "agent_turn_intent_invalid"})
 		return
 	}
-	lock := s.agentTurnLock(turnUUID)
-	if !lock.TryLock() {
+	lock, ok := s.acquireAgentTurnLock(turnUUID)
+	if !ok {
 		c.JSON(http.StatusConflict, gin.H{"error": "turn_in_progress"})
 		return
 	}
-	defer lock.Unlock()
+	defer s.releaseAgentTurnLock(turnUUID, lock)
 	s.streamLegacyAgentTurn(c, legacyAgentTurnStreamInput{Intent: intent, Thread: thread, Lease: lease})
 }
 

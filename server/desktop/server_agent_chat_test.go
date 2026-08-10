@@ -210,6 +210,15 @@ func newServerFixture(t *testing.T, upstreamHandler http.HandlerFunc) (baseURL, 
 
 func newServerFixtureWithDB(t *testing.T, db *gorm.DB, upstreamHandler http.HandlerFunc) (baseURL, localToken string) {
 	t.Helper()
+	_, baseURL, localToken = newServerFixtureExposingServer(t, db, upstreamHandler)
+	return baseURL, localToken
+}
+
+// newServerFixtureExposingServer is newServerFixtureWithDB but also hands back
+// the *Server, for tests that assert on internal state (e.g. the turn lock
+// registry) after driving the HTTP surface.
+func newServerFixtureExposingServer(t *testing.T, db *gorm.DB, upstreamHandler http.HandlerFunc) (srv *Server, baseURL, localToken string) {
+	t.Helper()
 	upstream := httptest.NewServer(upstreamHandler)
 	t.Cleanup(upstream.Close)
 
@@ -250,7 +259,7 @@ func newServerFixtureWithDB(t *testing.T, db *gorm.DB, upstreamHandler http.Hand
 	})
 
 	baseURL = "http://" + srv.listener.Addr().String()
-	return baseURL, "tok"
+	return srv, baseURL, "tok"
 }
 
 func TestHandleAgentChat_HappyPath(t *testing.T) {

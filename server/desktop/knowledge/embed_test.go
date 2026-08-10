@@ -6,7 +6,56 @@ import (
 	"context"
 	"math"
 	"testing"
+
+	"github.com/sugarme/tokenizer"
 )
+
+// TestPackEncodingsAlignsUnequalLengths is the Phase 0.1 regression: the
+// sugarme tokenizer does not pad by default, so one EncodeBatch call can
+// return encodings of different lengths. The packer used to size the tensors
+// off encodings[0], so any batch whose FIRST chunk was not the longest wrote
+// past the slice end and panicked (killing the sidecar from the bare indexing
+// goroutine). This constructs exactly that shape — longest sequence in the
+// middle — and asserts the batch is padded and row-aligned instead.
+func TestPackEncodingsAlignsUnequalLengths(t *testing.T) {
+	encodings := []tokenizer.Encoding{
+		{Ids: []int{1, 2}, AttentionMask: []int{1, 1}, TypeIds: []int{0, 0}},
+		{Ids: []int{3, 4, 5, 6}, AttentionMask: []int{1, 1, 1, 1}, TypeIds: []int{0, 0, 0, 0}},
+		{Ids: []int{7}, AttentionMask: []int{1}, TypeIds: []int{0}},
+	}
+
+	batchSize, seqLength, ids, mask, types := packEncodings(encodings)
+	if batchSize != 3 || seqLength != 4 {
+		t.Fatalf("batch=%d seq=%d, want 3x4 (seq must be the LONGEST encoding, not the first)", batchSize, seqLength)
+	}
+	if len(ids) != 12 || len(mask) != 12 || len(types) != 12 {
+		t.Fatalf("tensor sizes = %d/%d/%d, want 12 each", len(ids), len(mask), len(types))
+	}
+	wantIDs := []int64{1, 2, 0, 0, 3, 4, 5, 6, 7, 0, 0, 0}
+	wantMask := []int64{1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0}
+	for i := range wantIDs {
+		if ids[i] != wantIDs[i] {
+			t.Errorf("ids[%d] = %d, want %d (row misalignment)", i, ids[i], wantIDs[i])
+		}
+		if mask[i] != wantMask[i] {
+			t.Errorf("mask[%d] = %d, want %d (padding must be masked out)", i, mask[i], wantMask[i])
+		}
+		if types[i] != 0 {
+			t.Errorf("types[%d] = %d, want 0", i, types[i])
+		}
+	}
+}
+
+// TestPackEncodingsEmptyBatch keeps the zero-length guard: no encodings, or
+// encodings with no tokens, must report seqLength 0 rather than allocating.
+func TestPackEncodingsEmptyBatch(t *testing.T) {
+	if _, seq, _, _, _ := packEncodings(nil); seq != 0 {
+		t.Errorf("nil batch seq = %d, want 0", seq)
+	}
+	if _, seq, _, _, _ := packEncodings([]tokenizer.Encoding{{}}); seq != 0 {
+		t.Errorf("empty encoding seq = %d, want 0", seq)
+	}
+}
 
 // TestEmbedder is the L3c-1 integration test: it exercises the real onnxruntime
 // + MiniLM path through the production Embedder API. It auto-skips when the

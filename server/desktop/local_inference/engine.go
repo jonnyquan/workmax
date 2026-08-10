@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 
@@ -87,14 +88,16 @@ type Message struct {
 // newest exchanges matter most, so the budget walks backwards from the most
 // recent completed pair and stops when either cap is hit.
 //
-// 24k chars is roughly 6-8k tokens — deliberately conservative, because the
-// local route serves models whose context windows the sidecar cannot know
-// (an Ollama 3B and a hosted frontier model configure identically). Overshoot
-// truncates silently upstream, which corrupts answers in ways nobody can see;
-// undershoot merely forgets older turns, which the user can at least notice.
+// 24k chars — counted in runes, not bytes, so a Chinese conversation gets the
+// same capacity as an English one instead of a third of it — is roughly 6-12k
+// tokens, deliberately conservative, because the local route serves models
+// whose context windows the sidecar cannot know (an Ollama 3B and a hosted
+// frontier model configure identically). Overshoot truncates silently
+// upstream, which corrupts answers in ways nobody can see; undershoot merely
+// forgets older turns, which the user can at least notice.
 const (
 	maxHistoryPairs = 20
-	maxHistoryChars = 24_000
+	maxHistoryChars = 24_000 // runes
 )
 
 // protocolAdapter 封装 OpenAI / Anthropic 兼容 endpoint 的线路差异：
@@ -121,6 +124,11 @@ type Engine struct {
 	httpClient *http.Client     // Timeout: 0（SSE turn 可持续数分钟）
 	loader     AttachmentLoader // 可 nil（无附件场景）
 	hooks      KnowledgeHooks   // 可 nil（L3c-4/5 RAG：索引 turn + 检索注入；nil=关闭）
+
+	// idleTimeout 是上游 SSE body 的静默上限：超过它没有任何字节到达就由
+	// 看门狗强制关连接（对齐 cloud_proxy 的 IdleWatchdogReader）。零值 =
+	// cloudproxy.SSEIdleTimeout；测试注入小值让「挂死上游」用例跑得快。
+	idleTimeout time.Duration
 }
 
 // NewEngine 构造本地推理引擎。db 用于 CacheWriter 持久化本地 turn；loader
@@ -133,8 +141,8 @@ func NewEngine(profile ProfileReader, db *gorm.DB, loader AttachmentLoader, hook
 		loader:  loader,
 		hooks:   hooks,
 		httpClient: &http.Client{
-			// 无整体超时——SSE 响应持续整个 turn。空闲由 SSE keepalive 注释
-			// 保活，而非 HTTP 超时（对齐 cloud_proxy.Proxy.HTTPClient）。
+			// 无整体超时——SSE 响应持续整个 turn。死连接由 body 上的空闲
+			// 看门狗兜底，而非 HTTP 超时（对齐 cloud_proxy.Proxy.HTTPClient）。
 			Timeout: 0,
 		},
 	}
@@ -277,8 +285,20 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 
 	// 6. 归一化上游 SSE → workmax SSEEvent，写 dst + cache。同时累积 assistant
 	//    文本，turn 成功后异步索引进知识库（L3c-4 跨线程长期记忆）。
+	//    空闲看门狗兜底半开连接：超时无任何字节 → 强制关 body 解阻塞 scanner，
+	//    错误归类为可重试的流中断（pipeLocalSSE 的 scanner 错误路径已发
+	//    retryable proxy_error）。
+	idle := e.idleTimeout
+	if idle <= 0 {
+		idle = cloudproxy.SSEIdleTimeout
+	}
+	watchdog := cloudproxy.NewIdleWatchdogReader(resp.Body, idle, func() { _ = resp.Body.Close() })
+	defer watchdog.Stop()
 	var assistantText strings.Builder
-	err = pipeLocalSSE(resp.Body, adapter, dst, cache, &assistantText)
+	err = pipeLocalSSE(watchdog, adapter, dst, cache, &assistantText)
+	if err != nil && watchdog.TimedOut() {
+		err = fmt.Errorf("local inference: %w: %v", cloudproxy.ErrSSEUpstreamIdle, err)
+	}
 	if err == nil && e.hooks != nil {
 		go e.indexCompletedTurn(req.TurnUUID, req.UserText, assistantText.String())
 	}
@@ -288,7 +308,15 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 // indexCompletedTurn runs L3c-4 conversation indexing asynchronously so the
 // turn response is not blocked by embedding. Failures are logged only: a turn
 // that fails to index simply is not retrievable via RAG memory until re-indexed.
+// The recover matters because this runs in a bare goroutine: a panic below it
+// (native tokenizer/ORT edge cases) would otherwise kill the whole sidecar to
+// avoid indexing one turn.
 func (e *Engine) indexCompletedTurn(turnUUID, userText, assistantText string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("knowledge: index turn %s panicked: %v", turnUUID, r)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if err := e.hooks.IndexTurn(ctx, turnUUID, userText, assistantText); err != nil {
@@ -298,16 +326,23 @@ func (e *Engine) indexCompletedTurn(turnUUID, userText, assistantText string) {
 
 // retrievalTopK / maxRetrievalContextChars cap how much knowledge context is
 // injected per turn (plan L3c-5: "控制注入量 top-k + token 上限").
+// maxRetrievalContextChars is counted in runes — byte counting gave Chinese
+// knowledge a third of the capacity English got.
 const (
 	retrievalTopK            = 4
-	maxRetrievalContextChars = 1500
+	maxRetrievalContextChars = 1500 // runes
 	knowledgeContextPreamble = "以下是知识库中可能相关的内容，回答时可参考：\n"
 )
 
-// PrependKnowledgeContext packs retrieved sources (best first) under a char
+// PrependKnowledgeContext packs retrieved sources (best first) under a rune
 // budget and prepends them to the user text as model context. It returns the
 // sources that actually made it in, so the caller can report exactly what the
 // model was given rather than what the search returned.
+//
+// A source that does not fit is skipped, not a stopping point: sources arrive
+// best-first, and one oversized chunk must not evict every smaller candidate
+// ranked behind it. The accounting charges each entry what is actually
+// written — "- " + text + "\n", i.e. rune count + 3.
 func PrependKnowledgeContext(userText string, sources []RetrievedSource) (string, []RetrievedSource) {
 	var b strings.Builder
 	b.WriteString(knowledgeContextPreamble)
@@ -318,13 +353,14 @@ func PrependKnowledgeContext(userText string, sources []RetrievedSource) (string
 		if text == "" {
 			continue
 		}
-		if used+len(text) > maxRetrievalContextChars {
-			break
+		cost := utf8.RuneCountInString(text) + 3
+		if used+cost > maxRetrievalContextChars {
+			continue
 		}
 		b.WriteString("- ")
 		b.WriteString(text)
 		b.WriteByte('\n')
-		used += len(text) + 2
+		used += cost
 		s.Text = text
 		injected = append(injected, s)
 	}
@@ -438,11 +474,12 @@ func LoadThreadHistory(db *gorm.DB, uid uint64, threadID uint64, excludeRequestI
 	}
 
 	// Budget from the newest backwards: when the conversation outgrows the
-	// cap, it is the oldest exchanges that fall off.
+	// cap, it is the oldest exchanges that fall off. Costs are rune counts —
+	// the cap describes text the model reads, not UTF-8 encoding overhead.
 	used := 0
 	kept := make([]pair, 0, len(newestFirst))
 	for _, p := range newestFirst {
-		cost := len(p.user) + len(p.assistant)
+		cost := utf8.RuneCountInString(p.user) + utf8.RuneCountInString(p.assistant)
 		if used+cost > maxHistoryChars {
 			// Whole pairs only. Even when the very first pair is over budget
 			// on its own, dropping it beats shipping a truncated half-answer

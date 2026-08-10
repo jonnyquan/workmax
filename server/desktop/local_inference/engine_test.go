@@ -333,8 +333,12 @@ func TestEngine_AnnouncesRetrievedSources(t *testing.T) {
 
 // A source dropped by the char budget must not be announced: the panel would
 // credit a document the model never saw.
+//
+// (Assertion updated with the rune-budget fix: the accounting now charges each
+// entry its real written size — text runes + 3 for "- " and "\n" — so the
+// largest chunk that fits exactly is budget-3 runes, not budget runes.)
 func TestPrependKnowledgeContextReportsOnlyWhatFitted(t *testing.T) {
-	big := strings.Repeat("x", maxRetrievalContextChars)
+	big := strings.Repeat("x", maxRetrievalContextChars-3)
 	text, used := PrependKnowledgeContext("question", []RetrievedSource{
 		{Kind: "file", Label: "kept.md", Text: big},
 		{Kind: "file", Label: "dropped.md", Text: "this one is over budget"},
@@ -977,5 +981,149 @@ func TestLoadThreadHistory_BudgetDropsOldestFirst(t *testing.T) {
 	}
 	if len(history) > 0 && history[0].Role != "user" {
 		t.Errorf("history must open with a user message, got %q", history[0].Role)
+	}
+}
+
+// Phase 0.3a regression (local parser): the SSE spec allows `data:` with no
+// space after the colon. The local parser already handled it — this pins the
+// behavior so the two parsers cannot diverge again.
+func TestEngine_OpenAI_AcceptsNoSpaceDataFrames(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		f := w.(http.Flusher)
+		sseLine(w, `data:{"choices":[{"delta":{"content":"你好"}}]}`)
+		sseLine(w, "")
+		f.Flush()
+		sseLine(w, "data:[DONE]")
+		sseLine(w, "")
+		f.Flush()
+	}))
+	t.Cleanup(upstream.Close)
+
+	engine, _, dst := newTestEngine(t, stubProfile{
+		protocol: protocolOpenAI, baseURL: upstream.URL, modelID: engineTestModel,
+	})
+	if err := engine.Chat(context.Background(), cloudproxy.ChatRequest{
+		ThreadID: 1, ThreadUUID: "thr_nospace", TurnUUID: engineTestTurnUUID,
+		UID: engineTestUID, UserText: "hi", ChatMode: "general",
+	}, dst); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	frames, errs := dst.snapshot()
+	if len(errs) != 0 {
+		t.Fatalf("unexpected proxy errors: %+v", errs)
+	}
+	var got strings.Builder
+	for _, f := range frames {
+		if f.Type == "text_delta" {
+			got.WriteString(extractDeltaText(f.Data))
+		}
+	}
+	if got.String() != "你好" {
+		t.Fatalf("delta text = %q, want %q (no-space data frames must not be dropped)", got.String(), "你好")
+	}
+	assertCleanDone(t, frames)
+}
+
+// Phase 0.3b: a local upstream that goes silent mid-turn is force-closed by
+// the idle watchdog instead of hanging the turn forever, and the failure is
+// surfaced retryable with the cache row finalized partial.
+func TestEngine_OpenAI_IdleUpstreamIsCutRetryable(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		f := w.(http.Flusher)
+		sseLine(w, `data: {"choices":[{"delta":{"content":"partial"}}]}`)
+		sseLine(w, "")
+		f.Flush()
+		// Silence forever; the watchdog's body close cancels this context.
+		<-r.Context().Done()
+	}))
+	t.Cleanup(upstream.Close)
+
+	engine, db, dst := newTestEngine(t, stubProfile{
+		protocol: protocolOpenAI, baseURL: upstream.URL, modelID: engineTestModel,
+	})
+	engine.idleTimeout = 100 * time.Millisecond
+
+	done := make(chan error, 1)
+	go func() {
+		done <- engine.Chat(context.Background(), cloudproxy.ChatRequest{
+			ThreadID: 1, ThreadUUID: "thr_idle", TurnUUID: engineTestTurnUUID,
+			UID: engineTestUID, UserText: "hello?", ChatMode: "general",
+		}, dst)
+	}()
+
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Chat still blocked long after the idle timeout — half-open upstream hangs the turn again")
+	}
+	if err == nil {
+		t.Fatal("Chat returned nil for a stream with no terminal frame")
+	}
+	if !errors.Is(err, cloudproxy.ErrSSEUpstreamIdle) {
+		t.Errorf("err = %v, want it to wrap cloudproxy.ErrSSEUpstreamIdle", err)
+	}
+
+	frames, proxyErrors := dst.snapshot()
+	var got strings.Builder
+	for _, f := range frames {
+		if f.Type == "text_delta" {
+			got.WriteString(extractDeltaText(f.Data))
+		}
+	}
+	if got.String() != "partial" {
+		t.Errorf("pre-stall delta = %q, want %q", got.String(), "partial")
+	}
+	if len(proxyErrors) != 1 || !proxyErrors[0].Retryable {
+		t.Errorf("want exactly one retryable proxy_error, got %+v", proxyErrors)
+	}
+	if state, _ := cacheRow(t, db); state != "partial" {
+		t.Errorf("cache streaming_state = %q, want partial", state)
+	}
+}
+
+// Phase 0.5 rune budget: the retrieval budget counts what the model reads,
+// not UTF-8 bytes — Chinese text used to get a third of the capacity. And an
+// oversized chunk is skipped (continue), not a stopping point (break): it
+// must not evict smaller candidates ranked behind it.
+func TestPrependKnowledgeContext_RunesNotBytesAndSkipsOversized(t *testing.T) {
+	chinese := strings.Repeat("知", 600)                        // 1800 bytes, 600 runes: fits ONLY under rune counting
+	oversized := strings.Repeat("大", maxRetrievalContextChars) // over budget on its own
+	tail := "结尾小块"
+
+	text, used := PrependKnowledgeContext("问题", []RetrievedSource{
+		{Kind: "file", Label: "cn.md", Text: chinese},
+		{Kind: "file", Label: "huge.md", Text: oversized},
+		{Kind: "file", Label: "tail.md", Text: tail},
+	})
+	if len(used) != 2 || used[0].Label != "cn.md" || used[1].Label != "tail.md" {
+		t.Fatalf("injected = %+v, want cn.md (rune-fits) and tail.md (survives the oversized skip)", used)
+	}
+	if !strings.Contains(text, chinese) || !strings.Contains(text, tail) {
+		t.Error("kept chunks missing from the assembled prompt")
+	}
+	if strings.Contains(text, oversized) {
+		t.Error("the oversized chunk reached the model")
+	}
+}
+
+// Phase 0.5 rune budget for history: two Chinese pairs of ~10k runes each
+// (~30k bytes each) both fit a 24k-rune budget. Byte counting kept only one.
+func TestLoadThreadHistory_CountsRunesNotBytes(t *testing.T) {
+	db := openLocalTestDB(t)
+	cn := strings.Repeat("史", 10_000)
+	seedHistoryRow(t, db, 1, "第一问", cn, "key-1")
+	seedHistoryRow(t, db, 1, "第二问", cn, "key-2")
+
+	history, err := LoadThreadHistory(db, engineTestUID, 1, "none")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 4 {
+		t.Fatalf("history length = %d, want 4 (both pairs fit a rune-counted budget)", len(history))
 	}
 }

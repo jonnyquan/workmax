@@ -379,7 +379,15 @@ func (e *Engine) ensureWorkspace(threadUUID string) (string, error) {
 	return dir, nil
 }
 
+// indexCompletedTurn mirrors local_inference's helper, including the recover:
+// it runs in a bare goroutine, and a panic in the native embedding stack must
+// cost one turn's indexing, not the sidecar process.
 func (e *Engine) indexCompletedTurn(turnUUID, userText, assistantText string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("knowledge: index turn %s panicked: %v", turnUUID, r)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if err := e.hooks.IndexTurn(ctx, turnUUID, userText, assistantText); err != nil {

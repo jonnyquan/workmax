@@ -209,20 +209,25 @@ func PipeUpstream(
 			// Comment line (keepalive). Ignore.
 			continue
 		}
-		if strings.HasPrefix(line, "event: ") {
-			curEvent = strings.TrimSpace(line[len("event: "):])
+		// The SSE spec allows zero or one space after the field colon, so both
+		// `data: {...}` and `data:{...}` are valid frames. Matching only the
+		// spaced form silently dropped every event from an upstream that omits
+		// the space — the same two-step TrimPrefix local_inference uses.
+		if strings.HasPrefix(line, "event:") {
+			curEvent = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 			continue
 		}
-		if strings.HasPrefix(line, "data: ") {
+		if strings.HasPrefix(line, "data:") {
+			d := strings.TrimPrefix(line, "data:")
+			d = strings.TrimPrefix(d, " ")
 			if curData.Len() > 0 {
 				curData.WriteByte('\n')
 			}
-			curData.WriteString(line[len("data: "):])
+			curData.WriteString(d)
 			continue
 		}
-		// Other field names (id:, retry:) — pass through as a synthetic
-		// data line so we don't drop information from upstream.
-		// Production workmax doesn't emit these, but harmless to preserve.
+		// Other field names (id:, retry:) are ignored. Production workmax
+		// doesn't emit these; they still count against the frame budget above.
 	}
 	if err := scanner.Err(); err != nil {
 		// Final partial frame is intentionally not flushed — incomplete

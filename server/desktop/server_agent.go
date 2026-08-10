@@ -122,8 +122,8 @@ func (s *Server) handleAgentChat(c *gin.Context) {
 		s.writeAgentTurnOwnerCheckError(c, err)
 		return
 	}
-	lock := s.agentTurnLock(body.TurnUUID)
-	if !lock.TryLock() {
+	lock, ok := s.acquireAgentTurnLock(body.TurnUUID)
+	if !ok {
 		sameOwner, err := checkAgentTurnIntentOwner(s.cfg.DB, lease, uid, body.TurnUUID)
 		if err != nil {
 			s.writeAgentTurnOwnerCheckError(c, err)
@@ -138,7 +138,7 @@ func (s *Server) handleAgentChat(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "turn_in_progress"})
 		return
 	}
-	defer lock.Unlock()
+	defer s.releaseAgentTurnLock(body.TurnUUID, lock)
 
 	intent, thread, _, err := ensureAgentTurnIntent(
 		s.cfg.DB, lease, uid, body.TurnUUID, body.ThreadUUID,

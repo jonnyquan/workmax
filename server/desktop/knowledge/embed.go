@@ -152,28 +152,12 @@ func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 		return nil, errors.New("knowledge: tokenization produced no encodings")
 	}
 
-	batchSize := len(encodings)
-	seqLength := len(encodings[0].Ids)
+	batchSize, seqLength, inputIDs, attentionMask, tokenTypeIDs := packEncodings(encodings)
 	if seqLength == 0 {
 		return nil, errors.New("knowledge: zero-length token sequence")
 	}
 
 	inputShape := ort.NewShape(int64(batchSize), int64(seqLength))
-	inputIDs := make([]int64, batchSize*seqLength)
-	attentionMask := make([]int64, batchSize*seqLength)
-	tokenTypeIDs := make([]int64, batchSize*seqLength)
-	for b, enc := range encodings {
-		off := b * seqLength
-		for i, id := range enc.Ids {
-			inputIDs[off+i] = int64(id)
-		}
-		for i, m := range enc.AttentionMask {
-			attentionMask[off+i] = int64(m)
-		}
-		for i, t := range enc.TypeIds {
-			tokenTypeIDs[off+i] = int64(t)
-		}
-	}
 
 	inIDs, err := ort.NewTensor(inputShape, inputIDs)
 	if err != nil {
@@ -214,6 +198,55 @@ func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 		results[i] = vec
 	}
 	return results, nil
+}
+
+// packEncodings flattens a tokenized batch into the three aligned int64
+// tensors the model takes, sized batchSize × seqLength.
+//
+// seqLength is the LONGEST sequence in the batch, not the first one: the
+// sugarme tokenizer does not pad by default (all-MiniLM's tokenizer.json ships
+// "padding": null), so encodings in one EncodeBatch call may differ in length.
+// Sizing off encodings[0] made any batch whose first chunk was not the longest
+// write past the slice end and panic — inside a bare indexing goroutine, which
+// took the whole sidecar down. Shorter sequences are left as pad token id 0
+// with attention_mask 0, which the BERT-style model ignores by masking; each
+// per-field copy is additionally clamped to seqLength so an encoding whose
+// AttentionMask/TypeIds disagree in length with Ids still cannot overflow.
+func packEncodings(encodings []tokenizer.Encoding) (batchSize, seqLength int, inputIDs, attentionMask, tokenTypeIDs []int64) {
+	batchSize = len(encodings)
+	for _, enc := range encodings {
+		if n := len(enc.Ids); n > seqLength {
+			seqLength = n
+		}
+	}
+	if seqLength == 0 {
+		return batchSize, 0, nil, nil, nil
+	}
+	inputIDs = make([]int64, batchSize*seqLength)
+	attentionMask = make([]int64, batchSize*seqLength)
+	tokenTypeIDs = make([]int64, batchSize*seqLength)
+	for b, enc := range encodings {
+		off := b * seqLength
+		for i, id := range enc.Ids {
+			if i >= seqLength {
+				break
+			}
+			inputIDs[off+i] = int64(id)
+		}
+		for i, m := range enc.AttentionMask {
+			if i >= seqLength {
+				break
+			}
+			attentionMask[off+i] = int64(m)
+		}
+		for i, tt := range enc.TypeIds {
+			if i >= seqLength {
+				break
+			}
+			tokenTypeIDs[off+i] = int64(tt)
+		}
+	}
+	return batchSize, seqLength, inputIDs, attentionMask, tokenTypeIDs
 }
 
 // libOnnxName returns the platform-conventional libonnxruntime filename.

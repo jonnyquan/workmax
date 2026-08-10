@@ -108,8 +108,15 @@ func respondThreadFileUploadError(c *gin.Context, err error) {
 // indexUploadedFile runs L3c-3 knowledge indexing for a freshly saved file
 // asynchronously. Failures are logged only: a file that fails to index simply
 // is not retrievable via RAG until it is re-uploaded or re-indexed — it does
-// not affect the upload itself, which has already succeeded.
+// not affect the upload itself, which has already succeeded. The recover is
+// load-bearing: this runs in a bare goroutine, so a panic in the extraction or
+// embedding stack would otherwise crash the whole sidecar.
 func (s *Server) indexUploadedFile(uid uint64, fileID int64) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("knowledge: index file %d (uid %d) panicked: %v", fileID, uid, r)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if err := s.cfg.KnowledgeIndex.IndexFile(ctx, uid, fileID); err != nil {

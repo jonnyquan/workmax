@@ -154,7 +154,7 @@ type Server struct {
 	httpServer      *http.Server
 	startedAt       time.Time
 	authLifecycleMu sync.Mutex
-	agentTurnLocks  sync.Map // turn_uuid -> *sync.Mutex; process-lifetime TryLock registry
+	agentTurnLocks  sync.Map // turn_uuid -> *sync.Mutex; entries live only while their turn streams (releaseAgentTurnLock deletes on finish)
 	authClosing     atomic.Bool
 	authContext     context.Context
 	authCancel      context.CancelFunc
