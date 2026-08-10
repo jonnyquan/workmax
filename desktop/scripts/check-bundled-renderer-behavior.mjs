@@ -260,6 +260,11 @@ class FakeDocument {
   constructor(rendererHtml) {
     this.byId = new Map();
     this.listeners = new Map();
+    // Operation counters, for the performance gate: a per-token selector walk
+    // or full-text reset is invisible to a correctness assertion and shows up
+    // here as a count that scales with the delta count.
+    this.querySelectorCalls = 0;
+    this.appendDataCalls = 0;
     for (const [id, spec] of parseRendererElements(rendererHtml)) {
       const element = new FakeElement(spec.tagName);
       element.hidden = spec.hidden;
@@ -287,6 +292,7 @@ class FakeDocument {
   }
 
   querySelector(selector) {
+    this.querySelectorCalls += 1;
     if (!selector.startsWith("#")) {
       throw new Error(`unsupported selector in bundled renderer test: ${selector}`);
     }
@@ -301,6 +307,7 @@ class FakeDocument {
   // never as markup. The stub keeps them distinguishable from elements so a
   // test can assert that a would-be tag really did arrive as text.
   createTextNode(data) {
+    const doc = this;
     return {
       nodeType: 3,
       tagName: "#text",
@@ -308,6 +315,13 @@ class FakeDocument {
       classList: new FakeClassList(),
       parentNode: null,
       textContent: String(data),
+      // Real Text semantics: append without rebuilding, which is the whole
+      // point of the streaming batcher — and counted, so the gate can assert
+      // one append per flushed frame rather than one per delta.
+      appendData(chunk) {
+        doc.appendDataCalls += 1;
+        this.textContent += String(chunk);
+      },
     };
   }
 }
@@ -2087,6 +2101,439 @@ async function testStreamingDoesNotYankAScrolledUpReader() {
 
   emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
   await settle();
+}
+
+// The performance gate, stated as operation counts the stub can see. A
+// correctness assertion cannot tell one full-text repaint from five hundred;
+// these counters can. Per delta the renderer may do bookkeeping only — the
+// DOM work must scale with flushed frames, not with tokens.
+async function testStreamingDeltaCostsStayConstant() {
+  let emit = null;
+  const tokens = Array.from({ length: 500 }, (_, i) => `tok${i} `);
+  const answer = tokens.join("");
+  let answered = false;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("perf-thread", "Fire hose")] });
+      }
+      if (pathname === "/agent/threads/perf-thread/messages") {
+        return response({
+          items: answered
+            ? [{
+                uuid: "perf-msg", user_text: "Count tokens", ai_text: answer,
+                streaming_state: "complete",
+                created_at: "2026-05-21T00:00:00Z", updated_at: "2026-05-21T00:00:00Z",
+              }]
+            : [],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input, callback) {
+        emit = (event) => callback({ ...event, turnID: "perf-turn" });
+        return { turnID: "perf-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+  const input = document.byId.get("chat-input");
+  input.value = "Count tokens";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  const bubble = walk(
+    document.byId.get("message-list"),
+    (n) => n.classList?.contains("bubble") && n.parentNode?.classList?.contains("assistant"),
+  ).at(-1);
+  // Count full-content resets on the streaming bubble itself: the O(n²)
+  // regression was one of these per token.
+  const proto = Object.getPrototypeOf(bubble);
+  const descriptor = Object.getOwnPropertyDescriptor(proto, "textContent");
+  let bubbleContentResets = 0;
+  Object.defineProperty(bubble, "textContent", {
+    configurable: true,
+    get() { return descriptor.get.call(this); },
+    set(value) {
+      bubbleContentResets += 1;
+      descriptor.set.call(this, value);
+    },
+  });
+  const querySelectorBase = document.querySelectorCalls;
+  const appendDataBase = document.appendDataCalls;
+
+  // 500 deltas in 5 settled bursts: within a burst nothing may touch the DOM;
+  // each settle flushes exactly one frame.
+  for (let burst = 0; burst < 5; burst += 1) {
+    for (let i = 0; i < 100; i += 1) {
+      emit({ type: "text_delta", delta: tokens[burst * 100 + i] });
+    }
+    await settle();
+  }
+
+  assert.equal(
+    document.appendDataCalls - appendDataBase,
+    5,
+    "the merged text of each burst must land as one appendData per flushed frame",
+  );
+  assert.ok(
+    bubbleContentResets <= 5,
+    `streaming must append, never reset the bubble's content (saw ${bubbleContentResets} resets for 500 deltas)`,
+  );
+  assert.ok(
+    document.querySelectorCalls - querySelectorBase <= 5,
+    `selector lookups must not scale with the delta count (saw ${document.querySelectorCalls - querySelectorBase})`,
+  );
+
+  answered = true;
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  await settle();
+  assert.equal(
+    bubble.textContent,
+    answer.trim(),
+    "batching must not lose or reorder a single token",
+  );
+}
+
+// The causal fence: buffered deltas land in the DOM before any non-delta
+// event is reflected, so tool steps can never appear ahead of the words that
+// preceded them — and a synchronous done paints everything, in order, without
+// waiting for a frame.
+async function testNonDeltaEventsDrainBufferedText() {
+  let emit = null;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("order-thread", "Causal order")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input, callback) {
+        emit = (event) => callback({ ...event, turnID: "order-turn" });
+        return { turnID: "order-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+  const input = document.byId.get("chat-input");
+  input.value = "Interleave";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  const bubble = walk(
+    document.byId.get("message-list"),
+    (n) => n.classList?.contains("bubble") && n.parentNode?.classList?.contains("assistant"),
+  ).at(-1);
+
+  // The tool step must not outrun the buffered words before it.
+  emit({ type: "text_delta", delta: "One " });
+  emit({ type: "tool_use", name: "Write", target: "outline.md" });
+  assert.equal(
+    bubble.textContent,
+    "One ",
+    "a non-delta event must drain buffered text before it is handled",
+  );
+
+  emit({ type: "text_delta", delta: "two " });
+  emit({ type: "tool_denied", name: "Write", target: "escape.txt", reason: "outside" });
+  emit({ type: "text_delta", delta: "three." });
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  // Everything above happened in one synchronous burst; done drained it all.
+  assert.equal(
+    bubble.textContent,
+    "One two three.",
+    "a synchronous done must paint the complete text, in order, without waiting for a frame",
+  );
+  assert.equal(
+    walk(document.byId.get("message-list"), (n) => n.classList?.contains("worklog-step")).length,
+    2,
+    "the interleaved tool steps must all be on the log",
+  );
+  await settle();
+}
+
+// The post-turn reconcile leaves the transcript's DOM alone when the snapshot
+// confirms what was streamed: the completed pair is updated in place —
+// timestamps, Regenerate, partial flag — and every other row keeps its very
+// nodes. A snapshot that disagrees with the stream falls back to the full
+// rebuild, whose correctness stays the reference.
+async function testCompletedTurnReconcilesInPlace() {
+  let emit = null;
+  let turnSeq = 0;
+  const prior = [
+    message("r1", "first question", "first answer"),
+    message("r2", "second question", "second answer"),
+  ];
+  let snapshot = prior;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("inplace-thread", "Stable rows")] });
+      }
+      if (pathname === "/agent/threads/inplace-thread/messages") {
+        return response({ items: snapshot });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input, callback) {
+        turnSeq += 1;
+        const turnID = `inplace-turn-${turnSeq}`;
+        emit = (event) => callback({ ...event, turnID });
+        return { turnID };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+  const list = document.byId.get("message-list");
+  const beforeNodes = Array.from(list.children);
+  assert.equal(beforeNodes.length, 4, "precondition: two cached exchanges, four rows");
+  assert.equal(
+    walk(list, (n) => n.classList?.contains("message-action-regenerate")).length,
+    1,
+    "precondition: the final cached answer offers Regenerate",
+  );
+
+  const input = document.byId.get("chat-input");
+  input.value = "third question";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+  const during = Array.from(list.children);
+  assert.equal(during.length, 6, "the optimistic pair joins the transcript");
+  const userNode = during[4];
+  const assistantNode = during[5];
+  assert.equal(
+    walk(list, (n) => n.classList?.contains("message-action-regenerate")).length,
+    0,
+    "the superseded answer loses Regenerate the moment a new exchange starts",
+  );
+
+  emit({ type: "text_delta", delta: "third answer" });
+  await settle();
+  snapshot = [...prior, message("r3", "third question", "third answer")];
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  await settle();
+
+  const after = Array.from(list.children);
+  assert.equal(after.length, 6, "a confirming snapshot must not change the row count");
+  for (let i = 0; i < 4; i += 1) {
+    assert.equal(
+      after[i],
+      beforeNodes[i],
+      `row ${i} must keep its node — the reconcile may not rebuild the transcript`,
+    );
+  }
+  assert.equal(after[4], userNode, "the user row is updated in place, not replaced");
+  assert.equal(after[5], assistantNode, "the assistant row is updated in place, not replaced");
+  assert.equal(assistantNode.classList.contains("partial"), false);
+  assert.equal(assistantNode.classList.contains("pending"), false);
+  assert.equal(
+    walk(userNode, (n) => n.classList?.contains("message-time")).length,
+    1,
+    "the reconcile stamps the stored time on the question",
+  );
+  assert.equal(
+    walk(assistantNode, (n) => n.classList?.contains("message-time")).length,
+    1,
+    "and on the answer",
+  );
+  const regens = walk(list, (n) => n.classList?.contains("message-action-regenerate"));
+  assert.equal(regens.length, 1, "exactly one Regenerate, on the new final answer");
+  assert.equal(
+    walk(assistantNode, (n) => n === regens[0]).length,
+    1,
+    "and it lives on the in-place assistant row",
+  );
+
+  // Fallback: a snapshot that disagrees with the stream (server-side rewrite)
+  // must rebuild rather than trust the streamed DOM.
+  input.value = "fourth question";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+  emit({ type: "text_delta", delta: "draft answer" });
+  await settle();
+  snapshot = [...snapshot, message("r4", "fourth question", "server-rewritten answer")];
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  await settle();
+  const rebuilt = Array.from(list.children);
+  assert.equal(rebuilt.length, 8);
+  assert.notEqual(
+    rebuilt[0],
+    beforeNodes[0],
+    "a mismatched snapshot takes the full-rebuild path",
+  );
+  assert.match(list.textContent, /server-rewritten answer/);
+  assert.doesNotMatch(
+    list.textContent,
+    /draft answer/,
+    "the rebuild shows the server's text, not the stream's",
+  );
+}
+
+// Streaming Markdown commits are only ever blocks the final parse would have
+// produced: closed by a blank line outside any open fence. An unclosed fence
+// stays raw in the tail however long it runs, and once the turn finishes the
+// committed-plus-final DOM must be indistinguishable from a one-shot parse of
+// the whole answer.
+async function testStreamingMarkdownCommitsMatchTheFinalParse() {
+  let emit = null;
+  const part1 = "## Plan\n\nFirst paragraph of the answer.\n\n```js\nlet x = 1;\n";
+  const part2 = "let y = 2;\n```\n\n- alpha\n- beta\n\nclosing tail line";
+  const answer = part1 + part2;
+  let answered = false;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("mdstream-thread", "Streamed markdown")] });
+      }
+      if (pathname === "/agent/threads/mdstream-thread/messages") {
+        return response({
+          items: answered
+            ? [{
+                uuid: "mdstream-msg", user_text: "Stream it", ai_text: answer,
+                streaming_state: "complete",
+                created_at: "2026-05-21T00:00:00Z", updated_at: "2026-05-21T00:00:00Z",
+              }]
+            : [],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input, callback) {
+        emit = (event) => callback({ ...event, turnID: "mdstream-turn" });
+        return { turnID: "mdstream-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { context, document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+  const input = document.byId.get("chat-input");
+  input.value = "Stream it";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  emit({ type: "text_delta", delta: part1 });
+  await settle();
+  const bubble = walk(
+    document.byId.get("message-list"),
+    (n) => n.classList?.contains("bubble") && n.parentNode?.classList?.contains("assistant"),
+  ).at(-1);
+  assert.equal(bubble.classList.contains("markdown"), true, "closed blocks are typeset mid-stream");
+  assert.equal(
+    walk(bubble, (n) => n.tagName === "H5").length,
+    1,
+    "the finished heading is committed",
+  );
+  assert.equal(
+    walk(bubble, (n) => n.tagName === "PRE").length,
+    0,
+    "an unclosed fence must NOT be committed — its shape is still ambiguous",
+  );
+  const tailDuring = walk(bubble, (n) => n.classList?.contains("md-stream-tail"))[0];
+  assert.ok(tailDuring, "the open fence waits in the raw tail");
+  assert.equal(tailDuring.textContent, "```js\nlet x = 1;\n");
+
+  emit({ type: "text_delta", delta: part2 });
+  await settle();
+  const pre = walk(bubble, (n) => n.tagName === "PRE");
+  assert.equal(pre.length, 1, "the closed fence commits on the next frame");
+  assert.equal(pre[0].textContent, "let x = 1;\nlet y = 2;");
+  assert.equal(walk(bubble, (n) => n.tagName === "LI").length, 2, "the closed list commits too");
+  assert.equal(
+    walk(bubble, (n) => n.classList?.contains("md-stream-tail"))[0].textContent,
+    "closing tail line",
+    "the still-open final line stays raw",
+  );
+
+  answered = true;
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  await settle();
+
+  // The consistency pin: the same input through the one-shot parser must
+  // produce the same text and the same element shape as the streamed commits
+  // plus the finish-line tail parse.
+  const reference = vm.runInContext(
+    `(() => {
+      const container = document.createElement("div");
+      renderMarkdownInto(container, ${JSON.stringify(answer)});
+      return container;
+    })()`,
+    context,
+  );
+  const shape = (root) =>
+    walk(root, (n) => n.tagName !== "#text")
+      .map((n) => n.tagName)
+      .join(">");
+  assert.equal(
+    bubble.textContent,
+    reference.textContent,
+    "streamed commits plus the final tail must read exactly like a one-shot parse",
+  );
+  assert.equal(
+    shape(bubble).replace(/^DIV/u, ""),
+    shape(reference).replace(/^DIV/u, ""),
+    "and produce the same element structure",
+  );
+  assert.equal(
+    walk(bubble, (n) => n.classList?.contains("md-stream-tail")).length,
+    0,
+    "the finished answer carries no streaming scaffolding",
+  );
 }
 
 // The pill's colour is its state at a glance; the class must track the label.
@@ -4087,11 +4534,30 @@ async function testAssistantMarkdownIsRenderedAsElements() {
     document.byId.get("message-list"),
     (n) => n.classList?.contains("bubble") && n.parentNode?.classList?.contains("assistant"),
   ).at(-1);
+  // Streaming formatting is incremental: blocks whose closing blank line has
+  // arrived are already typeset, while the still-ambiguous tail stays raw
+  // text. The final line of the fixture has no newline yet, so it must be
+  // sitting untouched in the tail — not parsed early into a shape that could
+  // change as the rest of it arrives.
   assert.equal(
     streaming.classList.contains("markdown"),
-    false,
-    "while streaming the bubble must stay raw text; formatting a half-written block would make it change shape as it arrives",
+    true,
+    "completed blocks must be typeset while the answer still streams",
   );
+  {
+    const tail = walk(streaming, (n) => n.classList?.contains("md-stream-tail"));
+    assert.equal(tail.length, 1, "the unfinished remainder must live in the raw tail");
+    assert.match(
+      tail[0].textContent,
+      /Not a tag: <img src=x onerror=alert\(1\)>/,
+      "the incomplete final line stays raw text until its block closes",
+    );
+    assert.equal(
+      walk(streaming, (n) => n.tagName === "IMG").length,
+      0,
+      "markup in model output must stay text during the stream too",
+    );
+  }
 
   answered = true;
   emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
@@ -4743,6 +5209,8 @@ async function testAgentTurnStreamsAndReconciles() {
     "the first token must retire the typing indicator",
   );
   streamCallback({ type: "text_delta", turnID: "turn-agent", delta: "answer" });
+  // Deltas paint on the next frame, not per event — settle lets it flush.
+  await settle();
   assert.match(document.byId.get("message-list").textContent, /Live answer/);
   assert.equal(document.byId.get("turn-state").textContent, "Working");
 
@@ -6325,6 +6793,10 @@ await testQuickSwitcherJumpsBetweenThreads();
 await testEscapeStopsAStreamingTurn();
 await testComposerCapacityNote();
 await testStreamingDoesNotYankAScrolledUpReader();
+await testStreamingDeltaCostsStayConstant();
+await testNonDeltaEventsDrainBufferedText();
+await testCompletedTurnReconcilesInPlace();
+await testStreamingMarkdownCommitsMatchTheFinalParse();
 await testTurnStatePillCarriesItsTone();
 await testFailedTurnStateAndDuration();
 await testModelProtocolHintFollowsTheChoice();

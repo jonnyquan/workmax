@@ -188,6 +188,9 @@ const turnState = document.querySelector("#turn-state");
 const fileInput = document.querySelector("#file-input");
 const attachButton = document.querySelector("#attach-button");
 const attachmentChips = document.querySelector("#attachment-chips");
+// Cached once: scrollMessagesToEnd runs on every streamed frame, and a
+// querySelector per frame is a forced walk the stream never needed.
+const jumpLatestButton = document.querySelector("#jump-latest");
 
 class SessionChangedError extends Error {
   constructor() {
@@ -1889,7 +1892,7 @@ function isCurrentSelection(context) {
   );
 }
 
-async function loadMessagesForSelection(thread, context) {
+async function loadMessagesForSelection(thread, context, completedTurn = null) {
   const res = await sidecarFetch(`/agent/threads/${encodeURIComponent(thread.uuid)}/messages`);
   const items = parseMessages(
     await readSidecarJSON(res, "/agent/threads/:uuid/messages")
@@ -1897,8 +1900,115 @@ async function loadMessagesForSelection(thread, context) {
   if (!isCurrentSelection(context)) {
     return false;
   }
+  // A turn that just completed already painted its own two messages; when the
+  // snapshot confirms them, the rest of the transcript has no reason to be
+  // torn down and rebuilt. Any doubt falls through to the full repaint.
+  if (completedTurn && reconcileTurnInPlace(items, completedTurn)) {
+    return true;
+  }
   renderCachedMessages(items);
   return true;
+}
+
+// How many transcript rows a snapshot renders: renderCachedMessages makes one
+// article per present half of each exchange.
+function expectedMessageArticles(items) {
+  let expected = 0;
+  for (const item of items) {
+    if (item.user_text) expected += 1;
+    if (item.ai_text || item.streaming_state !== "complete") expected += 1;
+  }
+  return expected;
+}
+
+// The in-place half of the post-turn reconcile. The optimistic pair the turn
+// streamed into must still be the transcript's last two rows, and the
+// snapshot's last exchange must be exactly what was streamed — same words,
+// completed. Then the only things the cache repaint would have added are
+// applied directly: timestamps, the Regenerate affordance, and the partial
+// flag coming off. Everything else — earlier messages, the work log strip,
+// the settled reasoning caption, answered approval cards — keeps its nodes.
+// Any mismatch (canceled turn, server-rewritten text, drifted row count)
+// returns false and the caller takes the full-rebuild path, whose correctness
+// this optimization must never outrun.
+function reconcileTurnInPlace(items, completedTurn) {
+  const wrapper = completedTurn.assistantWrapper;
+  const userNode = completedTurn.userNode;
+  if (!wrapper || !userNode) return false;
+  const last = items.length > 0 ? items[items.length - 1] : null;
+  if (!last || last.streaming_state !== "complete") return false;
+  if (!last.user_text || last.user_text !== completedTurn.userText) return false;
+  if (!last.ai_text || last.ai_text !== completedTurn.assistantText) return false;
+  const children = messageList.children;
+  if (children.length < 2) return false;
+  if (children[children.length - 1] !== wrapper) return false;
+  if (children[children.length - 2] !== userNode) return false;
+  if (children.length !== expectedMessageArticles(items)) return false;
+
+  wrapper.classList.remove("pending");
+  wrapper.classList.remove("partial");
+  ensureMessageTime(userNode, last.created_at);
+  ensureMessageTime(wrapper, last.updated_at || last.created_at);
+  ensureRegenerateAction(wrapper, last.user_text);
+  // No scroll write: the reader stays exactly where the stream left them.
+  return true;
+}
+
+// Adds (or refreshes) the stored timestamp a streamed message could not show
+// until the sidecar had one to give.
+function ensureMessageTime(wrapper, timestamp) {
+  const time = formatMessageTime(timestamp);
+  if (!time) return;
+  const label = Array.from(wrapper.children || []).find((child) =>
+    child.classList?.contains("message-role")
+  );
+  if (!label) return;
+  for (const child of Array.from(label.children || [])) {
+    if (child.classList?.contains("message-time")) {
+      child.textContent = time;
+      return;
+    }
+  }
+  const when = document.createElement("span");
+  when.className = "message-time";
+  when.textContent = time;
+  label.appendChild(when);
+}
+
+// The finished final answer gains Regenerate without rebuilding its row. The
+// action row may already exist (copy attaches at the terminal) or not (no
+// clipboard, no copy) — either way exactly one Regenerate results.
+function ensureRegenerateAction(wrapper, regenerateText) {
+  if (!regenerateText) return;
+  let actions = Array.from(wrapper.children || []).find((child) =>
+    child.classList?.contains("message-actions")
+  );
+  if (!actions) {
+    actions = document.createElement("div");
+    actions.className = "message-actions";
+    wrapper.appendChild(actions);
+  }
+  for (const child of Array.from(actions.children || [])) {
+    if (child.classList?.contains("message-action-regenerate")) return;
+  }
+  actions.appendChild(buildRegenerateButton(regenerateText));
+}
+
+// Only the transcript's FINAL answer may offer Regenerate. A new turn makes
+// the previous final answer non-final, so its button comes off the moment the
+// next exchange is appended — the in-place reconcile never revisits old rows.
+function retireStaleRegenerateActions() {
+  const children = messageList.children;
+  const lastAssistant = children[children.length - 1];
+  if (!lastAssistant?.classList?.contains("assistant")) return;
+  const actions = Array.from(lastAssistant.children || []).find((child) =>
+    child.classList?.contains("message-actions")
+  );
+  if (!actions) return;
+  for (const child of Array.from(actions.children || [])) {
+    if (child.classList?.contains("message-action-regenerate")) child.remove();
+  }
+  if ((actions.children || []).length === 0) actions.remove();
 }
 
 function renderCachedMessages(items) {
@@ -2455,21 +2565,7 @@ function attachMessageActions(wrapper, role, text, options = {}) {
   const copy = buildCopyButton(text, role === "assistant" ? "Copy answer" : "Copy");
   if (copy) actions.appendChild(copy);
   if (role === "assistant" && options.regenerateText) {
-    // Only the FINAL answer is regenerable — re-running an earlier prompt
-    // mid-conversation would fork history the transcript cannot show. The
-    // click is the consent: unlike "Edit and resend", the whole point here
-    // is running the same words again.
-    const regen = document.createElement("button");
-    regen.type = "button";
-    regen.className = "message-action";
-    regen.textContent = "Regenerate";
-    regen.addEventListener("click", () => {
-      if (chatInput.disabled) return;
-      chatInput.value = options.regenerateText;
-      updateComposerState();
-      submitChat({ preventDefault() {} });
-    });
-    actions.appendChild(regen);
+    actions.appendChild(buildRegenerateButton(options.regenerateText));
   }
   if (role === "user" && text) {
     // Not a retry: it puts the words back in the composer so they can be
@@ -2488,6 +2584,25 @@ function attachMessageActions(wrapper, role, text, options = {}) {
     actions.appendChild(reuse);
   }
   if (actions.children.length > 0) wrapper.appendChild(actions);
+}
+
+// Only the FINAL answer is regenerable — re-running an earlier prompt
+// mid-conversation would fork history the transcript cannot show. The
+// click is the consent: unlike "Edit and resend", the whole point here
+// is running the same words again. The dedicated class is how the in-place
+// reconcile finds and retires the button once the answer stops being final.
+function buildRegenerateButton(regenerateText) {
+  const regen = document.createElement("button");
+  regen.type = "button";
+  regen.className = "message-action message-action-regenerate";
+  regen.textContent = "Regenerate";
+  regen.addEventListener("click", () => {
+    if (chatInput.disabled) return;
+    chatInput.value = regenerateText;
+    updateComposerState();
+    submitChat({ preventDefault() {} });
+  });
+  return regen;
 }
 
 // Whether the viewport is glued to the newest content. True until the user
@@ -2532,14 +2647,13 @@ function setTurnState(label, detail = "") {
 }
 
 function scrollMessagesToEnd(force = false) {
-  const jump = document.querySelector("#jump-latest");
   if (force || viewportSticky) {
     messageViewport.scrollTop = messageViewport.scrollHeight;
     viewportSticky = true;
-    if (jump) jump.hidden = true;
+    if (jumpLatestButton) jumpLatestButton.hidden = true;
     return;
   }
-  if (jump) jump.hidden = false;
+  if (jumpLatestButton) jumpLatestButton.hidden = false;
 }
 
 function updateSelectedThreadHeading() {
@@ -3754,6 +3868,9 @@ function appendOptimisticTurn(userText) {
   for (const notice of notices) {
     notice.remove();
   }
+  // The answer about to be superseded stops being regenerable now, because
+  // the in-place reconcile will not repaint it later.
+  retireStaleRegenerateActions();
   const userNode = renderMessage("user", userText);
   const assistantNode = renderMessage("assistant", "");
   // Waiting for the first token had no face: the bubble sat empty. The
@@ -3816,6 +3933,8 @@ function submitChat(event) {
     sessionGeneration: state.sessionGeneration,
     selectionGeneration: state.selectionGeneration,
     turnGeneration: state.turnGeneration,
+    userNode: optimistic.userNode,
+    assistantWrapper: optimistic.assistantNode,
     assistantBubble: optimistic.assistantBubble,
     assistantText: "",
     assistantTextBytes: 0,
@@ -4210,11 +4329,213 @@ function clearPendingIndicator(activeTurn) {
   activeTurn.assistantBubble?.parentNode?.classList?.remove("pending");
 }
 
+// --- Streamed-frame batching ------------------------------------------------
+//
+// Token deltas arrive far faster than a screen can show them. Painting each
+// one meant, per token: a full-string textContent reset (quadratic over the
+// answer), a selector walk, and a forced layout for the scroll write. The
+// batcher makes the DOM a per-frame concern instead: deltas accumulate in a
+// buffer and one rAF flush appends the merged chunk to a dedicated Text node
+// — appendData only ever adds, so the cost of a delta no longer grows with
+// everything that came before it.
+//
+// Causal order is a discipline, not an accident: every non-delta event
+// (tool_use, approval, done, errors) drains the buffer synchronously before
+// it is handled, so nothing the model said can appear after something it did.
+
+// The behavior suite runs this file in a bare VM with no rAF; a microtask is
+// the closest honest stand-in — still strictly after the current burst of
+// synchronous deltas, still before the test's next settle().
+const scheduleStreamFrame =
+  typeof globalThis.requestAnimationFrame === "function"
+    ? (callback) => globalThis.requestAnimationFrame(callback)
+    : (callback) => {
+        void Promise.resolve().then(callback);
+      };
+
+// Module state rather than renderer `state`: this is paint plumbing, and it
+// must never ride along when session-change hygiene serializes `state`.
+const streamBatch = {
+  turn: null,
+  text: "",
+  reasoningDirty: false,
+  scheduled: false,
+};
+
+function scheduleStreamFlush(activeTurn) {
+  // A new turn's first delta can arrive before a superseded turn's buffer
+  // ever flushed. Its words belong to a bubble that is gone; drop them
+  // rather than letting them lead another turn's answer.
+  if (streamBatch.turn !== activeTurn) {
+    streamBatch.turn = activeTurn;
+    streamBatch.text = "";
+    streamBatch.reasoningDirty = false;
+  }
+  if (streamBatch.scheduled) return;
+  // The sentinel prevents one frame from being scheduled per delta; the
+  // frame that runs picks up everything queued behind it.
+  streamBatch.scheduled = true;
+  scheduleStreamFrame(flushStreamBatch);
+}
+
+function flushStreamBatch() {
+  // Snapshot, then reset, then apply: a handler that enqueues during the
+  // apply phase re-schedules cleanly instead of corrupting this flush.
+  const turn = streamBatch.turn;
+  const text = streamBatch.text;
+  const reasoningDirty = streamBatch.reasoningDirty;
+  streamBatch.turn = null;
+  streamBatch.text = "";
+  streamBatch.reasoningDirty = false;
+  streamBatch.scheduled = false;
+  // A superseded turn's buffered words are dropped, not painted: its bubble
+  // may already belong to another thread's transcript.
+  if (!turn || !isCurrentTurn(turn)) return;
+  if (text !== "") {
+    appendStreamText(turn, text);
+    // At most one scroll write per flush — and only for a reader who is
+    // already following; the jump affordance handles everyone else.
+    scrollMessagesToEnd();
+  }
+  if (reasoningDirty) paintReasoningCaption(turn);
+}
+
+// drainStreamBatch is the causal fence. Any code about to reflect a
+// non-delta fact into the DOM calls this first so buffered text lands ahead
+// of it, in order.
+function drainStreamBatch() {
+  if (streamBatch.text === "" && !streamBatch.reasoningDirty) return;
+  flushStreamBatch();
+}
+
+// --- Streaming Markdown commit ----------------------------------------------
+//
+// While a turn streams, the bubble is two zones: blocks that are finished and
+// already typeset, then a raw pre-wrap tail holding the text still being
+// written. A block is only committed once a blank line outside any open code
+// fence closes it — before that its final shape is ambiguous, and committing
+// early is how streamed answers visibly change shape. The tail is a real Text
+// node so the per-frame append stays an appendData, never a re-parse.
+
+// Past this many characters, commits happen every few frames instead of every
+// frame: the boundary scan re-reads the tail, and a very long unbroken tail
+// should not be re-scanned 60 times a second.
+const STREAM_COMMIT_EAGER_CHARS = 8192;
+const STREAM_COMMIT_FRAME_STRIDE = 4;
+
+function ensureStreamTail(activeTurn) {
+  const bubble = activeTurn.assistantBubble;
+  const tail = activeTurn.streamTail;
+  if (tail && tail.wrap.parentNode === bubble) return tail;
+  // First streamed text: replace whatever placeholder the bubble held.
+  bubble.textContent = "";
+  const textNode = document.createTextNode("");
+  const wrap = document.createElement("span");
+  wrap.className = "md-stream-tail";
+  wrap.appendChild(textNode);
+  bubble.appendChild(wrap);
+  activeTurn.streamTail = {
+    wrap,
+    textNode,
+    committedChars: 0,
+    framesSinceCommit: 0,
+  };
+  return activeTurn.streamTail;
+}
+
+function appendStreamText(activeTurn, chunk) {
+  const tail = ensureStreamTail(activeTurn);
+  tail.textNode.appendData(chunk);
+  tail.framesSinceCommit += 1;
+  const throttled =
+    activeTurn.assistantText.length > STREAM_COMMIT_EAGER_CHARS &&
+    tail.framesSinceCommit < STREAM_COMMIT_FRAME_STRIDE;
+  if (!throttled) commitStreamBlocks(activeTurn);
+}
+
+// The last position in tailText (an offset just past a newline) up to which
+// the text parses to exactly the blocks a final full parse would produce.
+// That is any blank line at fence-depth zero: this parser never lets a block
+// other than a fence span one. Inside an open fence nothing commits — the
+// whole unclosed block stays in the tail rather than flickering into a
+// half-rendered shape.
+function streamCommitBoundary(tailText) {
+  const lastNewline = tailText.lastIndexOf("\n");
+  if (lastNewline < 0) return 0;
+  const lines = tailText.slice(0, lastNewline).split("\n");
+  let openFence = null;
+  let boundary = 0;
+  let offset = 0;
+  for (const line of lines) {
+    const lineEnd = offset + line.length + 1;
+    if (openFence) {
+      if (isClosingFence(line, openFence)) openFence = null;
+    } else {
+      const fence = MARKDOWN_FENCE.exec(line);
+      if (fence) {
+        openFence = fence[1];
+      } else if (line.trim() === "") {
+        boundary = lineEnd;
+      }
+    }
+    offset = lineEnd;
+  }
+  return boundary;
+}
+
+function commitStreamBlocks(activeTurn) {
+  const tail = activeTurn.streamTail;
+  if (!tail) return;
+  tail.framesSinceCommit = 0;
+  // Past the formatting bound the final render is plain text; committing
+  // more typeset blocks would diverge from it.
+  if (activeTurn.assistantText.length > MARKDOWN_MAX_CHARS) return;
+  const tailText = activeTurn.assistantText.slice(tail.committedChars);
+  const boundary = streamCommitBoundary(tailText);
+  if (boundary === 0) return;
+  const bubble = activeTurn.assistantBubble;
+  bubble.classList.add("markdown");
+  for (const block of parseMarkdownBlocks(tailText.slice(0, boundary).split(/\r\n|\r|\n/u))) {
+    bubble.insertBefore(block, tail.wrap);
+  }
+  tail.textNode.textContent = tailText.slice(boundary);
+  tail.committedChars += boundary;
+}
+
+// The turn's terminal formatting step. With a streaming tail in place only
+// the uncommitted remainder is parsed — the spike that used to re-parse the
+// whole answer at the finish line is gone. Without one (recovered bubbles,
+// oversized answers) this falls back to the one-shot full render.
+function finalizeStreamedAssistant(activeTurn) {
+  const bubble = activeTurn.assistantBubble;
+  const text = activeTurn.assistantText;
+  const tail = activeTurn.streamTail;
+  activeTurn.streamTail = null;
+  if (!tail || tail.wrap.parentNode !== bubble || text.length > MARKDOWN_MAX_CHARS) {
+    renderMarkdownInto(bubble, text);
+    return;
+  }
+  const remaining = text.slice(tail.committedChars);
+  if (remaining !== "") {
+    for (const block of parseMarkdownBlocks(remaining.split(/\r\n|\r|\n/u))) {
+      bubble.insertBefore(block, tail.wrap);
+    }
+  }
+  bubble.classList.add("markdown");
+  tail.wrap.remove();
+}
+
 function handleParsedTurnEvent(activeTurn, event) {
   if (!isCurrentTurn(activeTurn)) return;
   if (event.turnID !== activeTurn.turnID) {
     failActiveTurnProtocol(activeTurn, "The Agent stream returned an invalid turn identifier.");
     return;
+  }
+
+  // Deltas queue for the next frame; everything else is a fact the DOM must
+  // not show ahead of the words that preceded it — drain first.
+  if (event.type !== "text_delta" && event.type !== "reasoning_delta") {
+    drainStreamBatch();
   }
 
   switch (event.type) {
@@ -4224,11 +4545,14 @@ function handleParsedTurnEvent(activeTurn, event) {
         failActiveTurnProtocol(activeTurn, "The Agent response exceeded the display limit.");
         return;
       }
+      // Bookkeeping stays synchronous — limits and terminals read it — while
+      // the paint itself waits for the frame.
       activeTurn.assistantText += event.delta;
       activeTurn.assistantTextBytes += deltaBytes;
       clearPendingIndicator(activeTurn);
-      activeTurn.assistantBubble.textContent = activeTurn.assistantText;
-      scrollMessagesToEnd();
+      // Schedule first: it re-keys the buffer to this turn before the append.
+      scheduleStreamFlush(activeTurn);
+      streamBatch.text += event.delta;
       return;
     }
     case "reasoning_delta":
@@ -4320,6 +4644,8 @@ function handleParsedTurnEvent(activeTurn, event) {
 
 function finishActiveTurn(activeTurn, label, canceled) {
   if (!isCurrentTurn(activeTurn)) return;
+  // Buffered words land before the outcome that follows them.
+  drainStreamBatch();
   clearPendingIndicator(activeTurn);
   settleTurnNarration(activeTurn);
   state.activeTurn = null;
@@ -4328,15 +4654,12 @@ function finishActiveTurn(activeTurn, label, canceled) {
       ? "Generation stopped."
       : "Response completed without text.";
   } else {
-    // Formatting is applied once, here, rather than on every delta.
-    //
-    // Two reasons, and the first is the one that matters: a partially received
-    // block is ambiguous. An unclosed fence, half a link, a list item still
-    // being written — each renders as something different from what it will
-    // become, so live formatting means blocks that visibly change shape. The
-    // second is cost: re-parsing the whole answer per delta is quadratic in
-    // its length, which a long reply would feel.
-    renderMarkdownInto(activeTurn.assistantBubble, activeTurn.assistantText);
+    // Completed blocks were typeset as their closing blank lines streamed
+    // past; only the still-raw tail is parsed here. A block is never
+    // committed while its shape is ambiguous — an unclosed fence, a list
+    // still being written — so nothing on screen changes shape now, and the
+    // finish-line cost no longer grows with the answer.
+    finalizeStreamedAssistant(activeTurn);
     attachMessageActions(
       activeTurn.assistantBubble.parentNode,
       "assistant",
@@ -4348,7 +4671,9 @@ function finishActiveTurn(activeTurn, label, canceled) {
   const duration = activeTurn.startedAt ? formatTurnDuration(Date.now() - activeTurn.startedAt) : "";
   setTurnState(label, duration);
   updateComposerState();
-  // Freeze the turn's work log before the repaint erases the live strip.
+  // Freeze the turn's work log. The in-place reconcile keeps the live strip's
+  // nodes, but the fallback full repaint erases them — the survivor copy is
+  // what re-hangs the story in that case, and re-folds it in both.
   contextState.lastTurnLog = {
     threadUUID: activeTurn.threadUUID,
     steps: contextState.toolActivity.slice(),
@@ -4359,7 +4684,7 @@ function finishActiveTurn(activeTurn, label, canceled) {
     contextState.deliverables.map((f) => [f.path, f.modified_at])
   );
   const context = selectionContext(activeTurn.threadUUID);
-  void reconcileCompletedTurn(activeTurn.threadUUID, context).then(() => {
+  void reconcileCompletedTurn(activeTurn.threadUUID, context, activeTurn).then(() => {
     attachLastTurnLog();
   });
   // A completed turn is the only time new workspace files can exist. What is
@@ -4376,6 +4701,7 @@ function finishActiveTurn(activeTurn, label, canceled) {
 
 function finishActiveTurnWithError(activeTurn, message) {
   if (!isCurrentTurn(activeTurn)) return;
+  drainStreamBatch();
   clearPendingIndicator(activeTurn);
   settleTurnNarration(activeTurn);
   state.activeTurn = null;
@@ -4388,7 +4714,7 @@ function finishActiveTurnWithError(activeTurn, message) {
     // A failed turn still delivered text, and that text is as much an answer
     // as a successful one's. Leaving it unformatted would make a partial reply
     // look like a different kind of object from a complete one.
-    renderMarkdownInto(activeTurn.assistantBubble, activeTurn.assistantText);
+    finalizeStreamedAssistant(activeTurn);
   }
   setTurnState("Error", errorDuration);
   renderTaskContext();
@@ -4410,14 +4736,14 @@ function failActiveTurnProtocol(activeTurn, message) {
   finishActiveTurnWithError(activeTurn, message);
 }
 
-async function reconcileCompletedTurn(threadUUID, context) {
+async function reconcileCompletedTurn(threadUUID, context, completedTurn = null) {
   const thread = state.threads.find((candidate) => candidate.uuid === threadUUID) || {
     uuid: threadUUID,
   };
   try {
     await Promise.all([
       loadThreads(context.sessionGeneration),
-      loadMessagesForSelection(thread, context),
+      loadMessagesForSelection(thread, context, completedTurn),
     ]);
   } catch (error) {
     await handleScopedError(error, context);
@@ -5162,9 +5488,10 @@ const contextState = {
   deliverables: [],
   deliverablesTruncated: false,
   // The finished turn's work log: its tool steps plus the files that
-  // appeared. Kept because the post-turn reconcile repaints the transcript
-  // from cache, and the cache stores none of this — without a survivor copy
-  // the story would vanish the moment the turn ended.
+  // appeared. The in-place reconcile keeps the strip's own nodes alive, but
+  // its fallback repaints the transcript from cache, and the cache stores
+  // none of this — without a survivor copy the story would vanish whenever
+  // the fallback runs.
   lastTurnLog: null,
   // File ids the user has checked in the Sources panel to send with the NEXT
   // request. Per-request on purpose — the label says "next request", so the
@@ -5215,13 +5542,19 @@ function renderWorkLog(wrapper, steps, produced, live = false, duration = "") {
   let wasExpanded = false;
   for (const child of Array.from(wrapper.children || [])) {
     if (child.classList?.contains("message-worklog")) {
-      wasExpanded = child.classList.contains("expanded");
+      // Expansion survives a re-render only as a user's choice. A live strip
+      // is expanded by definition, not by choice — when it settles in place
+      // (the in-place reconcile keeps its nodes) it must still fold to the
+      // receipt, exactly as it does after a full repaint.
+      wasExpanded =
+        child.classList.contains("expanded") && !child.classList.contains("live");
       child.remove();
     }
   }
   if (steps.length === 0 && produced.length === 0) return;
   const strip = document.createElement("ul");
   strip.className = "message-worklog";
+  if (live) strip.classList.add("live");
 
   const collapsible = !live && steps.length > WORKLOG_COLLAPSE_AFTER;
   const expanded = live || !collapsible || wasExpanded;
@@ -5369,9 +5702,16 @@ function recordReasoningDelta(activeTurn, delta) {
   if (total > MAX_TURN_TEXT_BYTES) return;
   activeTurn.reasoningText = (activeTurn.reasoningText || "") + delta;
   activeTurn.reasoningTextBytes = total;
+  // The caption repaints once per frame with the rest of the stream; per-delta
+  // it would re-render a line nobody could read at that rate.
+  scheduleStreamFlush(activeTurn);
+  streamBatch.reasoningDirty = true;
+}
+
+function paintReasoningCaption(activeTurn) {
   const strip = ensureReasoningStrip(activeTurn);
   if (!strip) return;
-  const line = reasoningCaptionLine(activeTurn.reasoningText);
+  const line = reasoningCaptionLine(activeTurn.reasoningText || "");
   activeTurn.reasoningCaption.textContent = line
     ? `Thinking… ${line}`
     : "Thinking…";
@@ -5937,11 +6277,9 @@ messageViewport.addEventListener("scroll", () => {
   const wasSticky = viewportSticky;
   viewportSticky = viewportNearBottom();
   if (viewportSticky && !wasSticky) {
-    const jump = document.querySelector("#jump-latest");
-    if (jump) jump.hidden = true;
+    if (jumpLatestButton) jumpLatestButton.hidden = true;
   }
 });
-const jumpLatestButton = document.querySelector("#jump-latest");
 if (jumpLatestButton) {
   jumpLatestButton.addEventListener("click", () => {
     scrollMessagesToEnd(true);

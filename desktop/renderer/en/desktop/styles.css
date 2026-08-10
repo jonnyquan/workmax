@@ -1478,6 +1478,17 @@ textarea:focus-visible {
   white-space: normal;
 }
 
+/* The still-streaming remainder of an answer: completed blocks above it are
+   already typeset, this tail is raw text and keeps the raw-text whitespace
+   rules even after the bubble has switched to block flow. */
+.md-stream-tail {
+  display: block;
+  white-space: pre-wrap;
+}
+.md-stream-tail:empty {
+  display: none;
+}
+
 .bubble.markdown > *:first-child { margin-top: 0; }
 .bubble.markdown > *:last-child { margin-bottom: 0; }
 
