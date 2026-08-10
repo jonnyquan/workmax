@@ -103,7 +103,7 @@ func newScriptedEngine(t *testing.T, db *gorm.DB, iter *scriptedIterator) (*Engi
 	engine := NewEngine(stubProfile{baseURL: "http://127.0.0.1:1", modelID: "m"}, db, nil, nil,
 		"/fake/claude", t.TempDir())
 	var captured string
-	engine.query = func(_ context.Context, prompt string, _ ...claudesdk.Option) (claudesdk.MessageIterator, error) {
+	engine.claudeCfg().query = func(_ context.Context, prompt string, _ ...claudesdk.Option) (claudesdk.MessageIterator, error) {
 		captured = prompt
 		return iter, nil
 	}

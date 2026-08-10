@@ -22,30 +22,49 @@ type TurnRunner interface {
 // （base_url/model_id）不在此判断——由 Engine.Chat 显式报 proxy_error
 // （遵循 OSS-4：禁止静默跨路由回退，route=local 但未配置时宁可报错也不走云端）。
 // localTurnRunner picks which local engine serves this turn. The protocol is
-// the fork the user already chose in their model settings: the tool loop
-// speaks only the Anthropic wire protocol (kill-checked), so
-// anthropic_compatible goes to L2 when a CLI is wired, and everything else —
-// including anthropic_compatible with no CLI — runs as L1 pure chat rather
-// than failing.
+// the fork the user already chose in their model settings: the claude tool
+// loop speaks only the Anthropic wire protocol (kill-checked), so
+// anthropic_compatible goes to L2 when a CLI is wired; openai_compatible
+// goes to the pi engine when one is wired (dual-runtime plan §1); everything
+// else — including either protocol with no engine — runs as L1 pure chat
+// rather than failing.
 func (s *Server) localTurnRunner() TurnRunner {
-	if s.cfg.LocalAgent != nil && s.cfg.ModelSettings != nil {
-		if dto, err := s.cfg.ModelSettings.Get(); err == nil &&
-			dto.Local.Protocol == LocalProtocolAnthropicCompatible {
-			return s.cfg.LocalAgent
+	if s.cfg.ModelSettings != nil {
+		if dto, err := s.cfg.ModelSettings.Get(); err == nil {
+			switch dto.Local.Protocol {
+			case LocalProtocolAnthropicCompatible:
+				if s.cfg.LocalAgent != nil {
+					return s.cfg.LocalAgent
+				}
+			case LocalProtocolOpenAICompatible:
+				if s.cfg.PiAgent != nil {
+					return s.cfg.PiAgent
+				}
+			}
 		}
 	}
 	return s.cfg.LocalInference
 }
 
 // localToolLoopActive reports whether a local turn sent right now would run
-// the L2 tool loop — the same condition localTurnRunner applies, exposed so
-// the modes route can tell the renderer the truth about capability.
+// an L2 tool loop (claude or pi) — the same condition localTurnRunner
+// applies, exposed so the modes route can tell the renderer the truth about
+// capability.
 func (s *Server) localToolLoopActive() bool {
-	if !s.shouldUseLocalRoute() || s.cfg.LocalAgent == nil {
+	if !s.shouldUseLocalRoute() {
 		return false
 	}
 	dto, err := s.cfg.ModelSettings.Get()
-	return err == nil && dto.Local.Protocol == LocalProtocolAnthropicCompatible
+	if err != nil {
+		return false
+	}
+	switch dto.Local.Protocol {
+	case LocalProtocolAnthropicCompatible:
+		return s.cfg.LocalAgent != nil
+	case LocalProtocolOpenAICompatible:
+		return s.cfg.PiAgent != nil
+	}
+	return false
 }
 
 // localRouteUID is the identity the signed-out local route runs as: the

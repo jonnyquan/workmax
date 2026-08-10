@@ -325,6 +325,17 @@ const MAX_RETRIEVAL_SOURCES = 12;
 const MAX_RETRIEVAL_LABEL_CHARS = 120;
 const MAX_RETRIEVAL_SNIPPET_CHARS = 400;
 
+// One reasoning delta may carry at most what the renderer's own event bound
+// accepts (MAX_EVENT_TEXT_BYTES). Reasoning is narration, so an oversized
+// frame is dropped rather than failing the turn.
+const MAX_REASONING_DELTA_BYTES = 262144;
+
+// Bounds for an approval request. They mirror the sidecar's approve-endpoint
+// validation: an id longer than 32 could never be answered anyway.
+const MAX_APPROVAL_ID_CHARS = 32;
+const MAX_APPROVAL_NAME_CHARS = 64;
+const MAX_APPROVAL_TARGET_CHARS = 80;
+
 // parseRetrievalSources returns a normalized list, or null if the payload is
 // not the shape this renderer understands. Every field is re-derived rather
 // than passed through, so nothing reaches the DOM that was not checked here.
@@ -358,6 +369,39 @@ function dispatchAgentSSEFrame(active, eventName, rawData) {
       return;
     }
     emit(active, { type: "text_delta", turnID: active.turnID, delta: parsed.value.delta });
+    return;
+  }
+  if (eventName === "reasoning_delta") {
+    const parsed = parseAgentJSON(rawData);
+    // Narration, not the answer: a malformed or oversized thinking frame
+    // costs the caption, never the turn.
+    if (
+      !parsed.ok ||
+      !isRecord(parsed.value) ||
+      typeof parsed.value.delta !== "string" ||
+      utf8ByteLength(parsed.value.delta) > MAX_REASONING_DELTA_BYTES
+    ) {
+      return;
+    }
+    emit(active, { type: "reasoning_delta", turnID: active.turnID, delta: parsed.value.delta });
+    return;
+  }
+  if (eventName === "approval_request") {
+    const parsed = parseAgentJSON(rawData);
+    const value = parsed.ok && isRecord(parsed.value) ? parsed.value : null;
+    // Tolerant like tool_use, with one difference: a request without a usable
+    // id or name can never be answered, so it is dropped rather than rendered
+    // as a card whose buttons could only fail.
+    if (
+      !value ||
+      typeof value.id !== "string" || value.id === "" || value.id.length > MAX_APPROVAL_ID_CHARS ||
+      typeof value.name !== "string" || value.name === "" || value.name.length > MAX_APPROVAL_NAME_CHARS
+    ) {
+      return;
+    }
+    const event = { type: "approval_request", turnID: active.turnID, id: value.id, name: value.name };
+    event.target = typeof value.target === "string" ? value.target.slice(0, MAX_APPROVAL_TARGET_CHARS) : "";
+    emit(active, event);
     return;
   }
   if (eventName === "tool_use" || eventName === "tool_denied") {

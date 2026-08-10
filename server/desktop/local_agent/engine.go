@@ -9,6 +9,13 @@
 // desktop package: protocol anthropic_compatible with a CLI available comes
 // here; openai_compatible stays on L1 pure chat.
 //
+// Structure (R0 of the dual-runtime plan, ProjectDocs/design/
+// l2-agent-runtime-study-2026-08.md): the SDK-facing pump is claudeRuntime,
+// an agentruntime.Runtime that speaks unified events; Engine keeps the
+// turn-level plumbing (profile, cache, prompt assembly, workspace) and drives
+// the runtime through an agentruntime.SSEBridge. The Pi runtime lands beside
+// claudeRuntime with the same seam.
+//
 // Every claim below the SDK call was kill-checked before this package was
 // written (ProjectDocs/design/l2-sdk-cli-restart-2026-08.md): WithCLIPath
 // spawns an explicit binary with no PATH discovery, env-injected base URL and
@@ -19,7 +26,6 @@ package local_agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -32,6 +38,7 @@ import (
 
 	claudesdk "github.com/jonnyquan/claude-agent-sdk-go/pkg/claudesdk"
 
+	agentruntime "server/desktop/agentruntime"
 	cloudproxy "server/desktop/cloud_proxy"
 	localinference "server/desktop/local_inference"
 )
@@ -51,6 +58,14 @@ const maxAgentTurns = 24
 // a shell is an escape hatch from every path rule the other tools respect.
 var allowedTools = []string{"Read", "Write", "Edit", "Glob", "Grep"}
 
+// readOnlyTools is the subset that never asks in approval mode: reading the
+// workspace is the loop's bloodstream, and every call still passes the
+// PreToolUse path guard.
+var readOnlyTools = []string{"Read", "Glob", "Grep"}
+
+// askTools is the write surface: these consult the user in approval mode.
+var askTools = []string{"Write", "Edit"}
+
 // queryStarter is the seam between this engine and the SDK, so tests can
 // script the message stream without a CLI. Production is claudesdk.Query.
 type queryStarter func(ctx context.Context, prompt string, opts ...claudesdk.Option) (claudesdk.MessageIterator, error)
@@ -58,14 +73,18 @@ type queryStarter func(ctx context.Context, prompt string, opts ...claudesdk.Opt
 // Engine runs L2 tool-loop turns. It satisfies desktop.TurnRunner and sits
 // behind exactly the same CacheWriter/SSE/intent seam as the other runners.
 type Engine struct {
-	profile       localinference.ProfileReader
-	db            *gorm.DB
-	loader        localinference.AttachmentLoader // 可 nil
-	hooks         localinference.KnowledgeHooks   // 可 nil（RAG off）
-	cliPath       string
-	workspaceRoot string
-	query         queryStarter
+	profile   localinference.ProfileReader
+	db        *gorm.DB
+	loader    localinference.AttachmentLoader // 可 nil
+	hooks     localinference.KnowledgeHooks   // 可 nil（RAG off）
+	runtime   agentruntime.Runtime
+	approvals *agentruntime.ApprovalBroker // nil = legacy pre-approved mode
 }
+
+// EnableApprovals switches the engine to interactive tool approvals through
+// the given broker. Wired by bootstrap once the renderer's approval card is
+// present; without it the engine keeps the kill-checked bypass recipe.
+func (e *Engine) EnableApprovals(broker *agentruntime.ApprovalBroker) { e.approvals = broker }
 
 // NewEngine wires the L2 runner. cliPath must point at a claude CLI binary;
 // workspaceRoot is the parent under which per-thread workspaces are created
@@ -79,15 +98,47 @@ func NewEngine(
 	workspaceRoot string,
 ) *Engine {
 	return &Engine{
-		profile:       profile,
-		db:            db,
-		loader:        loader,
-		hooks:         hooks,
-		cliPath:       cliPath,
-		workspaceRoot: workspaceRoot,
-		query:         claudesdk.Query,
+		profile: profile,
+		db:      db,
+		loader:  loader,
+		hooks:   hooks,
+		runtime: &claudeRuntime{
+			cliPath:       cliPath,
+			workspaceRoot: workspaceRoot,
+			query:         claudesdk.Query,
+		},
 	}
 }
+
+// NewEngineWithRuntime wires the L2 runner around an externally constructed
+// runtime (the pi engine today). The runtime owns its own binary discovery
+// (a missing binary is its RuntimeError to report) and its workspace root
+// (the workspaceRooter seam); Engine keeps the turn plumbing.
+func NewEngineWithRuntime(
+	profile localinference.ProfileReader,
+	db *gorm.DB,
+	loader localinference.AttachmentLoader,
+	hooks localinference.KnowledgeHooks,
+	rt agentruntime.Runtime,
+) *Engine {
+	return &Engine{
+		profile: profile,
+		db:      db,
+		loader:  loader,
+		hooks:   hooks,
+		runtime: rt,
+	}
+}
+
+// claudeCfg returns the engine's runtime as its concrete type for wiring
+// details (cliPath checks, test seams). Panics on a foreign runtime — only
+// call it on engines built by NewEngine.
+func (e *Engine) claudeCfg() *claudeRuntime { return e.runtime.(*claudeRuntime) }
+
+// workspaceRooter is the seam through which Engine asks a runtime where
+// per-thread workspaces live. claudeRuntime and pi_agent.Runtime both
+// implement it; a runtime without one cannot host tool turns.
+type workspaceRooter interface{ WorkspaceRoot() string }
 
 // Chat runs one tool-loop turn. Same contract as the other runners: nil =
 // clean completion (done event sent); non-nil = failure (proxy_error sent,
@@ -109,7 +160,9 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 			Retryable: false,
 		})
 	}
-	if e.cliPath == "" {
+	// The CLI check is claude-specific wiring: other runtimes (pi) stat
+	// their own binary inside RunTurn and fail as a typed RuntimeError.
+	if cr, ok := e.runtime.(*claudeRuntime); ok && cr.cliPath == "" {
 		return emitProxyError(dst, cloudproxy.ProxyError{
 			Kind:      cloudproxy.KindServiceUnavailable,
 			Message:   "本地工具循环需要 claude CLI；未找到可用的 CLI 二进制",
@@ -142,7 +195,12 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	}
 	defer func() { _ = cache.Finalize(err) }()
 
-	prompt, aerr := e.assemblePrompt(ctx, req, dst, requestID)
+	// The stored session ref decides prompt shape: with one, the runtime's
+	// own session replays prior turns and the prompt carries only this turn;
+	// without one, history is flattened in.
+	sessionRef := loadSessionRef(e.db, req.ThreadUUID, e.runtime.Name())
+
+	prompt, aerr := e.assemblePrompt(ctx, req, dst, requestID, sessionRef != "")
 	if aerr != nil {
 		return emitProxyError(dst, cloudproxy.ProxyError{
 			Kind:    cloudproxy.KindBadRequest,
@@ -161,45 +219,88 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 		})
 	}
 
-	// A denied tool is narrated on the same stream as everything else, so the
-	// user sees what the agent tried rather than an answer that silently lost
-	// a step. Name and reason only — the blocked input can hold anything.
-	onDeny := func(tool, reason string) {
-		_ = dst.WriteEvent(cloudproxy.SSEEvent{
-			Type: "tool_denied",
-			Data: mustJSON(map[string]string{"name": tool, "reason": reason}),
-		})
-	}
-	iter, qerr := e.query(ctx, prompt, e.buildQueryOptions(baseURL, apiKey, modelID, workspace, onDeny)...)
-	if qerr != nil {
-		if errors.Is(qerr, context.Canceled) || errors.Is(qerr, context.DeadlineExceeded) {
-			return qerr
-		}
-		_ = dst.WriteProxyError(cloudproxy.ProxyError{
-			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "无法启动本地工具循环",
-			Retryable: true,
-			Details:   map[string]any{"reason": qerr.Error()},
-		})
-		return qerr
-	}
-	defer iter.Close()
-
-	assistantText, runErr := e.pump(ctx, iter, dst, cache)
+	bridge := agentruntime.NewSSEBridge(dst, cache)
+	runErr := e.runtime.RunTurn(ctx, agentruntime.TurnInput{
+		Prompt:     prompt,
+		Workspace:  workspace,
+		BaseURL:    baseURL,
+		APIKey:     apiKey,
+		ModelID:    modelID,
+		SessionRef: sessionRef,
+		Approvals:  e.approvalConfig(req),
+	}, bridge.Emit)
 	if runErr != nil {
+		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+			// User cancellation: the SDK tears the subprocess down (SIGTERM,
+			// then SIGKILL). No proxy_error — stopping is not a failure to
+			// report. The ref stays: the previous turn's session is still
+			// the right resume target.
+			return runErr
+		}
+		var re *agentruntime.RuntimeError
+		if errors.As(runErr, &re) {
+			_ = dst.WriteProxyError(cloudproxy.ProxyError{
+				Kind:      re.Kind,
+				Message:   re.Message,
+				Retryable: re.Retryable,
+				Details:   re.Details,
+			})
+		}
+		if sessionRef != "" {
+			// The turn that tried to resume failed. Whether the ref was the
+			// cause or a bystander, dropping it moves the next turn onto the
+			// flatten path, which always works — one turn of continuity is
+			// the price of self-healing.
+			clearSessionRef(e.db, req.ThreadUUID, e.runtime.Name())
+		}
 		return runErr
 	}
+	if werr := dst.WriteEvent(cloudproxy.SSEEvent{Type: "done", Data: doneEventData}); werr != nil {
+		return werr
+	}
+	storeSessionRef(e.db, req.ThreadUUID, e.runtime.Name(), bridge.SessionRef())
 	if e.hooks != nil {
-		go e.indexCompletedTurn(req.TurnUUID, req.UserText, assistantText)
+		go e.indexCompletedTurn(req.TurnUUID, req.UserText, bridge.AssistantText())
 	}
 	return nil
+}
+
+// approvalConfig assembles the turn's approval policy: the read surface plus
+// every stored "always" grant auto-allow; the write surface asks. Nil when
+// approvals are not enabled.
+func (e *Engine) approvalConfig(req cloudproxy.ChatRequest) *agentruntime.ApprovalConfig {
+	if e.approvals == nil {
+		return nil
+	}
+	auto := make(map[string]bool, len(readOnlyTools)+2)
+	for _, t := range readOnlyTools {
+		auto[t] = true
+	}
+	for t := range loadAlwaysAllowed(e.db, req.UID) {
+		auto[t] = true
+	}
+	ask := make(map[string]bool, len(askTools))
+	for _, t := range askTools {
+		ask[t] = true
+	}
+	uid := req.UID
+	return &agentruntime.ApprovalConfig{
+		Broker:      e.approvals,
+		TurnUUID:    req.TurnUUID,
+		ThreadUUID:  req.ThreadUUID,
+		AutoAllowed: auto,
+		AskAllowed:  ask,
+		Persist:     func(tool string) { storeAlwaysAllow(e.db, uid, tool) },
+	}
 }
 
 // assemblePrompt builds the single prompt string the CLI receives: retrieval
 // context, then conversation history, then attachments, then the request.
 // The CLI manages the intra-turn tool conversation itself (kill-check §1);
-// what it cannot know is everything that happened before this turn.
-func (e *Engine) assemblePrompt(ctx context.Context, req cloudproxy.ChatRequest, dst cloudproxy.SSEWriter, requestID string) (string, error) {
+// what it cannot know is everything that happened before this turn — unless
+// hasSession, in which case its own resumed session already holds the prior
+// turns and flattened history would duplicate them.
+func (e *Engine) assemblePrompt(ctx context.Context, req cloudproxy.ChatRequest, dst cloudproxy.SSEWriter, requestID string, hasSession bool) (string, error) {
 	userText := req.UserText
 	if e.hooks != nil {
 		if found, rerr := e.hooks.Retrieve(ctx, req.UID, req.UserText, retrievalTopK); rerr != nil {
@@ -212,7 +313,9 @@ func (e *Engine) assemblePrompt(ctx context.Context, req cloudproxy.ChatRequest,
 	}
 
 	var b strings.Builder
-	if history, herr := localinference.LoadThreadHistory(e.db, req.UID, req.ThreadID, requestID); herr != nil {
+	if hasSession {
+		// Resumed session: history lives in the runtime.
+	} else if history, herr := localinference.LoadThreadHistory(e.db, req.UID, req.ThreadID, requestID); herr != nil {
 		log.Printf("local agent: history for thread %d: %v", req.ThreadID, herr)
 	} else if len(history) > 0 {
 		b.WriteString("Previous conversation in this thread:\n\n")
@@ -252,183 +355,26 @@ func (e *Engine) assemblePrompt(ctx context.Context, req cloudproxy.ChatRequest,
 // context, not of which runner fills it.
 const retrievalTopK = 4
 
-// placeholderAPIKey is sent when the user configured no key. Local endpoints
-// (llama.cpp, vLLM) typically ignore the credential entirely — but the CLI
-// requires a non-empty key to select API-key auth at all; with an empty one it
-// falls back to looking for a logged-in session, finds none in the isolated
-// HOME, and fails the turn with "Not logged in". Found the hard way in the
-// first end-to-end run. The value only ever travels to the user's own
-// configured base URL.
-const placeholderAPIKey = "workmax-local-no-key"
-
-// securityHook gates every tool call against the workspace path policy
-// before the CLI executes it. Denials are reported to the renderer through
-// onDeny — a blocked tool is part of the turn's story, not a secret.
-//
-// Deliberate deviation from the cloud hook it descends from: an unparseable
-// payload DENIES. The cloud fails open to keep a multi-tenant conversation
-// moving; this loop runs with bypassPermissions on the user's own machine,
-// and a validator that has gone blind must stop the tool, not wave it
-// through. If an SDK shape change trips this, turns fail visibly and the
-// fix is one struct away — the quiet alternative is unvalidated file access.
-func securityHook(guard *pathValidator, onDeny func(tool, reason string)) claudesdk.HookCallback {
-	return func(input claudesdk.HookInput, _ *string, _ claudesdk.HookContext) (claudesdk.HookJSONOutput, error) {
-		inputMap, ok := input.(map[string]any)
-		if !ok {
-			log.Printf("local agent security: unexpected hook input type %T; denying", input)
-			return claudesdk.NewPreToolUseOutput(claudesdk.PermissionDecisionDeny,
-				"security hook could not read the tool call", nil), nil
-		}
-		toolName, _ := inputMap["tool_name"].(string)
-		toolInput := map[string]any{}
-		if cast, ok := inputMap["tool_input"].(map[string]any); ok && cast != nil {
-			toolInput = cast
-		}
-		if err := guard.validateToolCall(toolName, toolInput); err != nil {
-			log.Printf("local agent security: BLOCKED %s: %v", toolName, err)
-			if onDeny != nil {
-				onDeny(toolName, err.Error())
-			}
-			return claudesdk.NewPreToolUseOutput(claudesdk.PermissionDecisionDeny,
-				fmt.Sprintf("Security violation: %v", err), nil), nil
-		}
-		return claudesdk.NewPreToolUseOutput(claudesdk.PermissionDecisionAllow, "", nil), nil
-	}
-}
-
-// buildQueryOptions reproduces the kill-checked isolation recipe exactly.
-//
-// HOME points into the workspace root, not the user's: the CLI must not read
-// ~/.claude — the user's hooks, settings, and login state belong to their
-// interactive sessions, not to a turn running on their configured endpoint.
-func (e *Engine) buildQueryOptions(baseURL, apiKey, modelID, workspace string, onDeny func(tool, reason string)) []claudesdk.Option {
-	if apiKey == "" {
-		apiKey = placeholderAPIKey
-	}
-	matchAll := "*"
-	return []claudesdk.Option{
-		claudesdk.WithHook(claudesdk.HookEventPreToolUse, claudesdk.HookMatcher{
-			Matcher: &matchAll,
-			Hooks:   []claudesdk.HookCallback{securityHook(newPathValidator(workspace), onDeny)},
-		}),
-		claudesdk.WithCLIPath(e.cliPath),
-		claudesdk.WithCwd(workspace),
-		claudesdk.WithModel(modelID),
-		claudesdk.WithEnv(map[string]string{
-			"ANTHROPIC_BASE_URL": baseURL,
-			"ANTHROPIC_API_KEY":  apiKey,
-			"HOME":               filepath.Join(e.workspaceRoot, ".claude-home"),
-			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-			"DISABLE_TELEMETRY":                        "1",
-			"DISABLE_AUTOUPDATER":                      "1",
-		}),
-		claudesdk.WithAllowedTools(allowedTools...),
-		// Bypass composes with the allowlist: the CLI may use the listed
-		// tools without asking, and only those. The per-tool safety hooks
-		// (path validation) are L2b.
-		claudesdk.WithPermissionMode(claudesdk.PermissionModeBypassPermissions),
-		claudesdk.WithMaxTurns(maxAgentTurns),
-		claudesdk.WithStderr(func(line string) { log.Printf("local agent cli: %s", line) }),
-	}
-}
-
-// pump drains the SDK message stream into the renderer and the cache.
-// Returns the accumulated assistant text for post-turn indexing.
-func (e *Engine) pump(ctx context.Context, iter claudesdk.MessageIterator, dst cloudproxy.SSEWriter, cache *cloudproxy.CacheWriter) (string, error) {
-	var assistant strings.Builder
-	sawResult := false
-	for {
-		msg, nerr := iter.Next(ctx)
-		if nerr != nil {
-			if errors.Is(nerr, claudesdk.ErrNoMoreMessages) {
-				break
-			}
-			if errors.Is(nerr, context.Canceled) || errors.Is(nerr, context.DeadlineExceeded) {
-				// User cancellation: the SDK tears the subprocess down
-				// (SIGTERM, then SIGKILL). No proxy_error — stopping is not a
-				// failure to report.
-				return assistant.String(), nerr
-			}
-			_ = dst.WriteProxyError(cloudproxy.ProxyError{
-				Kind:      cloudproxy.KindServiceUnavailable,
-				Message:   "本地工具循环中断",
-				Retryable: true,
-				Details:   map[string]any{"reason": nerr.Error()},
-			})
-			return assistant.String(), nerr
-		}
-		switch m := msg.(type) {
-		case *claudesdk.AssistantMessage:
-			for _, block := range m.Content {
-				switch b := block.(type) {
-				case *claudesdk.TextBlock:
-					if b.Text == "" {
-						continue
-					}
-					assistant.WriteString(b.Text)
-					_ = cache.Enqueue("text_delta", b.Text)
-					if werr := dst.WriteEvent(cloudproxy.SSEEvent{
-						Type: "text_delta",
-						Data: mustJSON(map[string]string{"delta": b.Text}),
-					}); werr != nil {
-						return assistant.String(), werr
-					}
-				case *claudesdk.ToolUseBlock:
-					// Non-terminal activity event, narrated inline by the
-					// renderer as a work-log step. Name plus the target's
-					// BASENAME only: enough to read "Write · outline.md",
-					// while full paths and every other input stay out of the
-					// stream — inputs can hold anything.
-					if werr := dst.WriteEvent(cloudproxy.SSEEvent{
-						Type: "tool_use",
-						Data: mustJSON(toolUseEventPayload(b)),
-					}); werr != nil {
-						return assistant.String(), werr
-					}
-				}
-			}
-		case *claudesdk.ResultMessage:
-			sawResult = true
-			if m.IsError {
-				detail := "本地工具循环失败"
-				if m.Result != nil && *m.Result != "" {
-					detail = *m.Result
-				}
-				_ = dst.WriteProxyError(cloudproxy.ProxyError{
-					Kind:      cloudproxy.KindUnknown,
-					Message:   detail,
-					Retryable: true,
-				})
-				return assistant.String(), fmt.Errorf("local agent: result error: %s", detail)
-			}
-		}
-	}
-	if !sawResult {
-		_ = dst.WriteProxyError(cloudproxy.ProxyError{
-			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "本地工具循环在结果前终止",
-			Retryable: true,
-		})
-		return assistant.String(), errors.New("local agent: stream ended without a result")
-	}
-	if werr := dst.WriteEvent(cloudproxy.SSEEvent{Type: "done", Data: doneEventData}); werr != nil {
-		return assistant.String(), werr
-	}
-	return assistant.String(), nil
-}
-
 // ensureWorkspace creates (or reuses) the per-thread workspace directory.
 // Thread UUIDs are canonical v4 by the time they reach a runner, so the path
 // segment is closed to traversal; the format mirrors the cloud layout's tail.
 func (e *Engine) ensureWorkspace(threadUUID string) (string, error) {
-	dir := filepath.Join(e.workspaceRoot, "thread_"+threadUUID)
+	rooter, ok := e.runtime.(workspaceRooter)
+	if !ok || rooter.WorkspaceRoot() == "" {
+		return "", fmt.Errorf("runtime %s has no workspace root", e.runtime.Name())
+	}
+	root := rooter.WorkspaceRoot()
+	dir := filepath.Join(root, "thread_"+threadUUID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	// The isolated HOME must exist before the CLI starts, or it errors on
-	// first write of its own state.
-	if err := os.MkdirAll(filepath.Join(e.workspaceRoot, ".claude-home"), 0o755); err != nil {
-		return "", err
+	if _, isClaude := e.runtime.(*claudeRuntime); isClaude {
+		// The isolated HOME must exist before the CLI starts, or it errors
+		// on first write of its own state. Claude-specific: pi's isolation
+		// dir (pi_home) is the runtime's own business.
+		if err := os.MkdirAll(filepath.Join(root, ".claude-home"), 0o755); err != nil {
+			return "", err
+		}
 	}
 	return dir, nil
 }
@@ -441,35 +387,9 @@ func (e *Engine) indexCompletedTurn(turnUUID, userText, assistantText string) {
 	}
 }
 
-// toolUseEventPayload names the step the way a work log would: the tool, and
-// the basename of the file it touches when there is one.
-func toolUseEventPayload(b *claudesdk.ToolUseBlock) map[string]string {
-	payload := map[string]string{"name": b.Name}
-	for _, key := range []string{"file_path", "path", "filepath"} {
-		if raw, ok := b.Input[key].(string); ok && raw != "" {
-			base := filepath.Base(raw)
-			if len(base) > 80 {
-				base = base[:80]
-			}
-			payload["target"] = base
-			break
-		}
-	}
-	return payload
-}
-
 // emitProxyError mirrors local_inference's helper: send the typed error, and
 // return a non-nil error so the intent is marked interrupted.
 func emitProxyError(dst cloudproxy.SSEWriter, pe cloudproxy.ProxyError) error {
 	_ = dst.WriteProxyError(pe)
 	return fmt.Errorf("local agent: %s", pe.Message)
-}
-
-func mustJSON(v map[string]string) string {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		// A map[string]string cannot fail to marshal; belt for the braces.
-		return "{}"
-	}
-	return string(raw)
 }

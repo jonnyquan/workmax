@@ -1677,6 +1677,125 @@ textarea:focus-visible {
   text-decoration: underline;
 }
 
+/* The reasoning caption: one live "Thinking…" line while the model reasons,
+   folding into a "Thought" toggle once the turn settles. Same quiet register
+   as the work log — narration, never competing with the answer. */
+.reasoning-strip {
+  max-width: min(720px, 100%);
+  margin: 0;
+}
+
+.reasoning-caption {
+  display: block;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-style: italic;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reasoning-toggle {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.reasoning-toggle:hover {
+  color: hsl(var(--foreground));
+  background: transparent;
+}
+
+.reasoning-detail {
+  margin: 4px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-family: inherit;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* L2 tool approvals: the agent paused on a tool call and asked. The card sits
+   with the work log, compact, and collapses in place to its outcome. */
+.approval-card {
+  display: grid;
+  gap: 6px;
+  width: fit-content;
+  max-width: min(720px, 100%);
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid hsl(var(--primary) / 0.35);
+  border-radius: 10px;
+  background: hsl(var(--primary) / 0.06);
+  font-size: 12px;
+}
+
+.approval-card.approval-settled {
+  border-color: hsl(var(--border) / 0.7);
+  background: hsl(var(--secondary) / 0.35);
+}
+
+.approval-title {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
+
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.approval-button {
+  height: auto;
+  padding: 3px 10px;
+  border: 1px solid hsl(var(--primary) / 0.4);
+  border-radius: 7px;
+  background: transparent;
+  color: hsl(var(--primary));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.approval-button:hover {
+  background: hsl(var(--primary) / 0.12);
+}
+
+.approval-button.deny {
+  border-color: hsl(var(--destructive) / 0.4);
+  color: hsl(var(--destructive));
+}
+
+.approval-button.deny:hover {
+  background: hsl(var(--destructive) / 0.1);
+}
+
+.approval-button:disabled {
+  opacity: 0.5;
+}
+
+.approval-note {
+  color: hsl(var(--destructive));
+  font-size: 11px;
+}
+
+.approval-result {
+  color: hsl(var(--muted-foreground));
+  font-weight: 600;
+}
+
+.approval-result.allowed {
+  color: hsl(var(--primary));
+}
+
+.approval-result.denied {
+  color: hsl(var(--destructive));
+}
+
 /* Per-message actions. The row keeps its height at rest (no layout jump) but
    fades until the message is hovered or a button is focused — present enough
    to be discovered, quiet enough not to compete with the answer. */

@@ -2207,6 +2207,120 @@ async function testToolLoopActivityAndDeliverables() {
   await settle();
 }
 
+// The L2 approval loop: the sidecar pauses a tool call and asks. Each request
+// becomes a card; the click delivers the decision through the typed bridge;
+// the card collapses in place to its outcome; and a turn that ends takes its
+// unanswered questions with it. The reasoning stream rides the same turn as a
+// one-line live caption that folds into an expandable "Thought" label.
+async function testToolApprovalCardsAndReasoningCaption() {
+  const approvals = [];
+  let emit = () => {};
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-08-09T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("approval-thread", "Approvals")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input, callback) {
+        emit = (event) => callback({ ...event, turnID: "approval-turn" });
+        return { turnID: "approval-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+      async approveTurnTool(turnID, input) {
+        approvals.push({ turnID, approval_id: input.approval_id, decision: input.decision });
+        if (input.approval_id === "ap-2") {
+          return typedFailure(404, { error: "approval_not_pending" });
+        }
+        return typedSuccess({ resolved: true });
+      },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+  const input = document.byId.get("chat-input");
+  input.value = "Write the file";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  // The live reasoning caption shows the LAST non-empty line, not the stream.
+  emit({ type: "reasoning_delta", delta: "Consider the outline.\n" });
+  emit({ type: "reasoning_delta", delta: "Plan the write." });
+  await settle();
+  const captions = walk(document.byId.get("message-list"), (n) => n.classList?.contains("reasoning-caption"));
+  assert.equal(captions.length, 1, "reasoning must render one live caption");
+  assert.equal(captions[0].textContent, "Thinking… Plan the write.");
+  const reasoningStrip = captions[0].parentNode;
+
+  emit({ type: "approval_request", id: "ap-1", name: "Write", target: "a.md" });
+  emit({ type: "approval_request", id: "ap-1", name: "Write", target: "a.md" });
+  emit({ type: "approval_request", id: "ap-2", name: "Bash", target: "" });
+  emit({ type: "approval_request", id: "ap-3", name: "Edit", target: "b.md" });
+  await settle();
+  const cards = walk(document.byId.get("message-list"), (n) => n.classList?.contains("approval-card"));
+  assert.equal(cards.length, 3, "one card per approval id — a duplicated frame must not stack");
+  assert.match(cards[0].textContent, /Agent requests to run Write · a\.md/u);
+  assert.match(cards[1].textContent, /Agent requests to run Bash/u);
+  assert.doesNotMatch(cards[1].textContent, /Bash ·/u, "an absent target must not leave a dangling separator");
+
+  // Allow once on the first card: the decision reaches the bridge and the
+  // card becomes its outcome label, buttons gone.
+  const allowButtons = walk(cards[0], (n) => n.classList?.contains("approval-button"));
+  assert.equal(allowButtons.length, 4, "the card offers all four decisions");
+  allowButtons[0].click();
+  allowButtons[0].click();
+  await settle();
+  assert.deepEqual(
+    { ...approvals[0] },
+    { turnID: "approval-turn", approval_id: "ap-1", decision: "allow_once" },
+    "the click must deliver {approval_id, decision} for the streaming turn",
+  );
+  assert.equal(approvals.length, 1, "a second click must not send a second decision");
+  assert.match(cards[0].textContent, /Allowed once/u);
+  assert.equal(
+    walk(cards[0], (n) => n.classList?.contains("approval-button")).length,
+    0,
+    "an answered card is a label, not a disabled form",
+  );
+
+  // The second card answers into a 404: the sidecar no longer knows the id,
+  // which the renderer reads as expiry, not failure.
+  walk(cards[1], (n) => n.classList?.contains("approval-button"))[3].click();
+  await settle();
+  assert.equal(approvals[1].decision, "deny");
+  assert.match(cards[1].textContent, /Expired/u, "a 404 answer must read as expired");
+
+  // The turn ends with ap-3 unanswered: it expires locally, with no bridge
+  // call — answering into a finished turn could only 404 anyway.
+  emit({ type: "text_delta", delta: "Done writing." });
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  await settle();
+  assert.match(cards[2].textContent, /Expired/u, "an unanswered card expires when the turn ends");
+  assert.equal(approvals.length, 2, "expiry is local — no decision is invented for the user");
+
+  // The caption folded into a toggle that reveals the full pre-wrap text.
+  const toggles = walk(reasoningStrip, (n) => n.classList?.contains("reasoning-toggle"));
+  assert.equal(toggles.length, 1, "the settled turn must fold the caption into a Thought label");
+  assert.match(toggles[0].textContent, /Thought/u);
+  const detail = walk(reasoningStrip, (n) => n.classList?.contains("reasoning-detail"))[0];
+  assert.equal(detail.hidden, true, "the full reasoning starts collapsed");
+  toggles[0].click();
+  assert.equal(detail.hidden, false, "the label expands on demand");
+  assert.equal(detail.textContent, "Consider the outline.\nPlan the write.");
+}
+
 // A first-time user faces an empty screen and a text box. The starter cards
 // are the bridge: one click opens the create flow, and once the thread exists
 // the card's prompt is waiting in the composer — sending stays the user's
@@ -4072,6 +4186,77 @@ async function testShimValidatesRetrievalPayloads() {
   assert.equal(bounded.sources[0].snippet.length, 400);
 }
 
+// The two L2 frames the sidecar grew for the approval loop. Well-formed ones
+// must arrive; malformed ones must be dropped without costing the answer — an
+// approval card without an id could only ever fail, and reasoning is
+// narration, never worth the turn.
+async function testShimDropsMalformedApprovalAndReasoningFrames() {
+  const good = await runShimTurn(
+    'event: approval_request\ndata: {"id":"ap-1","name":"Write","target":"a.md"}\n\n' +
+    'event: approval_request\ndata: {"id":"ap-2","name":"Bash"}\n\n' +
+    'event: reasoning_delta\ndata: {"delta":"thinking hard"}\n\n' +
+    SSE_DONE_FRAME,
+  );
+  const approval = good.find((e) => e.type === "approval_request");
+  assert.ok(approval, "a well-formed approval frame must be delivered");
+  assert.equal(approval.id, "ap-1");
+  assert.equal(approval.name, "Write");
+  assert.equal(approval.target, "a.md");
+  const bare = good.filter((e) => e.type === "approval_request")[1];
+  assert.equal(bare.target, "", "an absent target normalizes to empty, like tool_use");
+  const reasoning = good.find((e) => e.type === "reasoning_delta");
+  assert.ok(reasoning, "a well-formed reasoning frame must be delivered");
+  assert.equal(reasoning.delta, "thinking hard");
+  assert.ok(good.some((e) => e.type === "done"));
+
+  const refused = [
+    '{"name":"Write","target":"a.md"}',
+    '{"id":"ap-1","target":"a.md"}',
+    '{"id":"","name":"Write"}',
+    '{"id":42,"name":"Write"}',
+    `{"id":"${"x".repeat(33)}","name":"Write"}`,
+    `{"id":"ap-1","name":"${"n".repeat(65)}"}`,
+    "not json",
+  ];
+  for (const payload of refused) {
+    const events = await runShimTurn(
+      `event: approval_request\ndata: ${payload}\n\n` + SSE_DONE_FRAME,
+    );
+    assert.equal(
+      events.some((e) => e.type === "approval_request"),
+      false,
+      `a frame that cannot be answered must be dropped: ${payload}`,
+    );
+    assert.equal(
+      events.some((e) => e.type === "protocol_error"),
+      false,
+      `and must not fail the turn: ${payload}`,
+    );
+    assert.ok(events.some((e) => e.type === "done"), "the answer must still arrive");
+  }
+
+  // The target is clipped like tool_use's, not refused: the card is still
+  // answerable, only its label is bounded.
+  const clipped = await runShimTurn(
+    `event: approval_request\ndata: {"id":"ap-9","name":"Write","target":"${"t".repeat(120)}"}\n\n` +
+    SSE_DONE_FRAME,
+  ).then((events) => events.find((e) => e.type === "approval_request"));
+  assert.equal(clipped.target.length, 80);
+
+  // Reasoning past the renderer's per-event bound is dropped, not fatal.
+  const oversized = await runShimTurn(
+    `event: reasoning_delta\ndata: {"delta":"${"r".repeat(262145)}"}\n\n` + SSE_DONE_FRAME,
+  );
+  assert.equal(oversized.some((e) => e.type === "reasoning_delta"), false);
+  assert.equal(oversized.some((e) => e.type === "protocol_error"), false);
+  assert.ok(oversized.some((e) => e.type === "done"));
+  const nonString = await runShimTurn(
+    'event: reasoning_delta\ndata: {"delta":42}\n\n' + SSE_DONE_FRAME,
+  );
+  assert.equal(nonString.some((e) => e.type === "reasoning_delta"), false);
+  assert.ok(nonString.some((e) => e.type === "done"));
+}
+
 async function testStagedAttachmentsAreSentWithTheTurn() {
   let sentFileIDs = null;
   const bridge = {
@@ -5924,6 +6109,7 @@ await testTurnStatePillCarriesItsTone();
 await testFailedTurnStateAndDuration();
 await testModelProtocolHintFollowsTheChoice();
 await testToolLoopActivityAndDeliverables();
+await testToolApprovalCardsAndReasoningCaption();
 await testStarterPromptLandsInTheComposer();
 await testCancelledStarterDropsItsPrompt();
 await testSelectedSourcesRideTheNextTurn();
@@ -5952,6 +6138,7 @@ await testSignedOutWithoutLocalRouteStaysGated();
 await testAssistantMarkdownIsRenderedAsElements();
 await testRetrievedContextIsShownAndResetPerTurn();
 await testShimValidatesRetrievalPayloads();
+await testShimDropsMalformedApprovalAndReasoningFrames();
 await testStagedAttachmentsAreSentWithTheTurn();
 await testSynchronousTurnCallbacksAreBufferedUntilOpenResult();
 await testAgentTurnStreamsAndReconciles();

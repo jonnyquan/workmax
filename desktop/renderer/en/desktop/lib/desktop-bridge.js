@@ -33,6 +33,9 @@ const ROUTES = {
     agentListRecoverableTurns: defineTypedRoute("agent.listRecoverableTurns", "agent.turns-recoverable", "GET", "/agent/turns/recoverable", "none", null),
     agentResumeTurn: defineTypedRoute("agent.resumeTurn", "agent.turn-replay", "POST", "/agent/turns/:uuid/replay", "none", null),
     agentCancelTurn: defineTypedRoute("agent.cancelTurn", "agent.turn-cancel", "POST", "/agent/turns/:uuid/cancel", "none", null),
+    // Delivers the user's answer to a pending tool approval (L2 interactive
+    // approvals). The renderer card posts {approval_id, decision}.
+    agentApproveTurnTool: defineTypedRoute("agent.approveTurnTool", "agent.turn-approve", "POST", "/agent/turns/:uuid/approve", "json", "application/json"),
     systemHealth: defineTypedRoute("system.health", "health.get", "GET", "/health", "none", null),
     systemDiagnostics: defineTypedRoute("system.diagnostics", "system.diagnostics", "GET", "/system/diagnostics", "none", null),
     systemServerVersion: defineTypedRoute("system.serverVersion", "system.server-version", "GET", "/system/server-version", "none", null),
@@ -44,6 +47,7 @@ const ROUTES = {
     agentListThreadFiles: defineTypedRoute("agent.listThreadFiles", "agent.thread-file-list", "GET", "/agent/threads/:uuid/files", "none", null),
 };
 const JSON_BODY_LIMITS = {
+    "agent.approveTurnTool": 512,
     "agent.createThread": 4 << 10,
     "agent.startTurn": 1 << 20,
     "system.writeLog": 65_536,
@@ -189,6 +193,17 @@ function createDesktopBridge(deps) {
                 return deps.resumeAgentTurn(validateCanonicalV4UUID(turnUUID, "agent.resumeTurn turnUUID"), callback);
             },
             cancelTurn: (turnID) => deps.cancelAgentTurn(validateTurnID(turnID)),
+            // Delivers the user's answer to a pending tool approval. Unlike
+            // cancelTurn this is a plain typed route — no transport privilege is
+            // involved, so it rides the same request adapter as every other JSON
+            // route. A 404 means the approval expired with its turn; the renderer
+            // shows "expired", not an error.
+            approveTurnTool: async (turnID, input) => {
+                const uuid = validateCanonicalV4UUID(turnID, "agent.approveTurnTool turnID");
+                const body = buildAgentTurnApprovalBody(input);
+                const path = ROUTES.agentApproveTurnTool.path.replace(":uuid", encodeURIComponent(uuid));
+                return execute(deps, ROUTES.agentApproveTurnTool, path, body);
+            },
         },
         system: {
             health: () => execute(deps, ROUTES.systemHealth),
@@ -697,6 +712,30 @@ function hasWellFormedUTF16(value) {
 }
 function validateTurnID(value) {
     return validateCanonicalV4UUID(value, "agent.cancelTurn turnID");
+}
+// Mirrors the sidecar's own validation (id non-empty and at most 32 bytes,
+// decision from the fixed vocabulary) so a malformed answer fails here, in the
+// caller's stack, rather than as an opaque 400.
+const AGENT_TURN_APPROVAL_DECISIONS = new Set([
+    "allow_once",
+    "allow_session",
+    "allow_always",
+    "deny",
+]);
+function buildAgentTurnApprovalBody(input) {
+    assertPlainObject(input, "agent.approveTurnTool input");
+    assertExactKeys(input, ["approval_id", "decision"], "agent.approveTurnTool input");
+    const approvalID = input.approval_id;
+    if (typeof approvalID !== "string" ||
+        approvalID === "" ||
+        approvalID.length > 32) {
+        throw new TypeError("agent.approveTurnTool approval_id is malformed");
+    }
+    if (typeof input.decision !== "string" ||
+        !AGENT_TURN_APPROVAL_DECISIONS.has(input.decision)) {
+        throw new TypeError("agent.approveTurnTool decision is malformed");
+    }
+    return { approval_id: approvalID, decision: input.decision };
 }
 async function execute(deps, route, pathOverride, jsonBody) {
     const headers = new Headers({ Accept: "application/json" });

@@ -97,6 +97,7 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	newCurrentSidecarRoutePolicy("agent.turns-recoverable", http.MethodGet, "/agent/turns/recoverable", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.turn-replay", http.MethodPost, "/agent/turns/:uuid/replay", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.turn-cancel", http.MethodPost, "/agent/turns/:uuid/cancel", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("agent.turn-approve", http.MethodPost, "/agent/turns/:uuid/approve", SidecarBodyRequired, maxAgentApproveBodyBytes, "application/json"),
 	newCurrentSidecarRoutePolicy("agent.thread-put", http.MethodPut, "/agent/threads/:uuid", SidecarBodyRequired, maxAgentThreadPutBodyBytes, "application/json"),
 	newCurrentSidecarRoutePolicy("agent.thread-delete", http.MethodDelete, "/agent/threads/:uuid", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-rename", http.MethodPatch, "/agent/threads/:uuid", SidecarBodyRequired, maxAgentThreadRenameBodyBytes, "application/json"),
@@ -297,6 +298,8 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handleReplayAgentTurn, true
 	case "agent.turn-cancel":
 		return s.handleCancelAgentTurn, true
+	case "agent.turn-approve":
+		return s.handleApproveAgentTurn, true
 	case "agent.thread-put":
 		return s.handlePutAgentThread, true
 	case "agent.thread-delete":

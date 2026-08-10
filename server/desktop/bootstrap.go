@@ -29,6 +29,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	agentruntime "server/desktop/agentruntime"
 	"sync"
 	"time"
 
@@ -39,6 +40,7 @@ import (
 	localagent "server/desktop/local_agent"
 	localinference "server/desktop/local_inference"
 	localrender "server/desktop/local_render"
+	piagent "server/desktop/pi_agent"
 	desktopsync "server/desktop/sync"
 )
 
@@ -363,11 +365,12 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 	// packaged download; until then the operator points at a binary. No CLI
 	// simply means anthropic_compatible turns run as L1 pure chat.
 	var localAgent TurnRunner
+	var approvalBroker *agentruntime.ApprovalBroker
 	if cliPath := os.Getenv("WORKMAX_CLAUDE_CLI_PATH"); cliPath != "" {
 		if info, statErr := os.Stat(cliPath); statErr != nil || info.IsDir() {
 			log.Printf("local agent: WORKMAX_CLAUDE_CLI_PATH=%q is not a usable binary (%v); tool loop disabled", cliPath, statErr)
 		} else {
-			localAgent = localagent.NewEngine(
+			engine := localagent.NewEngine(
 				&LocalModelProfileReader{Store: modelSettings},
 				dbRes.DB,
 				localFiles,
@@ -375,7 +378,41 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 				cliPath,
 				filepath.Join(dbRes.DataDir, "agent_workspace"),
 			)
+			// Interactive approvals stay behind a flag until the renderer's
+			// approval card ships: without the card, every write would sit
+			// on the 120s timeout and then be denied.
+			if os.Getenv("WORKMAX_L2_APPROVALS") == "1" {
+				approvalBroker = agentruntime.NewApprovalBroker()
+				engine.EnableApprovals(approvalBroker)
+				log.Printf("local agent: interactive tool approvals ON")
+			}
+			localAgent = engine
 			log.Printf("local agent: tool loop available (cli=%s)", cliPath)
+		}
+	}
+
+	// Pi agent engine (L2, second runtime): the tool loop for
+	// openai_compatible local models, driven over `pi --mode rpc`. Same
+	// gating pattern as the claude block: an explicitly named binary until
+	// packaging lands; no binary simply means openai_compatible turns run
+	// as L1 pure chat.
+	var piAgent TurnRunner
+	if piPath := os.Getenv("WORKMAX_PI_PATH"); piPath != "" {
+		if info, statErr := os.Stat(piPath); statErr != nil || info.IsDir() {
+			log.Printf("pi agent: WORKMAX_PI_PATH=%q is not a usable binary (%v); pi tool loop disabled", piPath, statErr)
+		} else {
+			piAgent = localagent.NewEngineWithRuntime(
+				&LocalModelProfileReader{Store: modelSettings},
+				dbRes.DB,
+				localFiles,
+				knowledge.Hooks,
+				piagent.NewRuntime(piagent.Config{
+					BinPath:       piPath,
+					DataDir:       dbRes.DataDir,
+					WorkspaceRoot: filepath.Join(dbRes.DataDir, "agent_workspace"),
+				}),
+			)
+			log.Printf("pi agent: tool loop available (pi=%s)", piPath)
 		}
 	}
 
@@ -389,6 +426,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 		TokenStore:       tokenStore,
 		LoginCoordinator: loginCoordinator,
 		Proxy:            proxy,
+		Approvals:        approvalBroker,
 		NetworkState:     networkWatcher,
 		MessagesSyncer:   messagesSyncer,
 		ThreadsSyncer:    threadsSyncer,
@@ -400,6 +438,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 		ModelSettings:    modelSettings,
 		LocalInference:   localInference,
 		LocalAgent:       localAgent,
+		PiAgent:          piAgent,
 		LocalFiles:       localFiles,
 		KnowledgeIndex:   knowledge.Index,
 	})

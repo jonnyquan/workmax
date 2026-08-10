@@ -400,6 +400,26 @@ export interface AgentTurnCancelResult {
   canceled: boolean;
 }
 
+/**
+ * The user's answer to a pending L2 tool approval. `approval_id` names the
+ * request the sidecar announced on the stream ("ap-N"); the decision vocabulary
+ * mirrors the sidecar's exactly.
+ */
+export type AgentTurnApprovalDecision =
+  | "allow_once"
+  | "allow_session"
+  | "allow_always"
+  | "deny";
+
+export interface AgentTurnApprovalInput {
+  approval_id: string;
+  decision: AgentTurnApprovalDecision;
+}
+
+export interface AgentTurnApprovalResult {
+  resolved: boolean;
+}
+
 export interface AgentProxyError {
   kind: string;
   message: string;
@@ -558,6 +578,10 @@ export interface DesktopBridge {
       callback: AgentTurnEventCallback
     ) => AgentTurnOpenResult;
     cancelTurn: (turnID: string) => Promise<AgentTurnCancelResult>;
+    approveTurnTool: (
+      turnID: string,
+      input: AgentTurnApprovalInput
+    ) => Promise<DesktopBridgeResult<AgentTurnApprovalResult>>;
     uploadThreadFile: (
       threadUUID: string,
       file: File
@@ -834,6 +858,16 @@ const ROUTES = {
     "none",
     null
   ),
+  // Delivers the user's answer to a pending tool approval (L2 interactive
+  // approvals). The renderer card posts {approval_id, decision}.
+  agentApproveTurnTool: defineTypedRoute(
+    "agent.approveTurnTool",
+    "agent.turn-approve",
+    "POST",
+    "/agent/turns/:uuid/approve",
+    "json",
+    "application/json"
+  ),
   systemHealth: defineTypedRoute(
     "system.health", "health.get", "GET", "/health", "none", null
   ),
@@ -904,6 +938,7 @@ const ROUTES = {
 } as const;
 
 const JSON_BODY_LIMITS = {
+  "agent.approveTurnTool": 512,
   "agent.createThread": 4 << 10,
   "agent.startTurn": 1 << 20,
   "system.writeLog": 65_536,
@@ -1109,6 +1144,28 @@ export function createDesktopBridge(
         );
       },
       cancelTurn: (turnID) => deps.cancelAgentTurn(validateTurnID(turnID)),
+      // Delivers the user's answer to a pending tool approval. Unlike
+      // cancelTurn this is a plain typed route — no transport privilege is
+      // involved, so it rides the same request adapter as every other JSON
+      // route. A 404 means the approval expired with its turn; the renderer
+      // shows "expired", not an error.
+      approveTurnTool: async (turnID, input) => {
+        const uuid = validateCanonicalV4UUID(
+          turnID,
+          "agent.approveTurnTool turnID"
+        );
+        const body = buildAgentTurnApprovalBody(input);
+        const path = ROUTES.agentApproveTurnTool.path.replace(
+          ":uuid",
+          encodeURIComponent(uuid)
+        );
+        return execute<AgentTurnApprovalResult>(
+          deps,
+          ROUTES.agentApproveTurnTool,
+          path,
+          body
+        );
+      },
     },
     system: {
       health: () => execute<SidecarHealth>(deps, ROUTES.systemHealth),
@@ -1769,6 +1826,42 @@ function hasWellFormedUTF16(value: string): boolean {
 
 function validateTurnID(value: unknown): string {
   return validateCanonicalV4UUID(value, "agent.cancelTurn turnID");
+}
+
+// Mirrors the sidecar's own validation (id non-empty and at most 32 bytes,
+// decision from the fixed vocabulary) so a malformed answer fails here, in the
+// caller's stack, rather than as an opaque 400.
+const AGENT_TURN_APPROVAL_DECISIONS: ReadonlySet<string> = new Set([
+  "allow_once",
+  "allow_session",
+  "allow_always",
+  "deny",
+]);
+
+function buildAgentTurnApprovalBody(
+  input: AgentTurnApprovalInput
+): Record<string, unknown> {
+  assertPlainObject(input, "agent.approveTurnTool input");
+  assertExactKeys(
+    input,
+    ["approval_id", "decision"],
+    "agent.approveTurnTool input"
+  );
+  const approvalID = input.approval_id;
+  if (
+    typeof approvalID !== "string" ||
+    approvalID === "" ||
+    approvalID.length > 32
+  ) {
+    throw new TypeError("agent.approveTurnTool approval_id is malformed");
+  }
+  if (
+    typeof input.decision !== "string" ||
+    !AGENT_TURN_APPROVAL_DECISIONS.has(input.decision)
+  ) {
+    throw new TypeError("agent.approveTurnTool decision is malformed");
+  }
+  return { approval_id: approvalID, decision: input.decision };
 }
 
 async function execute<T>(

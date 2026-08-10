@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	agentruntime "server/desktop/agentruntime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -122,6 +123,16 @@ type ServerConfig struct {
 	// anthropic_compatible local models. Nil → those turns fall back to
 	// LocalInference pure chat. Dispatch: Server.localTurnRunner.
 	LocalAgent TurnRunner
+
+	// PiAgent runs L2 tool-loop turns (pi --mode rpc subprocess) for
+	// openai_compatible local models — the protocols the claude CLI cannot
+	// speak. Nil → those turns fall back to LocalInference pure chat.
+	// Dispatch: Server.localTurnRunner.
+	PiAgent TurnRunner
+
+	// Approvals delivers user decisions to pending tool approvals (L2
+	// interactive mode). Nil → the approve endpoint returns 503.
+	Approvals *agentruntime.ApprovalBroker
 
 	// LocalFiles persists file attachments uploaded via
 	// POST /agent/threads/:uuid/files to local disk + w_workagent_thread_file,

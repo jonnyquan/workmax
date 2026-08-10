@@ -96,9 +96,11 @@ const PROXY_ERROR_KINDS = new Set([
 ]);
 const AGENT_EVENT_TYPES = new Set([
   "text_delta",
+  "reasoning_delta",
   "retrieval",
   "tool_use",
   "tool_denied",
+  "approval_request",
   "unknown",
   "done",
   "proxy_error",
@@ -751,6 +753,28 @@ function parseAgentTurnEvent(value) {
         throw new Error("Malformed agent turn event");
       }
       return { type: value.type, turnID: value.turnID, delta: value.delta };
+    case "reasoning_delta":
+      if (
+        !hasExactKeys(value, ["type", "turnID", "delta"]) ||
+        typeof value.delta !== "string" ||
+        !hasWellFormedUTF16(value.delta) ||
+        utf8ByteLength(value.delta) > MAX_EVENT_TEXT_BYTES
+      ) {
+        throw new Error("Malformed agent turn event");
+      }
+      return { type: value.type, turnID: value.turnID, delta: value.delta };
+    case "approval_request":
+      if (
+        !hasExactKeys(value, ["type", "turnID", "id", "name", "target"]) ||
+        !isSafeProtocolString(value.id, 32) ||
+        !isSafeProtocolString(value.name, 64) ||
+        typeof value.target !== "string" ||
+        !hasWellFormedUTF16(value.target) ||
+        value.target.length > 80
+      ) {
+        throw new Error("Malformed agent turn event");
+      }
+      return { type: value.type, turnID: value.turnID, id: value.id, name: value.name, target: value.target };
     case "tool_use":
       if (
         !hasExactKeys(value, ["type", "turnID", "name", "target"]) ||
@@ -3961,6 +3985,7 @@ function handleRawTurnEvent(activeTurn, rawEvent) {
 
 function keepRecoverableTurnForRetry(activeTurn, feedback, statusMessage) {
   if (!isCurrentTurn(activeTurn) || !activeTurn.recoveryTurn) return;
+  settleTurnNarration(activeTurn);
   state.activeTurn = null;
   state.turnGeneration += 1;
   state.resumingTurn = false;
@@ -4040,6 +4065,7 @@ async function refreshRecoveryAfterInitialBusy(activeTurn, fallback) {
 function handleInitialTurnBusy(activeTurn) {
   if (!isCurrentTurn(activeTurn) || activeTurn.recoveryTurn) return;
   const fallback = localRecoverableTurn(activeTurn);
+  settleTurnNarration(activeTurn);
   state.activeTurn = null;
   state.recoveryGeneration += 1;
   retainLocalRecoverableTurn(fallback);
@@ -4093,6 +4119,12 @@ function handleParsedTurnEvent(activeTurn, event) {
       scrollMessagesToEnd();
       return;
     }
+    case "reasoning_delta":
+      recordReasoningDelta(activeTurn, event.delta);
+      return;
+    case "approval_request":
+      presentApprovalRequest(activeTurn, event);
+      return;
     case "tool_use":
       recordToolActivity({ name: event.name, target: event.target, denied: false }, activeTurn);
       return;
@@ -4177,6 +4209,7 @@ function handleParsedTurnEvent(activeTurn, event) {
 function finishActiveTurn(activeTurn, label, canceled) {
   if (!isCurrentTurn(activeTurn)) return;
   clearPendingIndicator(activeTurn);
+  settleTurnNarration(activeTurn);
   state.activeTurn = null;
   if (!activeTurn.assistantText) {
     activeTurn.assistantBubble.textContent = canceled
@@ -4232,6 +4265,7 @@ function finishActiveTurn(activeTurn, label, canceled) {
 function finishActiveTurnWithError(activeTurn, message) {
   if (!isCurrentTurn(activeTurn)) return;
   clearPendingIndicator(activeTurn);
+  settleTurnNarration(activeTurn);
   state.activeTurn = null;
   if (activeTurn.recoveryTurn) state.resumingTurn = false;
   const errorDuration = activeTurn.startedAt ? formatTurnDuration(Date.now() - activeTurn.startedAt) : "";
@@ -5156,6 +5190,255 @@ function attachLastTurnLog() {
   );
   const last = assistants[assistants.length - 1];
   if (last) renderWorkLog(last, log.steps, log.produced, false, log.duration);
+}
+
+// --- Reasoning caption and L2 tool approvals -------------------------------
+//
+// Both live on the streaming assistant message, above the bubble, and both are
+// per-turn state kept on the activeTurn object itself: a superseded turn's
+// caption or cards can never repaint under a newer turn because every entry
+// point is already fenced by isCurrentTurn.
+
+// insertAboveBubble parks a strip on the message wrapper, above the words it
+// narrates — same placement rule as the work log.
+function insertAboveBubble(wrapper, node) {
+  const bubble = Array.from(wrapper.children || []).find((child) =>
+    child.classList?.contains("bubble")
+  );
+  if (bubble && typeof wrapper.insertBefore === "function") {
+    wrapper.insertBefore(node, bubble);
+  } else {
+    wrapper.appendChild(node);
+  }
+}
+
+// The caption shows one line: the last non-empty line of the reasoning so far.
+// Scanning backwards keeps the cost proportional to the tail, not the text.
+function reasoningCaptionLine(text) {
+  let end = text.length;
+  while (end > 0) {
+    const start = text.lastIndexOf("\n", end - 1);
+    const line = text.slice(start + 1, end).trim();
+    if (line !== "") return line;
+    if (start < 0) break;
+    end = start;
+  }
+  return "";
+}
+
+function ensureReasoningStrip(activeTurn) {
+  const wrapper = activeTurn.assistantBubble?.parentNode;
+  if (!wrapper) return null;
+  if (
+    activeTurn.reasoningStrip &&
+    activeTurn.reasoningStrip.parentNode === wrapper
+  ) {
+    return activeTurn.reasoningStrip;
+  }
+  const strip = document.createElement("div");
+  strip.className = "reasoning-strip";
+  const caption = document.createElement("span");
+  caption.className = "reasoning-caption";
+  strip.appendChild(caption);
+  insertAboveBubble(wrapper, strip);
+  activeTurn.reasoningStrip = strip;
+  activeTurn.reasoningCaption = caption;
+  return strip;
+}
+
+function recordReasoningDelta(activeTurn, delta) {
+  const total = (activeTurn.reasoningTextBytes || 0) + utf8ByteLength(delta);
+  // Reasoning is narration: past the display bound the rest is dropped rather
+  // than failing a turn whose answer is still arriving.
+  if (total > MAX_TURN_TEXT_BYTES) return;
+  activeTurn.reasoningText = (activeTurn.reasoningText || "") + delta;
+  activeTurn.reasoningTextBytes = total;
+  const strip = ensureReasoningStrip(activeTurn);
+  if (!strip) return;
+  const line = reasoningCaptionLine(activeTurn.reasoningText);
+  activeTurn.reasoningCaption.textContent = line
+    ? `Thinking… ${line}`
+    : "Thinking…";
+}
+
+// When the turn settles, the live caption folds into a "Thought" label whose
+// click reveals the full reasoning text. A turn that never sent reasoning has
+// no strip; a strip whose turn ends before any text is removed outright.
+function settleReasoningStrip(activeTurn) {
+  const strip = activeTurn.reasoningStrip;
+  if (!strip) return;
+  const text = activeTurn.reasoningText || "";
+  if (!text) {
+    strip.remove();
+    activeTurn.reasoningStrip = null;
+    return;
+  }
+  strip.textContent = "";
+  strip.classList.add("settled");
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "reasoning-toggle";
+  const detail = document.createElement("pre");
+  detail.className = "reasoning-detail";
+  detail.textContent = text;
+  detail.hidden = true;
+  const paint = () => {
+    toggle.textContent = `${detail.hidden ? "▸" : "▾"} Thought`;
+  };
+  paint();
+  toggle.addEventListener("click", () => {
+    detail.hidden = !detail.hidden;
+    paint();
+  });
+  strip.append(toggle, detail);
+}
+
+// Bounded like the work log: a runaway turn cannot stack cards without limit.
+const MAX_APPROVAL_CARDS_PER_TURN = 40;
+
+// Order fixed by the sidecar's decision vocabulary: [decision, button label,
+// settled label].
+const APPROVAL_DECISIONS = [
+  ["allow_once", "Allow once", "Allowed once"],
+  ["allow_session", "Allow this session", "Allowed for this session"],
+  ["allow_always", "Always allow", "Always allowed"],
+  ["deny", "Deny", "Denied"],
+];
+
+function desktopAgentApprovalBridge() {
+  const desktop = window.desktopBridge;
+  if (
+    !isRecord(desktop) ||
+    !isRecord(desktop.agent) ||
+    typeof desktop.agent.approveTurnTool !== "function"
+  ) {
+    return null;
+  }
+  return desktop.agent;
+}
+
+// The card collapses in place to its outcome — the question is answered, so
+// the buttons go away rather than merely disabling.
+function settleApprovalCard(entry, label, tone) {
+  entry.answered = true;
+  entry.card.textContent = "";
+  entry.card.classList.add("approval-settled");
+  const result = document.createElement("span");
+  result.className = tone ? `approval-result ${tone}` : "approval-result";
+  result.textContent = label;
+  entry.card.appendChild(result);
+}
+
+function presentApprovalRequest(activeTurn, event) {
+  const wrapper = activeTurn.assistantBubble?.parentNode;
+  if (!wrapper) return;
+  if (!activeTurn.approvalCards) activeTurn.approvalCards = new Map();
+  // One card per approval id: a duplicated frame must not stack a second
+  // question for the same answer.
+  if (activeTurn.approvalCards.has(event.id)) return;
+  if (activeTurn.approvalCards.size >= MAX_APPROVAL_CARDS_PER_TURN) return;
+
+  const card = document.createElement("div");
+  card.className = "approval-card";
+  const title = document.createElement("div");
+  title.className = "approval-title";
+  title.textContent = event.target
+    ? `Agent requests to run ${event.name} · ${event.target}`
+    : `Agent requests to run ${event.name}`;
+  const note = document.createElement("div");
+  note.className = "approval-note";
+  note.hidden = true;
+  const actions = document.createElement("div");
+  actions.className = "approval-actions";
+  const entry = { card, note, actions, answered: false };
+  for (const [decision, buttonLabel, settledLabel] of APPROVAL_DECISIONS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className =
+      decision === "deny" ? "approval-button deny" : "approval-button";
+    button.textContent = buttonLabel;
+    button.addEventListener("click", () => {
+      submitApprovalDecision(activeTurn, event.id, decision, settledLabel, entry);
+    });
+    actions.appendChild(button);
+  }
+  card.append(title, actions, note);
+  insertAboveBubble(wrapper, card);
+  activeTurn.approvalCards.set(event.id, entry);
+  scrollMessagesToEnd();
+}
+
+function setApprovalButtonsDisabled(entry, disabled) {
+  for (const button of Array.from(entry.actions.children || [])) {
+    button.disabled = disabled;
+  }
+}
+
+function submitApprovalDecision(activeTurn, approvalID, decision, settledLabel, entry) {
+  if (entry.answered) return;
+  const agent = desktopAgentApprovalBridge();
+  if (!agent || !activeTurn.turnID) {
+    settleApprovalCard(entry, "Approvals are unavailable", "expired");
+    return;
+  }
+  // Answered the moment the click lands: a second click while the request is
+  // in flight must not send a second decision.
+  entry.answered = true;
+  entry.note.hidden = true;
+  setApprovalButtonsDisabled(entry, true);
+  agent
+    .approveTurnTool(activeTurn.turnID, {
+      approval_id: approvalID,
+      decision,
+    })
+    .then((result) => {
+      if (!isRecord(result) || typeof result.ok !== "boolean") {
+        throw new Error("Malformed approval result");
+      }
+      if (result.ok) {
+        settleApprovalCard(
+          entry,
+          settledLabel,
+          decision === "deny" ? "denied" : "allowed"
+        );
+        return;
+      }
+      if (result.status === 404) {
+        // The pending set no longer knows this id: the turn moved on
+        // (timeout, cancel, completion). Expired, not an error.
+        settleApprovalCard(entry, "Expired", "expired");
+        return;
+      }
+      throw new Error("Approval delivery failed");
+    })
+    .catch(() => {
+      // The decision never landed, so the question is still open — unless the
+      // turn already settled this card as expired while the request was out.
+      if (entry.card.classList.contains("approval-settled")) return;
+      entry.answered = false;
+      setApprovalButtonsDisabled(entry, false);
+      entry.note.textContent = "The decision could not be delivered. Try again.";
+      entry.note.hidden = false;
+    });
+}
+
+// A terminal turn takes its unanswered questions with it: the sidecar's
+// pending set is keyed by turn, so a card that outlives the turn could only
+// ever answer into a 404.
+function expireApprovalCards(activeTurn) {
+  if (!activeTurn.approvalCards) return;
+  for (const entry of activeTurn.approvalCards.values()) {
+    if (entry.answered) continue;
+    settleApprovalCard(entry, "Expired", "expired");
+  }
+}
+
+// settleTurnNarration is the single hook every local turn terminal calls:
+// done, canceled, proxy/protocol errors, busy retention — the caption folds
+// and the open approval cards expire together.
+function settleTurnNarration(activeTurn) {
+  settleReasoningStrip(activeTurn);
+  expireApprovalCards(activeTurn);
 }
 
 function formatRetrievalScore(score) {

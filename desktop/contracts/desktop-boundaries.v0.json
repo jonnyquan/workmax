@@ -147,6 +147,10 @@
         "routeId": "agent.turn-cancel"
       },
       {
+        "bridgeMethod": "agent.approveTurnTool",
+        "routeId": "agent.turn-approve"
+      },
+      {
         "bridgeMethod": "system.health",
         "routeId": "health.get"
       },
@@ -436,6 +440,22 @@
         "body": "forbidden",
         "contentTypes": [],
         "maxBodyBytes": 0
+      },
+      "status": "current"
+    },
+    {
+      "id": "agent.turn-approve",
+      "method": "POST",
+      "path": "/agent/turns/:uuid/approve",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 512,
+        "bodyTooLargeError": "request body too large"
       },
       "status": "current"
     },

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	claudesdk "github.com/jonnyquan/claude-agent-sdk-go/pkg/claudesdk"
+
+	agentruntime "server/desktop/agentruntime"
 )
 
 // The containment matrix. Each row is a claim about the boundary; the ones
@@ -73,8 +75,9 @@ func TestValidateToolCall_ChecksEveryPathKey(t *testing.T) {
 func TestSecurityHook_DeniesAndReports(t *testing.T) {
 	ws := t.TempDir()
 	var denied []string
-	hook := securityHook(newPathValidator(ws), func(tool, reason string) {
-		denied = append(denied, tool+": "+reason)
+	hook := securityHook(newPathValidator(ws), func(ev agentruntime.Event) error {
+		denied = append(denied, ev.Tool.Name+": "+ev.Tool.Reason)
+		return nil
 	})
 
 	out, err := hook(map[string]any{
