@@ -2,10 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src http://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-    />
+    <!-- There is deliberately no Content-Security-Policy meta tag here.
+         The policy is a response header, set by the one server that ever
+         serves this document (desktop/wails/uiserver.go, contentSecurityPolicy).
+         A meta tag used to sit here as well and the two had already drifted —
+         the meta allowed connect-src http://127.0.0.1:*, the header allows
+         'self'; the meta forbade blob: images, the header permits them — so
+         what actually applied was the intersection of two policies nobody was
+         reading together. One policy, in the file that also owns the origin,
+         the proxy and the token. If you are tempted to add it back: the header
+         is stricter in every directive they shared, and check-bundled-renderer.sh
+         fails the build if a meta CSP reappears. -->
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>WorkMax Desktop</title>
     <link rel="stylesheet" href="./styles.css" />

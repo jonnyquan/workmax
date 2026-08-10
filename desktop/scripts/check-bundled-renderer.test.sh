@@ -63,22 +63,58 @@ make_fixture "$missing_file_fixture"
 rm "$missing_file_fixture/renderer.js"
 expect_fail "rejects missing renderer.js" "$missing_file_fixture" "missing or empty bundled renderer file"
 
-missing_csp_fixture="$tmp_dir/missing-csp"
-make_fixture "$missing_csp_fixture"
-perl -0pi -e 's/\s*<meta\s+http-equiv="Content-Security-Policy"\s+content="[^"]+"\s*\/>//s' "$missing_csp_fixture/index.html"
-expect_fail "rejects missing CSP" "$missing_csp_fixture" "index.html must declare a Content-Security-Policy"
+# The policy has one home: the response header in desktop/wails/uiserver.go.
+# These cases used to edit a <meta http-equiv> in index.html, which was the
+# second copy — and the two had drifted, which is why the meta is gone. What is
+# checked now is that the meta cannot come back and that the header's directives
+# are still pinned.
+readded_meta_fixture="$tmp_dir/readded-meta"
+make_fixture "$readded_meta_fixture"
+perl -0pi -e 's/<meta charset="utf-8" \/>/<meta charset="utf-8" \/>\n    <meta http-equiv="Content-Security-Policy" content="default-src *" \/>/' \
+  "$readded_meta_fixture/index.html"
+expect_fail "rejects a re-added CSP meta tag" \
+  "$readded_meta_fixture" \
+  "index.html must NOT declare a Content-Security-Policy meta tag"
 
-bad_csp_fixture="$tmp_dir/bad-csp"
-make_fixture "$bad_csp_fixture"
-perl -0pi -e 's/connect-src http:\/\/127\.0\.0\.1:\*/connect-src https:\/\/workmax.app/' "$bad_csp_fixture/index.html"
-expect_fail "rejects non-loopback CSP" "$bad_csp_fixture" "CSP directive connect-src mismatch"
+# The header cases vary a copy of uiserver.go rather than a renderer file, so
+# they need the fixture directory to stay valid while the Go source is broken.
+expect_fail_ui_server() {
+  local name="$1"
+  local ui_server="$2"
+  local want="$3"
+  local output
+  if output="$(WORKMAX_BUNDLED_RENDERER_DIR="$valid_fixture" \
+    WORKMAX_UI_SERVER_SOURCE="$ui_server" "$CHECK" 2>&1)"; then
+    printf 'not ok - %s: check unexpectedly passed\n%s\n' "$name" "$output" >&2
+    exit 1
+  fi
+  if ! grep -Fq -- "$want" <<<"$output"; then
+    printf 'not ok - %s: missing expected failure text: %s\n%s\n' "$name" "$want" "$output" >&2
+    exit 1
+  fi
+  printf 'ok - %s\n' "$name"
+}
 
-extra_csp_origin_fixture="$tmp_dir/extra-csp-origin"
-make_fixture "$extra_csp_origin_fixture"
-perl -0pi -e 's/connect-src http:\/\/127\.0\.0\.1:\*/connect-src http:\/\/127.0.0.1:* https:\/\/workmax.app/' "$extra_csp_origin_fixture/index.html"
-expect_fail "rejects extra remote CSP connect source" \
-  "$extra_csp_origin_fixture" \
+bad_csp_source="$tmp_dir/uiserver-remote-connect.go"
+perl -pe "s/\"connect-src 'self'; \" \+/\"connect-src https:\\/\\/workmax.app; \" +/" \
+  "$REPO_ROOT/desktop/wails/uiserver.go" > "$bad_csp_source"
+expect_fail_ui_server "rejects a non-self connect-src in the header" \
+  "$bad_csp_source" \
   "CSP directive connect-src mismatch"
+
+extra_csp_origin_source="$tmp_dir/uiserver-extra-origin.go"
+perl -pe "s/\"connect-src 'self'; \" \+/\"connect-src 'self' https:\\/\\/workmax.app; \" +/" \
+  "$REPO_ROOT/desktop/wails/uiserver.go" > "$extra_csp_origin_source"
+expect_fail_ui_server "rejects an extra remote CSP connect source" \
+  "$extra_csp_origin_source" \
+  "CSP directive connect-src mismatch"
+
+missing_csp_source="$tmp_dir/uiserver-no-policy.go"
+perl -0pe 's/const contentSecurityPolicy = /const someOtherPolicy = /' \
+  "$REPO_ROOT/desktop/wails/uiserver.go" > "$missing_csp_source"
+expect_fail_ui_server "rejects a missing header policy" \
+  "$missing_csp_source" \
+  "could not read contentSecurityPolicy"
 
 bad_css_ref_fixture="$tmp_dir/bad-css-ref"
 make_fixture "$bad_css_ref_fixture"

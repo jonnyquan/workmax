@@ -11,6 +11,56 @@ const rendererDir = process.env.WORKMAX_BUNDLED_RENDERER_DIR
 const rendererPath = path.join(rendererDir, "renderer.js");
 const rendererSource = fs.readFileSync(rendererPath, "utf8");
 const rendererHTML = fs.readFileSync(path.join(rendererDir, "index.html"), "utf8");
+const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8");
+
+// --- Appearance cascade ------------------------------------------------------
+//
+// Three states (follow the system / force light / force dark) out of two dark
+// token blocks. The blocks are literal duplicates by design — CSS has no way to
+// apply one declaration list from both a media query and a plain selector — so
+// the risk the design accepts is that they drift. This is where that risk is
+// paid off: the two must declare the same properties with the same values, the
+// media-query copy must be guarded so a forced light theme survives a dark
+// system, and the forced-dark copy must come last so it survives a light one.
+{
+  const darkInMedia = rendererCSS.match(
+    /@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root:not\(\[data-theme="light"\]\)\s*\{([\s\S]*?)\n\s*\}/u,
+  );
+  assert.ok(
+    darkInMedia,
+    'the system-dark block must be guarded by :root:not([data-theme="light"]) — without it, ' +
+      '"system dark + user chose light" leaves the dark tokens winning and the choice does nothing',
+  );
+  const forcedDarkAt = rendererCSS.indexOf(':root[data-theme="dark"] {');
+  assert.ok(forcedDarkAt > 0, "a :root[data-theme=\"dark\"] block must exist");
+  assert.ok(
+    forcedDarkAt > rendererCSS.indexOf("@media (prefers-color-scheme: dark)"),
+    "forced dark must come AFTER the media query: equal specificity, so source order decides",
+  );
+  const forcedDark = rendererCSS
+    .slice(forcedDarkAt)
+    .match(/:root\[data-theme="dark"\]\s*\{([\s\S]*?)\n\}/u);
+  const declarations = (body) =>
+    body
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("--"));
+  assert.deepEqual(
+    declarations(forcedDark[1]),
+    declarations(darkInMedia[1]),
+    "the two dark token blocks have drifted; they must declare identical values",
+  );
+  assert.ok(declarations(forcedDark[1]).length > 20, "the dark block must carry the whole palette");
+  // The tokens the highlighter paints with have to exist in both themes, or a
+  // code block loses its colours in one of them.
+  for (const token of ["comment", "keyword", "string", "number", "function", "builtin", "punct", "tag", "attr"]) {
+    assert.match(rendererCSS, new RegExp(`\\.tok-${token}\\s*\\{`, "u"));
+    assert.ok(
+      declarations(forcedDark[1]).some((line) => line.startsWith(`--code-${token}:`)),
+      `--code-${token} must be defined for the dark theme`,
+    );
+  }
+}
 
 assert.match(rendererHTML, /id=["']source-code-link["']/u);
 assert.match(rendererHTML, /href=["']https:\/\/github\.com\/jonnyquan\/workmax["']/u);
@@ -23,7 +73,59 @@ assert.doesNotMatch(
   rendererSource,
   /\/api\/v1\/desktop\/identity\/login-transactions|transaction_secret|transactionSecret|exchange_token|exchangeToken|DesktopLogin|DesktopExchange|authorization_code|redirect_location/u
 );
-assert.doesNotMatch(rendererSource, /localStorage|sessionStorage|indexedDB|console\./u);
+assert.doesNotMatch(rendererSource, /sessionStorage|indexedDB|console\./u);
+// localStorage is allowed for exactly one thing: the appearance preference.
+// It is reached only through globalThis (the bare identifier throws where the
+// API is absent, which is every non-browser host this file is loaded in), and
+// only ever under one key. Both halves are pinned here, because "we only use
+// storage for the theme" is a claim that decays the moment nobody checks it.
+{
+  // Comment lines are excluded: the rule is about what the code does, not
+  // about whether a comment may name the thing it explains.
+  const codeLines = rendererSource
+    .split("\n")
+    .filter((line) => !/^\s*(?:\/\/|\/\*|\*)/u.test(line));
+  const storageUses = codeLines.flatMap((line) =>
+    [...line.matchAll(/(.{0,11})localStorage/gu)].map((m) => m[1]),
+  );
+  assert.equal(storageUses.length, 1, "the appearance preference is the only localStorage use");
+  assert.ok(
+    storageUses[0].endsWith("globalThis."),
+    `localStorage must be reached through globalThis, got "${storageUses[0]}localStorage"`,
+  );
+  const storageKeys = codeLines.flatMap((line) =>
+    [...line.matchAll(/\.(?:get|set|remove)Item\(([^,)]+)/gu)].map((m) => m[1].trim()),
+  );
+  assert.deepEqual(
+    [...new Set(storageKeys)],
+    ["THEME_STORAGE_KEY"],
+    "localStorage must hold the appearance preference and nothing else",
+  );
+}
+// The Markdown renderer and the syntax highlighter both build DOM out of
+// createElement and createTextNode, which is what makes "model output cannot
+// become markup" a structural property rather than a matter of escaping
+// correctly. innerHTML is tolerated for exactly one thing — clearing a list to
+// the empty string, which cannot parse anything — and any other use, or any use
+// of the two APIs that have no safe form at all, fails here.
+{
+  const codeLines = rendererSource
+    .split("\n")
+    .filter((line) => !/^\s*(?:\/\/|\/\*|\*)/u.test(line));
+  assert.ok(
+    !codeLines.some((line) => /outerHTML|insertAdjacentHTML/u.test(line)),
+    "outerHTML and insertAdjacentHTML have no safe form here",
+  );
+  for (const line of codeLines) {
+    for (const match of line.matchAll(/innerHTML\s*=\s*(.*)$/gu)) {
+      assert.equal(
+        match[1].trim(),
+        '"";',
+        `innerHTML may only be assigned "" (clearing), got: ${line.trim()}`,
+      );
+    }
+  }
+}
 for (const method of [
   "beginLogin",
   "loginStatus",
@@ -225,6 +327,31 @@ class FakeElement {
   getAttribute(name) {
     return this.attributes.get(name) ?? null;
   }
+
+  removeAttribute(name) {
+    this.attributes.delete(name);
+  }
+}
+
+// A localStorage stand-in. Not installed by default: the renderer has to work
+// where the API is missing (and does — the appearance preference simply stops
+// persisting), and most tests run in exactly that shape to keep it honest.
+class FakeStorage {
+  constructor(seed = {}) {
+    this.values = new Map(Object.entries(seed));
+  }
+
+  getItem(key) {
+    return this.values.has(key) ? this.values.get(key) : null;
+  }
+
+  setItem(key, value) {
+    this.values.set(key, String(value));
+  }
+
+  removeItem(key) {
+    this.values.delete(key);
+  }
 }
 
 // The element set is derived from index.html rather than listed here.
@@ -260,6 +387,9 @@ class FakeDocument {
   constructor(rendererHtml) {
     this.byId = new Map();
     this.listeners = new Map();
+    // <html>. The appearance preference is an attribute on it, set before
+    // anything else in renderer.js runs, so it has to exist from the start.
+    this.documentElement = new FakeElement("html");
     // Operation counters, for the performance gate: a per-token selector walk
     // or full-text reset is invisible to a correctness assertion and shows up
     // here as a count that scales with the delta count.
@@ -476,6 +606,11 @@ async function runRenderer(mockBridge, mockDesktopBridge, options = {}) {
   // affordance where there is no clipboard, and most tests run in exactly that
   // shape, so leaving it out keeps them honest about it.
   if (options.clipboard) context.navigator = { clipboard: options.clipboard };
+  // Same reasoning for storage — see FakeStorage.
+  if (options.storage) context.localStorage = options.storage;
+  // Contextifying makes every sandbox property a real global inside the VM, so
+  // the renderer's globalThis.localStorage resolves exactly as it would in a
+  // webview — including to undefined when no storage was installed.
   vm.createContext(context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
   await settle();
@@ -2493,6 +2628,15 @@ async function testStreamingMarkdownCommitsMatchTheFinalParse() {
   const pre = walk(bubble, (n) => n.tagName === "PRE");
   assert.equal(pre.length, 1, "the closed fence commits on the next frame");
   assert.equal(pre[0].textContent, "let x = 1;\nlet y = 2;");
+  // A block committed mid-stream is highlighted like any other: the idle pass
+  // is hung off the block, not off the end of the turn, so a long answer is
+  // coloured as it arrives rather than all at once at the finish line. Its text
+  // is unchanged by that, which the assertion above already pinned.
+  assert.ok(
+    walk(pre[0], (n) => typeof n.className === "string" && n.className.startsWith("tok-")).length >
+      0,
+    "a code block committed while the turn is still streaming must be highlighted too",
+  );
   assert.equal(walk(bubble, (n) => n.tagName === "LI").length, 2, "the closed list commits too");
   assert.equal(
     walk(bubble, (n) => n.classList?.contains("md-stream-tail"))[0].textContent,
@@ -2515,6 +2659,11 @@ async function testStreamingMarkdownCommitsMatchTheFinalParse() {
     })()`,
     context,
   );
+  // Syntax highlighting is deferred to idle time, so the reference has only
+  // just scheduled its own. Let it land: the pin is that the two agree once
+  // both have finished, and comparing a highlighted bubble against a reference
+  // caught mid-flight would compare timing, not structure.
+  await settle();
   const shape = (root) =>
     walk(root, (n) => n.tagName !== "#text")
       .map((n) => n.tagName)
@@ -6763,6 +6912,248 @@ async function testCreateRejectsForeignUUIDAndMode() {
   }
 }
 
+// --- Appearance --------------------------------------------------------------
+//
+// The cascade itself is checked against styles.css at the top of this file.
+// What is checked here is the hook: which attribute lands on <html>, when, and
+// what survives a relaunch.
+async function testAppearanceIsThreeStateAndPersisted() {
+  const storage = new FakeStorage();
+  const { document } = await runRenderer(undefined, undefined, { storage });
+
+  // Default is "follow the system", expressed as the ABSENCE of the attribute
+  // rather than data-theme="system": the media query already is the system
+  // answer, and a third attribute value would have to be excluded by hand from
+  // every guard in the stylesheet.
+  assert.equal(
+    document.documentElement.getAttribute("data-theme"),
+    null,
+    "an app that has never been told otherwise must follow the system",
+  );
+
+  const openPalette = () => document.dispatchKey({ key: "k", metaKey: true });
+  const commands = () =>
+    walk(
+      document.byId.get("quick-switcher-list"),
+      (node) => node.classList?.contains("quick-switcher-command"),
+    ).map((node) => node.textContent);
+  const runCommand = (prefix) => {
+    const button = walk(
+      document.byId.get("quick-switcher-list"),
+      (node) => node.classList?.contains("quick-switcher-command"),
+    ).find((node) => node.textContent.startsWith(prefix));
+    assert.ok(button, `expected a palette command starting with "${prefix}"`);
+    button.click();
+  };
+
+  openPalette();
+  for (const label of ["Appearance: match system", "Appearance: light", "Appearance: dark"]) {
+    assert.ok(
+      commands().some((entry) => entry.startsWith(label)),
+      `the palette must offer "${label}"`,
+    );
+  }
+  assert.ok(
+    commands().some((entry) => entry.startsWith("Appearance: match system") && entry.includes("Current")),
+    "the active appearance must say so instead of being hidden",
+  );
+
+  runCommand("Appearance: dark");
+  assert.equal(document.documentElement.getAttribute("data-theme"), "dark");
+  assert.equal(document.byId.get("quick-switcher").hidden, true, "choosing closes the palette");
+  assert.equal(
+    storage.getItem("workmax.desktop.appearance"),
+    "dark",
+    "the choice has to outlive the window",
+  );
+
+  openPalette();
+  assert.ok(
+    commands().some((entry) => entry.startsWith("Appearance: dark") && entry.includes("Current")),
+    "the palette reflects the choice that was just made",
+  );
+  runCommand("Appearance: light");
+  assert.equal(document.documentElement.getAttribute("data-theme"), "light");
+
+  openPalette();
+  runCommand("Appearance: match system");
+  assert.equal(
+    document.documentElement.getAttribute("data-theme"),
+    null,
+    "going back to the system removes the attribute rather than setting a third value",
+  );
+  assert.equal(storage.getItem("workmax.desktop.appearance"), "system");
+
+  // A relaunch: the preference is read and applied by the first statement in
+  // renderer.js, before any DOM work, which is what keeps the wrong theme from
+  // being painted for a frame.
+  const relaunched = await runRenderer(undefined, undefined, {
+    storage: new FakeStorage({ "workmax.desktop.appearance": "dark" }),
+  });
+  assert.equal(relaunched.document.documentElement.getAttribute("data-theme"), "dark");
+
+  // Anything else in the slot is somebody else's data or a corrupted write.
+  const garbage = await runRenderer(undefined, undefined, {
+    storage: new FakeStorage({ "workmax.desktop.appearance": "<script>" }),
+  });
+  assert.equal(
+    garbage.document.documentElement.getAttribute("data-theme"),
+    null,
+    "an unrecognised stored value falls back to the system, never onto the page",
+  );
+
+  // And with no storage at all — a locked-down webview — the app still runs and
+  // simply forgets. Every other test in this file runs in that shape; this is
+  // the one that says so on purpose.
+  const noStorage = await runRenderer(undefined);
+  assert.equal(noStorage.document.documentElement.getAttribute("data-theme"), null);
+}
+
+// --- Syntax highlighting -----------------------------------------------------
+async function testCodeTokenizerClassifiesTheLanguagesWeShip() {
+  const { context } = await runRenderer(undefined);
+  const tokenize = (code, language) => context.tokenizeCode(code, language);
+
+  // Every case asserts two things: the classification, and that the runs
+  // concatenate back to the input character for character. The second is what
+  // makes a highlighted block still selectable and copyable as the code it is —
+  // a tokenizer that loses a space is a tokenizer that corrupts what the reader
+  // pastes into a terminal.
+  const classify = (code, language) => {
+    const tokens = tokenize(code, language);
+    assert.ok(tokens, `expected ${language} to be highlighted`);
+    assert.equal(tokens.map((token) => token.text).join(""), code, "tokens must cover the input");
+    return new Map(tokens.filter((token) => token.type).map((token) => [token.text, token.type]));
+  };
+
+  const js = classify('const answer = fn(1, "two"); // note\n', "js");
+  assert.equal(js.get("const"), "keyword");
+  assert.equal(js.get("fn"), "function");
+  assert.equal(js.get("1"), "number");
+  assert.equal(js.get('"two"'), "string");
+  assert.equal(js.get("// note"), "comment");
+  // ts is the same grammar; the alias has to resolve or a ```ts block is plain.
+  assert.equal(classify("interface A {}", "ts").get("interface"), "keyword");
+
+  const py = classify('def go(x):\n    return "s"  # why\n', "python");
+  assert.equal(py.get("def"), "keyword");
+  assert.equal(py.get("go"), "function");
+  assert.equal(py.get('"s"'), "string");
+  assert.equal(py.get("# why"), "comment");
+
+  const go = classify("func main() {\n\ts := `raw`\n\t_ = len(s)\n}\n", "go");
+  assert.equal(go.get("func"), "keyword");
+  assert.equal(go.get("`raw`"), "string");
+  assert.equal(go.get("len"), "builtin");
+
+  const json = classify('{"name": "x", "ok": true, "n": 12}', "json");
+  assert.equal(json.get('"name"'), "attr", "a key is not the same thing as a value");
+  assert.equal(json.get('"x"'), "string");
+  assert.equal(json.get("true"), "keyword");
+  assert.equal(json.get("12"), "number");
+
+  // SQL keywords are case-insensitive and people write them both ways.
+  for (const code of ["select id from t -- c", "SELECT id FROM t -- c"]) {
+    const sql = classify(code, "sql");
+    assert.equal(sql.get(code.slice(0, 6)), "keyword");
+    assert.equal(sql.get("-- c"), "comment");
+  }
+
+  const bash = classify('echo "$HOME/bin" # go\n', "bash");
+  assert.equal(bash.get("echo"), "builtin");
+  assert.equal(bash.get("# go"), "comment");
+  assert.equal(classify("cd $HOME\n", "bash").get("$HOME"), "builtin");
+
+  const html = classify('<a href="x" data-y=\'1\'>t</a>', "html");
+  assert.equal(html.get("<a"), "tag");
+  assert.equal(html.get("href"), "attr");
+  assert.equal(html.get('"x"'), "string");
+  assert.equal(html.get("</a"), "tag");
+
+  const css = classify(".x { color: #fff; --gap: 4px }", "css");
+  assert.equal(css.get(".x"), "tag");
+  assert.equal(css.get("color"), "attr");
+  assert.equal(css.get("#fff"), "number");
+  assert.equal(css.get("--gap"), "attr");
+
+  const md = classify("# Title\n\n- a `snippet` and [link](http://x)\n", "markdown");
+  assert.equal(md.get("# Title"), "keyword");
+  assert.equal(md.get("`snippet`"), "string");
+  assert.equal(md.get("[link](http://x)"), "function");
+
+  // A language with no grammar keeps its plain text and its badge. Refusing is
+  // the answer, not guessing with the nearest grammar.
+  assert.equal(tokenize("fn main() {}", "rust"), null);
+  assert.equal(tokenize("x", ""), null);
+  assert.equal(tokenize("x", undefined), null);
+
+  // Broken input must terminate and must not swallow the rest of the block: an
+  // unclosed quote colours its own line and stops at the newline.
+  const unterminated = classify('let a = "oops\nlet b = 2;\n', "js");
+  assert.equal(unterminated.get("let"), "keyword");
+  assert.equal(unterminated.get("2"), "number", "the line after a broken string still parses");
+}
+
+async function testCodeBlocksArePaintedWithoutMarkup() {
+  const { context, document } = await runRenderer(undefined);
+  const render = (markdown) => {
+    const container = vm.runInContext(
+      `(() => {
+        const el = document.createElement("div");
+        renderMarkdownInto(el, ${JSON.stringify(markdown)});
+        return el;
+      })()`,
+      context,
+    );
+    return container;
+  };
+  const tokenSpans = (root) =>
+    walk(root, (node) => typeof node.className === "string" && node.className.startsWith("tok-"));
+
+  const code = 'const x = 1; // <img src=x onerror=alert(1)>\n';
+  const container = render("```js\n" + code + "```\n");
+  const codeNode = walk(container, (node) => node.tagName === "CODE")[0];
+  assert.ok(codeNode, "expected a code element");
+  assert.equal(codeNode.textContent, code.trimEnd(), "plain text is on screen immediately");
+  assert.equal(tokenSpans(container).length, 0, "highlighting must not block the first paint");
+
+  await settle();
+  const spans = tokenSpans(container);
+  assert.ok(spans.length >= 3, "the block is coloured once the idle pass runs");
+  assert.equal(
+    codeNode.textContent,
+    code.trimEnd(),
+    "and the text is byte-identical afterwards — the reader copies code, not spans",
+  );
+  // The would-be tag inside the comment is still text. It always was; the point
+  // is that adding a highlighter did not quietly change that.
+  assert.ok(
+    walk(container, (node) => node.tagName === "IMG").length === 0,
+    "model output must never become an element",
+  );
+  for (const span of spans) {
+    assert.match(span.className, /^tok-[a-z]+$/u, "token classes are a fixed vocabulary");
+  }
+
+  // Bounds. Past them the block keeps its plain text, in the same spirit as
+  // MARKDOWN_MAX_CHARS: a wall this size is a data dump, not something a person
+  // reads, and colouring it would cost far more than it returns.
+  const huge = "x = 1;\n".repeat(15_000); // > 100 KB and > 5000 lines
+  const hugeContainer = render("```js\n" + huge + "```\n");
+  await settle();
+  assert.equal(tokenSpans(hugeContainer).length, 0, "an oversized block stays plain");
+  assert.equal(
+    walk(hugeContainer, (node) => node.tagName === "CODE")[0].textContent,
+    huge.trimEnd(),
+    "and keeps every character of it",
+  );
+
+  const tallButSmall = "a\n".repeat(6_000); // under the byte bound, over the line bound
+  const tallContainer = render("```python\n" + tallButSmall + "```\n");
+  await settle();
+  assert.equal(tokenSpans(tallContainer).length, 0, "the line bound applies on its own");
+}
+
 await testMissingBridge();
 await testAuthenticatedCacheRead();
 await testUnauthenticatedLogin();
@@ -6828,6 +7219,9 @@ await testModesParseFailureNamesTheSkew();
 await testLocalAccountRowHiddenWithoutLocalRoute();
 await testSignedOutWithoutLocalRouteStaysGated();
 await testAssistantMarkdownIsRenderedAsElements();
+await testAppearanceIsThreeStateAndPersisted();
+await testCodeTokenizerClassifiesTheLanguagesWeShip();
+await testCodeBlocksArePaintedWithoutMarkup();
 await testRetrievedContextIsShownAndResetPerTurn();
 await testShimValidatesRetrievalPayloads();
 await testShimDropsMalformedApprovalAndReasoningFrames();

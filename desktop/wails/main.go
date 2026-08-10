@@ -32,12 +32,21 @@ import (
 
 	"server/desktop"
 	"server/desktop/buildinfo"
+	renderer "workmax/desktop/renderer"
 )
 
-// RendererDirEnv points at the bundled renderer to serve into the webview.
-// Empty → derived from the executable location (packaged) or the repo layout
-// (dev). Only ever a directory we ship; the webview is never pointed at a
-// remote origin.
+// RendererDirEnv overrides the embedded renderer with a directory on disk.
+//
+// Empty — every packaged launch, and any `go run` — serves the copy compiled
+// into this binary (see the renderer package). Set, which is what dev.sh does,
+// serves that directory instead so an edit to renderer.js shows up on the next
+// relaunch without a rebuild. Only ever a directory; the webview is never
+// pointed at a remote origin.
+//
+// The override is not a security hole in a packaged app: setting an
+// environment variable for a process already means being able to replace its
+// files. What embedding buys is that the DEFAULT path no longer reads code from
+// a writable directory.
 const RendererDirEnv = "WORKMAX_DESKTOP_RENDERER_DIR"
 
 // ResourcesDirEnv points at the packaged native assets (ONNX Runtime shared
@@ -125,25 +134,23 @@ func runDesktop(boot *desktop.Boot) {
 		}
 	}()
 
-	rendererDir, err := resolveRendererDir()
+	rendererFS, rendererSource, err := resolveRendererFS()
 	if err != nil {
 		shutdownBoot(boot)
 		log.Fatalf("resolve renderer: %v", err)
 	}
-	log.Printf("renderer: %s", rendererDir)
+	log.Printf("renderer: %s", rendererSource)
 
 	// The webview lives in a real loopback origin that serves the bundled
 	// renderer and proxies the sidecar under /api/. Measured rationale in
 	// uiserver.go; the short version is that neither a cross-origin fetch nor
 	// the wails:// asset scheme can carry a chat request.
 	//
-	// W4 swaps os.DirFS for an embed.FS so the "only files we ship" guarantee
-	// survives packaging — a directory can be tampered with after install.
 	// The opener is wired after the app exists, since it is the Wails app that
 	// owns the browser manager. Until then external links are refused, which
 	// is the right answer for the fraction of a second before the window is up.
 	var openExternal externalURLOpener = func(string) error { return fmt.Errorf("app not ready") }
-	ui, err := newUIServer(os.DirFS(rendererDir), boot.Port(), boot.LocalToken,
+	ui, err := newUIServer(rendererFS, boot.Port(), boot.LocalToken,
 		func(target string) error { return openExternal(target) })
 	if err != nil {
 		shutdownBoot(boot)
@@ -184,6 +191,20 @@ func runDesktop(boot *desktop.Boot) {
 		OnShutdown: func() { shutdownBoot(boot) },
 	})
 
+	// BackgroundColour is deliberately left at its zero value, and the app's
+	// in-window appearance switch (renderer.js, data-theme) does not sync it.
+	//
+	// Wails does expose WebviewWindow.SetBackgroundColour at runtime, but the
+	// only caller who knows the theme changed is the page, and the page has no
+	// way to tell Go: the Wails JS runtime posts to location.origin +
+	// "/wails/runtime", which on our loopback UI origin is our own server, not
+	// the Wails app (§0.5.11, the same reason there is no bound service). Wiring
+	// it would mean a new renderer-reachable route on the UI server — a new
+	// surface, and a boundary-manifest entry, to tint a strip of window that is
+	// only visible while resizing. The page paints its own background from the
+	// same token the theme switches, so what a reader actually looks at is
+	// already correct; what is left is the native chrome during a resize, and
+	// color-scheme in styles.css covers the parts of that macOS honours.
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:   "main",
 		Title:  "WorkMax",
@@ -223,33 +244,28 @@ func devToolsRequested() bool { return os.Getenv(DevToolsEnv) == "1" }
 // runtime posts calls to location.origin + "/wails/runtime", which is our own
 // UI server. See ProjectDocs/wails-migration-evaluation-2026-08.md §0.5.11.
 
-// resolveRendererDir finds the bundled renderer. Packaged builds keep it in
-// Contents/Resources; a dev run finds it in the repo. Both are directories we
-// produced — there is deliberately no way to point this at a URL.
-func resolveRendererDir() (string, error) {
+// resolveRendererFS returns the renderer to serve, plus a one-line description
+// of where it came from for the launch log. The default is the copy embedded in
+// this binary; RendererDirEnv swaps in a directory, which is the dev loop.
+//
+// There is deliberately no probing of the filesystem any more. The old version
+// searched Contents/Resources, then the directory beside the executable, then
+// the repo — three implicit answers to "which renderer is running", each of
+// which could be wrong in a way nobody would notice. Now there are two, and one
+// of them has to be asked for by name.
+func resolveRendererFS() (fs.FS, string, error) {
 	if dir := os.Getenv(RendererDirEnv); dir != "" {
-		return dir, nil
-	}
-	candidates := []string{}
-	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		candidates = append(candidates,
-			// Packaged: Contents/MacOS/<exe> → Contents/Resources/renderer/...
-			filepath.Join(exeDir, "..", "Resources", "renderer", "en", "desktop"),
-			// go run / go build output sitting next to a renderer copy.
-			filepath.Join(exeDir, "renderer", "en", "desktop"),
-		)
-	}
-	if wd, err := os.Getwd(); err == nil {
-		// Dev: run from desktop/wails/ inside the repo.
-		candidates = append(candidates, filepath.Join(wd, "..", "renderer", "en", "desktop"))
-	}
-	for _, dir := range candidates {
-		if entry, err := os.Stat(filepath.Join(dir, "index.html")); err == nil && !entry.IsDir() {
-			return filepath.Clean(dir), nil
+		clean := filepath.Clean(dir)
+		if entry, err := os.Stat(filepath.Join(clean, "index.html")); err != nil || entry.IsDir() {
+			return nil, "", fmt.Errorf("%s=%s has no index.html", RendererDirEnv, clean)
 		}
+		return os.DirFS(clean), "on disk (" + RendererDirEnv + "): " + clean, nil
 	}
-	return "", fmt.Errorf("no bundled renderer found (set %s); looked in %v", RendererDirEnv, candidates)
+	embedded, err := renderer.FS()
+	if err != nil {
+		return nil, "", fmt.Errorf("embedded renderer: %w", err)
+	}
+	return embedded, "embedded in the binary", nil
 }
 
 // resolveResourcesDir locates the native assets for the local knowledge index.
@@ -339,16 +355,19 @@ func runKillCheck(boot *desktop.Boot, timeout time.Duration, verifyShim bool) {
 	entry := ""
 	if verifyShim {
 		// The whole point of this mode is that the files under test are the
-		// shipped ones, so serve the real renderer directory and add only the
-		// verification page beside it.
-		dir, err := resolveRendererDir()
+		// shipped ones, so serve the real renderer and add only the
+		// verification page beside it. Since the renderer is embedded, "the
+		// shipped ones" now means the bytes in this binary rather than whatever
+		// happens to be in a directory — which is a stronger claim than the
+		// mode used to be able to make.
+		base, source, err := resolveRendererFS()
 		if err != nil {
 			log.Printf("verify-shim: %v", err)
 			finishKillCheck(boot, 2)
 		}
-		log.Printf("verify-shim: serving real renderer from %s", dir)
+		log.Printf("verify-shim: serving real renderer %s", source)
 		assets = overlayFS{
-			base: os.DirFS(dir),
+			base: base,
 			extra: fstest.MapFS{
 				"verify.html": &fstest.MapFile{Data: []byte(verifyShimHTML)},
 				"verify.js":   &fstest.MapFile{Data: []byte(verifyShimJS)},
@@ -422,12 +441,12 @@ func runKillCheck(boot *desktop.Boot, timeout time.Duration, verifyShim bool) {
 // is altered to observe it — see verifyapp.go for why that constraint shapes
 // the whole check.
 func runVerifyApp(boot *desktop.Boot, wait time.Duration) {
-	rendererDir, err := resolveRendererDir()
+	rendererFS, rendererSource, err := resolveRendererFS()
 	if err != nil {
 		log.Printf("verify-app: %v", err)
 		finishKillCheck(boot, 2)
 	}
-	log.Printf("verify-app: serving the shipped renderer from %s", rendererDir)
+	log.Printf("verify-app: serving the shipped renderer %s", rendererSource)
 
 	capability, err := mintCapability()
 	if err != nil {
@@ -439,7 +458,7 @@ func runVerifyApp(boot *desktop.Boot, wait time.Duration) {
 	// launch a browser. The interception itself is checked in the behaviour
 	// suite, which can drive a click — see check-bundled-renderer-behavior.mjs.
 	refuse := func(string) error { return fmt.Errorf("verify-app does not open external links") }
-	handler := watchBoot(UIHandlerWithOpener(os.DirFS(rendererDir), capability, boot.Port(), boot.LocalToken, refuse), capability, watcher)
+	handler := watchBoot(UIHandlerWithOpener(rendererFS, capability, boot.Port(), boot.LocalToken, refuse), capability, watcher)
 	uiOrigin, stopUI, err := serveLoopback(handler)
 	if err != nil {
 		log.Printf("verify-app: ui listener: %v", err)

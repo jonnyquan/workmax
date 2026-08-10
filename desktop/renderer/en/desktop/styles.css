@@ -14,10 +14,30 @@
    6.9:1 on the background, which passes WCAG AA for body text, so it is safe
    for links and labels and not only for large headings. Amber requires a dark
    foreground — white on it lands near 2.2:1.
-   
-   The desktop follows the operating system rather than shipping its own
-   toggle: a native window that ignores the system appearance looks broken next
-   to every other window on the desktop.
+
+   Appearance is three-state: follow the system (the default, and still the
+   right default — a native window that ignores the system appearance looks
+   broken next to every other window on the desktop), or force light, or force
+   dark. The forcing half exists because "follow the system" is the wrong
+   answer for the reader who wants a dark editor on a light desktop, and that
+   reader had no way to say so.
+
+   The cascade below is what makes the three states resolve correctly, and the
+   order of the three blocks is load-bearing:
+
+     1. :root                                  — light, the base
+     2. @media dark :root:not([data-theme=light]) — dark, chosen by the system
+     3. :root[data-theme="dark"]               — dark, chosen in the app
+
+   The :not() guard in (2) is the whole trick: without it, "system says dark,
+   user chose light" would leave the dark tokens winning on specificity and the
+   user's choice would do nothing. (2) and (3) have equal specificity (0,2,0),
+   so (3) coming last is what lets "force dark" beat a light system.
+
+   (2) and (3) declare the SAME values, deliberately duplicated rather than
+   routed through a second layer of indirection — and
+   check-bundled-renderer-behavior.mjs asserts the two blocks are identical, so
+   the duplication is a checked invariant rather than a drift waiting to happen.
 */
 
 :root {
@@ -43,10 +63,25 @@
   --input: 40 14% 82%;
   --ring: 158 34% 27%;
   --radius: 0.5rem;
+  /* Syntax colours. Same HSL channel form as the rest, so a token can be used
+     at partial opacity without a second definition. Hues are picked from the
+     palette's own families (green for strings, the info teal for builtins)
+     rather than from a generic rainbow theme, so a code block reads as part of
+     this product and not as an embedded editor. */
+  --code-comment: 40 8% 48%;
+  --code-keyword: 292 35% 42%;
+  --code-string: 152 42% 30%;
+  --code-number: 24 65% 38%;
+  --code-function: 210 45% 38%;
+  --code-builtin: 185 38% 30%;
+  --code-punct: 40 8% 40%;
+  --code-tag: 350 45% 42%;
+  --code-attr: 24 55% 38%;
 }
 
+/* (2) dark because the system says so — unless the user forced light. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --background: 40 10% 8%;
     --foreground: 42 18% 92%;
     --card: 40 9% 11%;
@@ -66,14 +101,68 @@
     --border: 40 7% 20%;
     --input: 40 7% 20%;
     --ring: 150 36% 52%;
+    --code-comment: 42 8% 50%;
+    --code-keyword: 292 45% 72%;
+    --code-string: 150 36% 60%;
+    --code-number: 24 70% 66%;
+    --code-function: 205 60% 68%;
+    --code-builtin: 185 45% 62%;
+    --code-punct: 42 10% 62%;
+    --code-tag: 350 60% 70%;
+    --code-attr: 30 60% 66%;
   }
 }
 
+/* (3) dark because the user said so, whatever the system says. Must stay
+   byte-identical to (2) — the behaviour suite checks it. */
+:root[data-theme="dark"] {
+  --background: 40 10% 8%;
+  --foreground: 42 18% 92%;
+  --card: 40 9% 11%;
+  --card-foreground: 42 18% 92%;
+  --primary: 150 36% 52%;
+  --primary-foreground: 40 10% 8%;
+  --secondary: 40 8% 15%;
+  --secondary-foreground: 42 18% 92%;
+  --muted: 40 8% 15%;
+  --muted-foreground: 42 10% 62%;
+  --accent: 150 36% 52%;
+  --accent-foreground: 40 10% 8%;
+  --destructive: 0 72% 58%;
+  --success: 150 36% 52%;
+  --warning: 38 78% 58%;
+  --info: 185 38% 52%;
+  --border: 40 7% 20%;
+  --input: 40 7% 20%;
+  --ring: 150 36% 52%;
+  --code-comment: 42 8% 50%;
+  --code-keyword: 292 45% 72%;
+  --code-string: 150 36% 60%;
+  --code-number: 24 70% 66%;
+  --code-function: 205 60% 68%;
+  --code-builtin: 185 45% 62%;
+  --code-punct: 42 10% 62%;
+  --code-tag: 350 60% 70%;
+  --code-attr: 30 60% 66%;
+}
+
 :root {
-  color-scheme: dark;
+  /* Native widgets — form controls, scrollbar gutters, the flash of paper
+     behind a resizing window — follow the same three states. "light dark"
+     means "whichever the system picked"; the two overrides below pin it, so a
+     forced theme does not leave native chrome arguing with the page. */
+  color-scheme: light dark;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 * {
@@ -1877,6 +1966,47 @@ textarea:focus-visible {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
   letter-spacing: 0.03em;
+}
+
+/* Syntax tokens. Colour only — no weight or size changes, because a code block
+   whose lines shift as it is highlighted is worse than one that never was. The
+   classes are produced by the tokenizer in renderer.js; a language it does not
+   know simply leaves the text unclassified and inherits the block's colour. */
+.tok-comment {
+  color: hsl(var(--code-comment));
+  font-style: italic;
+}
+
+.tok-keyword {
+  color: hsl(var(--code-keyword));
+}
+
+.tok-string {
+  color: hsl(var(--code-string));
+}
+
+.tok-number {
+  color: hsl(var(--code-number));
+}
+
+.tok-function {
+  color: hsl(var(--code-function));
+}
+
+.tok-builtin {
+  color: hsl(var(--code-builtin));
+}
+
+.tok-punct {
+  color: hsl(var(--code-punct));
+}
+
+.tok-tag {
+  color: hsl(var(--code-tag));
+}
+
+.tok-attr {
+  color: hsl(var(--code-attr));
 }
 
 .message.partial .message-role::after {

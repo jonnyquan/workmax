@@ -2,7 +2,10 @@ module workmax/desktop/wails
 
 go 1.25.0
 
-require server v0.0.0
+require (
+	server v0.0.0
+	workmax/desktop/renderer v0.0.0
+)
 
 require github.com/jonnyquan/claude-agent-sdk-go v0.0.0-20260725181726-31b018f42ae4 // indirect
 
@@ -67,3 +70,5 @@ require (
 )
 
 replace server => ../../server
+
+replace workmax/desktop/renderer => ../renderer

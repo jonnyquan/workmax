@@ -18,10 +18,10 @@ for file in "$entry" "$css" "$js"; do
   fi
 done
 
-node - "$renderer_dir" <<'NODE'
+node - "$renderer_dir" "$REPO_ROOT/desktop/renderer/embed.go" <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
-const rendererDir = process.argv[2];
+const [rendererDir, embedPath] = process.argv.slice(2);
 // The bundled renderer is an allowlist, not a directory copy: an unexpected
 // file here would be shipped and served to the webview. shim.js and its
 // generated bridge library are the Wails shell's replacement for the Electron
@@ -61,44 +61,88 @@ if (unexpected.length > 0) {
   }
   process.exit(1);
 }
+
+// The same five files are named in four places (this allowlist, embed.go,
+// build-mac.sh, inspect-mac-package.sh). Two of them are now checked against
+// each other: embed.go decides what is compiled into the binary and therefore
+// what the app actually runs, so a file added here and forgotten there would
+// ship as a 404.
+const embedSource = fs.readFileSync(embedPath, "utf8");
+const embedded = new Set(
+  [...embedSource.matchAll(/^\/\/go:embed\s+en\/desktop\/(\S+)$/gmu)].map((m) => m[1])
+);
+const missingFromEmbed = [...allowed].filter((file) => !embedded.has(file));
+const missingFromAllowlist = [...embedded].filter((file) => !allowed.has(file));
+if (missingFromEmbed.length > 0 || missingFromAllowlist.length > 0) {
+  console.error(
+    "check-bundled-renderer.sh: renderer allowlist and desktop/renderer/embed.go disagree:"
+  );
+  for (const file of missingFromEmbed) console.error(`  allowed but not embedded: ${file}`);
+  for (const file of missingFromAllowlist) console.error(`  embedded but not allowed: ${file}`);
+  process.exit(1);
+}
 NODE
 
-node - "$entry" <<'NODE'
+# The Content-Security-Policy has exactly one source of truth: the response
+# header in desktop/wails/uiserver.go, set by the only server that ever serves
+# these files.
+#
+# There used to be a second one — a <meta http-equiv> in index.html, pinned
+# here — and the two had already drifted: the meta allowed
+# connect-src http://127.0.0.1:*, the header allows 'self'; the meta forbade
+# blob: images, the header permits them. What the webview enforced was the
+# intersection, which is to say a policy neither file states. So the meta is
+# gone, this check makes sure it stays gone, and the directive pinning moved to
+# the file that actually carries the policy.
+# Overridable for the same reason WORKMAX_BUNDLED_RENDERER_DIR is: so
+# check-bundled-renderer.test.sh can point the check at a deliberately broken
+# copy and prove it still fires. Nothing in the build path sets it.
+ui_server="${WORKMAX_UI_SERVER_SOURCE:-$REPO_ROOT/desktop/wails/uiserver.go}"
+node - "$entry" "$ui_server" <<'NODE'
 const fs = require("node:fs");
-const entry = process.argv[2];
-const html = fs.readFileSync(entry, "utf8");
-const metaMatch = html.match(/<meta\s+[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/i);
+const [entry, uiServerPath] = process.argv.slice(2);
 
 function fail(message) {
   console.error(`check-bundled-renderer.sh: ${message}`);
   process.exit(1);
 }
 
-if (!metaMatch) {
-  fail("index.html must declare a Content-Security-Policy");
-}
-const contentMatch =
-  metaMatch[0].match(/\bcontent="([^"]+)"/i) ||
-  metaMatch[0].match(/\bcontent='([^']+)'/i);
-if (!contentMatch) {
-  fail("Content-Security-Policy meta tag must include a content attribute");
+const html = fs.readFileSync(entry, "utf8");
+if (/<meta\s+[^>]*http-equiv=["']Content-Security-Policy["']/iu.test(html)) {
+  fail(
+    "index.html must NOT declare a Content-Security-Policy meta tag: the policy " +
+      "is the response header in desktop/wails/uiserver.go, and a second copy here " +
+      "is a policy nobody reads as a whole"
+  );
 }
 
+const uiServer = fs.readFileSync(uiServerPath, "utf8");
+const policyMatch = uiServer.match(
+  /const contentSecurityPolicy = ((?:"[^"]*"(?:\s*\+\s*)?)+)/u
+);
+if (!policyMatch) {
+  fail(`could not read contentSecurityPolicy from ${uiServerPath}`);
+}
+const policy = [...policyMatch[1].matchAll(/"([^"]*)"/gu)].map((m) => m[1]).join("");
+
 const expected = new Map([
-  ["default-src", "'self'"],
+  ["default-src", "'none'"],
   ["script-src", "'self'"],
   ["style-src", "'self'"],
-  ["img-src", "'self' data:"],
-  ["connect-src", "http://127.0.0.1:*"],
-  ["object-src", "'none'"],
-  ["base-uri", "'none'"],
+  ["img-src", "'self' data: blob:"],
+  ["font-src", "'self'"],
+  ["connect-src", "'self'"],
+  ["media-src", "'self' blob:"],
   ["form-action", "'none'"],
   ["frame-ancestors", "'none'"],
+  ["frame-src", "'none'"],
+  ["object-src", "'none'"],
+  ["base-uri", "'none'"],
 ]);
 
 const actual = new Map();
-for (const directive of contentMatch[1].split(";")) {
-  const trimmed = directive.trim().replace(/\s+/g, " ");
+for (const directive of policy.split(";")) {
+  const trimmed = directive.trim().replace(/\s+/gu, " ");
   if (!trimmed) continue;
   const [name, ...rest] = trimmed.split(" ");
   if (actual.has(name)) {

@@ -1,3 +1,79 @@
+// --- Appearance --------------------------------------------------------------
+//
+// Three states: follow the system (the default), force light, force dark. The
+// palette and the cascade that resolves the three live in styles.css; all this
+// code does is put the attribute the cascade keys on onto <html>.
+//
+// It runs at the top of this file, and this file is the last parser-blocking
+// script in <body>, so the attribute is set before the first paint — no flash
+// of the wrong theme. It cannot be an inline <script> in <head>, which is where
+// this normally goes: the shell's CSP grants no 'unsafe-inline' for scripts,
+// and that concession is not being reopened for a colour scheme.
+//
+// This is the renderer's only use of localStorage, and the reason it is the
+// right home for exactly this one thing: it is a device-local display
+// preference — worthless to an attacker, meaningless on another machine, and
+// needed synchronously on the first line of the first script, before any bridge
+// exists to ask the sidecar. Everything the app actually knows (threads,
+// accounts, drafts, tokens) stays in SQLite behind the sidecar or in memory, on
+// purpose, and none of it should follow this precedent.
+const THEME_STORAGE_KEY = "workmax.desktop.appearance";
+const THEME_CHOICES = ["system", "light", "dark"];
+const THEME_LABELS = {
+  system: "match system",
+  light: "light",
+  dark: "dark",
+};
+const THEME_HINTS = {
+  system: "Follow the desktop appearance",
+  light: "Always light, whatever the system does",
+  dark: "Always dark, whatever the system does",
+};
+let themeChoice = "system";
+
+// Absent in the behaviour suite's bare VM, and a locked-down webview can throw
+// on the property itself rather than return null. Either way the app runs; it
+// just forgets the choice between launches.
+function themeStore() {
+  try {
+    const store = globalThis.localStorage;
+    return store && typeof store.getItem === "function" ? store : null;
+  } catch {
+    return null;
+  }
+}
+
+function readStoredTheme() {
+  try {
+    const stored = themeStore()?.getItem(THEME_STORAGE_KEY);
+    return THEME_CHOICES.includes(stored) ? stored : "system";
+  } catch {
+    return "system";
+  }
+}
+
+function applyTheme(choice) {
+  themeChoice = THEME_CHOICES.includes(choice) ? choice : "system";
+  const root = document.documentElement;
+  if (!root) return;
+  // "system" removes the attribute rather than writing data-theme="system":
+  // the media query already IS the system answer, and an attribute meaning "no
+  // opinion" would have to be excluded by hand from every guard in the cascade.
+  if (themeChoice === "system") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", themeChoice);
+}
+
+function setTheme(choice) {
+  applyTheme(choice);
+  try {
+    themeStore()?.setItem(THEME_STORAGE_KEY, themeChoice);
+  } catch {
+    // A full or locked store must not take the window down over a colour.
+  }
+}
+
+applyTheme(readStoredTheme());
+
 const state = {
   auth: null,
   threads: [],
@@ -2281,7 +2357,10 @@ function buildCodeBlock(code, language) {
     // list that would go stale.
     node.className = `language-${language.toLowerCase()}`;
   }
+  // Plain text first, always. Highlighting is a later, optional improvement on
+  // something already readable — see scheduleCodeHighlight.
   node.textContent = code;
+  scheduleCodeHighlight(node, code, language);
   pre.appendChild(node);
 
   // A code block the user cannot get out of the window is a screenshot of
@@ -2311,6 +2390,402 @@ function buildCodeBlock(code, language) {
   if (copy) head.appendChild(copy);
   wrap.append(head, pre);
   return wrap;
+}
+
+// --- Syntax highlighting -----------------------------------------------------
+//
+// Self-contained on purpose. Every off-the-shelf highlighter is either a
+// megabyte of grammars or wants to hand back HTML, and both are the wrong
+// shape here: the shell serves an allowlist of five renderer files under
+// script-src 'self', so a new dependency is a new shipped file to justify, and
+// anything returning markup would have to be written with innerHTML — the one
+// thing the whole Markdown renderer above exists to avoid. So: a scanner that
+// returns typed runs of TEXT, painted with createElement and createTextNode,
+// structurally unable to inject anything whatever the model wrote.
+//
+// It is a display aid, not a compiler. It does not track scope, does not parse
+// JS regex literals, and cannot tell a Python decorator from a matrix product.
+// Being wrong colours a word; being slow or unsafe would cost much more.
+//
+// Coverage is what a coding agent actually emits: js/ts, python, go, json,
+// sql, bash, html, css, markdown. Anything else keeps its plain text and its
+// language badge, which is already most of the value.
+
+// Bounds, in the same spirit as MARKDOWN_MAX_CHARS: past these a code block is
+// a data dump, not something anyone reads, and colouring it would cost far
+// more than it returns. Plain text is the honest fallback, not a failure.
+const CODE_HIGHLIGHT_MAX_CHARS = 100_000;
+const CODE_HIGHLIGHT_MAX_LINES = 5_000;
+// A hard ceiling on DOM nodes for one block. Minified or highly punctuated
+// input can produce a token per character; 6000 spans is already more than a
+// screen can show, and past it the block goes back to being one text node.
+const CODE_HIGHLIGHT_MAX_TOKENS = 6_000;
+
+// Highlighting waits for idle time. The block is on screen as plain text the
+// moment it is built — during a stream that is every few frames — and the
+// colouring lands afterwards, so a long answer never pays for typesetting on
+// the frame that shows it. requestIdleCallback is not everywhere (WebKit was
+// late to it), and the behaviour suite's VM has neither it nor rAF, so a
+// zero-delay timeout is the fallback: still after the current task, still
+// before the suite's next settle().
+const scheduleIdleWork =
+  typeof globalThis.requestIdleCallback === "function"
+    ? (callback) => {
+        globalThis.requestIdleCallback(callback, { timeout: 500 });
+      }
+    : (callback) => {
+        setTimeout(callback, 0);
+      };
+
+// Fence labels as people actually write them, mapped onto the grammars that
+// exist. An unknown label resolves to nothing and the block stays plain.
+const CODE_LANGUAGE_ALIASES = {
+  js: "js",
+  jsx: "js",
+  javascript: "js",
+  mjs: "js",
+  cjs: "js",
+  node: "js",
+  ts: "js",
+  tsx: "js",
+  typescript: "js",
+  py: "python",
+  py3: "python",
+  python: "python",
+  python3: "python",
+  go: "go",
+  golang: "go",
+  json: "json",
+  json5: "json",
+  jsonc: "json",
+  sql: "sql",
+  psql: "sql",
+  mysql: "sql",
+  sqlite: "sql",
+  sh: "bash",
+  bash: "bash",
+  zsh: "bash",
+  shell: "bash",
+  console: "bash",
+  html: "html",
+  xml: "html",
+  svg: "html",
+  vue: "html",
+  css: "css",
+  scss: "css",
+  less: "css",
+  md: "markdown",
+  markdown: "markdown",
+};
+
+// Sticky (`y`) so a rule can only match AT the cursor, never by searching
+// ahead: the scanner's whole correctness argument is that position advances by
+// exactly the text consumed. Unicode (`u`) for the same reason every other
+// regex in this file carries it — and it is why a backtick in a pattern is
+// written \x60 below: under `u` a backslash-backtick is an invalid escape.
+function codeRule(type, source, extraFlags = "") {
+  return { type, re: new RegExp(source, "yu" + extraFlags) };
+}
+
+// Fragments shared by the C-family grammars. Strings stop at a newline so an
+// unbalanced quote colours one line rather than swallowing the rest of the
+// file — the failure mode that makes naive highlighters look broken.
+const CODE_DQ_STRING = String.raw`"(?:\\.|[^"\\\n])*"`;
+const CODE_SQ_STRING = String.raw`'(?:\\.|[^'\\\n])*'`;
+const CODE_LINE_COMMENT_SLASH = String.raw`//[^\n]*`;
+const CODE_BLOCK_COMMENT = String.raw`/\*[\s\S]*?(?:\*/|$)`;
+const CODE_NUMBER = String.raw`0[xXbBoO][0-9a-fA-F_]+n?|\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d+)?n?`;
+const CODE_WORD = String.raw`[A-Za-z_$][A-Za-z0-9_$]*`;
+const CODE_PUNCT = String.raw`[{}()[\];,.:?=+\-*/%<>!&|^~@#]+`;
+
+function words(list) {
+  return new Set(list.split(" "));
+}
+
+// Each grammar is an ordered rule list plus, for languages that have them, the
+// word sets. Order matters: comments before punctuation, strings before
+// everything, so a `//` inside a string cannot start a comment.
+const CODE_GRAMMARS = {
+  js: {
+    rules: [
+      codeRule("comment", CODE_LINE_COMMENT_SLASH),
+      codeRule("comment", CODE_BLOCK_COMMENT),
+      codeRule("string", CODE_DQ_STRING),
+      codeRule("string", CODE_SQ_STRING),
+      codeRule("string", String.raw`\x60(?:\\.|[^\x60\\])*\x60`),
+      codeRule("number", CODE_NUMBER),
+      codeRule("word", CODE_WORD),
+      codeRule("punct", CODE_PUNCT),
+    ],
+    keywords: words(
+      "const let var function return if else for while do break continue new class extends " +
+        "super this typeof instanceof in of delete void null undefined true false async await " +
+        "yield try catch finally throw switch case default import export from as static get set " +
+        "debugger interface type enum implements private public protected readonly abstract " +
+        "declare namespace satisfies keyof infer"
+    ),
+    builtins: words(
+      "Math JSON Object Array String Number Boolean Promise Symbol Map Set WeakMap WeakSet " +
+        "Date RegExp Error TypeError document window globalThis fetch Headers URL " +
+        "string number boolean any unknown never void object"
+    ),
+  },
+  python: {
+    rules: [
+      codeRule("comment", String.raw`#[^\n]*`),
+      codeRule("string", String.raw`[rRbBuUfF]{0,2}"""[\s\S]*?(?:"""|$)`),
+      codeRule("string", String.raw`[rRbBuUfF]{0,2}'''[\s\S]*?(?:'''|$)`),
+      codeRule("string", String.raw`[rRbBuUfF]{0,2}` + CODE_DQ_STRING),
+      codeRule("string", String.raw`[rRbBuUfF]{0,2}` + CODE_SQ_STRING),
+      codeRule("number", CODE_NUMBER),
+      codeRule("word", CODE_WORD),
+      codeRule("punct", CODE_PUNCT),
+    ],
+    keywords: words(
+      "def class return if elif else for while break continue pass import from as with try " +
+        "except finally raise lambda yield global nonlocal assert del in is not and or None " +
+        "True False async await match case"
+    ),
+    builtins: words(
+      "print len range str int float list dict set tuple bool open enumerate zip map filter " +
+        "sum min max sorted type isinstance super self cls Exception ValueError TypeError"
+    ),
+  },
+  go: {
+    rules: [
+      codeRule("comment", CODE_LINE_COMMENT_SLASH),
+      codeRule("comment", CODE_BLOCK_COMMENT),
+      codeRule("string", String.raw`\x60[^\x60]*\x60`),
+      codeRule("string", CODE_DQ_STRING),
+      codeRule("string", CODE_SQ_STRING),
+      codeRule("number", CODE_NUMBER),
+      codeRule("word", CODE_WORD),
+      codeRule("punct", CODE_PUNCT),
+    ],
+    keywords: words(
+      "package import func var const type struct interface map chan go defer if else for range " +
+        "return switch case default break continue fallthrough goto select nil true false"
+    ),
+    builtins: words(
+      "string bool byte rune error int int8 int16 int32 int64 uint uint8 uint16 uint32 uint64 " +
+        "uintptr float32 float64 complex64 complex128 any len cap make new append copy delete " +
+        "panic recover close min max"
+    ),
+  },
+  json: {
+    rules: [
+      // A key is a string that a colon follows. Looking ahead is safe: the
+      // lookahead is not consumed, so the cursor still advances by the string.
+      codeRule("attr", String.raw`"(?:\\.|[^"\\])*"(?=\s*:)`),
+      codeRule("string", String.raw`"(?:\\.|[^"\\])*"`),
+      codeRule("number", String.raw`-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?`),
+      codeRule("word", String.raw`[A-Za-z_][A-Za-z0-9_]*`),
+      codeRule("punct", String.raw`[{}[\],:]`),
+    ],
+    keywords: words("true false null"),
+    builtins: new Set(),
+  },
+  sql: {
+    rules: [
+      codeRule("comment", String.raw`--[^\n]*`),
+      codeRule("comment", CODE_BLOCK_COMMENT),
+      // SQL escapes a quote by doubling it, not with a backslash.
+      codeRule("string", String.raw`'(?:''|[^'\n])*'`),
+      codeRule("attr", String.raw`"[^"\n]*"`),
+      codeRule("attr", String.raw`\x60[^\x60\n]*\x60`),
+      codeRule("number", String.raw`\d+(?:\.\d+)?`),
+      codeRule("word", String.raw`[A-Za-z_][A-Za-z0-9_]*`),
+      codeRule("punct", String.raw`[(),;.*=<>+\-/%|]+`),
+    ],
+    // SQL keywords are case-insensitive and people write them both ways.
+    foldWords: true,
+    keywords: words(
+      "SELECT FROM WHERE INSERT INTO VALUES UPDATE SET DELETE CREATE TABLE ALTER DROP INDEX " +
+        "VIEW JOIN LEFT RIGHT INNER OUTER FULL CROSS ON AS AND OR NOT NULL IS IN EXISTS BETWEEN " +
+        "LIKE GROUP BY ORDER HAVING LIMIT OFFSET UNION ALL DISTINCT CASE WHEN THEN ELSE END " +
+        "PRIMARY KEY FOREIGN REFERENCES DEFAULT UNIQUE CONSTRAINT WITH RETURNING ASC DESC " +
+        "BEGIN COMMIT ROLLBACK TRANSACTION IF CASCADE USING"
+    ),
+    builtins: words(
+      "COUNT SUM AVG MIN MAX COALESCE NULLIF CAST NOW DATE TIMESTAMP INTEGER TEXT VARCHAR " +
+        "BOOLEAN SERIAL BIGINT REAL BLOB JSON JSONB UUID"
+    ),
+  },
+  bash: {
+    rules: [
+      codeRule("comment", String.raw`#[^\n]*`),
+      codeRule("string", String.raw`"(?:\\.|[^"\\])*"`),
+      codeRule("string", String.raw`'[^']*'`),
+      codeRule("builtin", String.raw`\$\{[^}\n]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9@*#?$!]`),
+      codeRule("number", String.raw`\d+`),
+      codeRule("word", String.raw`[A-Za-z_][A-Za-z0-9_-]*`),
+      codeRule("punct", String.raw`[|&;()<>=]+`),
+    ],
+    keywords: words(
+      "if then else elif fi for while until do done case esac function in return exit local " +
+        "export set unset source declare readonly shift trap break continue eval exec"
+    ),
+    builtins: words(
+      "echo printf read cd ls cat grep sed awk cut sort uniq head tail find xargs cp mv rm " +
+        "mkdir rmdir touch chmod chown ln pwd which curl wget tar zip unzip git make go node " +
+        "npm pnpm yarn python python3 pip docker kubectl ssh scp sudo env test"
+    ),
+  },
+  html: {
+    rules: [
+      codeRule("comment", String.raw`<!--[\s\S]*?(?:-->|$)`),
+      codeRule("keyword", String.raw`<!DOCTYPE[^>\n]*>`, "i"),
+      codeRule("tag", String.raw`</?[A-Za-z][A-Za-z0-9:-]*`),
+      codeRule("string", String.raw`"[^"\n]*"`),
+      codeRule("string", String.raw`'[^'\n]*'`),
+      codeRule("attr", String.raw`[A-Za-z_:][A-Za-z0-9_:.-]*(?=\s*=)`),
+      codeRule("punct", String.raw`[<>/=]+`),
+    ],
+    keywords: new Set(),
+    builtins: new Set(),
+  },
+  css: {
+    rules: [
+      codeRule("comment", CODE_BLOCK_COMMENT),
+      codeRule("string", CODE_DQ_STRING),
+      codeRule("string", CODE_SQ_STRING),
+      codeRule("keyword", String.raw`@[A-Za-z-]+|!important`),
+      // A colour literal before the selector rule, so #fff is a colour and
+      // #main is an id.
+      codeRule("number", String.raw`#[0-9a-fA-F]{3,8}\b`),
+      codeRule("tag", String.raw`[.#][A-Za-z_-][A-Za-z0-9_-]*`),
+      codeRule("attr", String.raw`--[A-Za-z0-9_-]+|[A-Za-z-]+(?=\s*:)`),
+      codeRule(
+        "number",
+        String.raw`[+-]?(?:\d*\.)?\d+(?:px|em|rem|ex|ch|vh|vw|vmin|vmax|%|s|ms|deg|turn|fr|pt)?`
+      ),
+      codeRule("punct", String.raw`[{}();:,>+~*]+`),
+    ],
+    keywords: new Set(),
+    builtins: new Set(),
+  },
+  markdown: {
+    // No word rule: prose must stay prose. Only the marks are coloured.
+    rules: [
+      codeRule("comment", String.raw`^ {0,3}>[^\n]*`, "m"),
+      codeRule("keyword", String.raw`^ {0,3}#{1,6}[^\n]*`, "m"),
+      codeRule("punct", String.raw`^ {0,3}(?:[-*+]|\d{1,9}[.)])(?= )`, "m"),
+      codeRule("string", String.raw`\x60{1,3}[^\x60\n]+\x60{1,3}`),
+      codeRule("function", String.raw`!?\[[^\]\n]*\]\([^)\n]*\)`),
+      codeRule("tag", String.raw`\*\*[^*\n]+\*\*|__[^_\n]+__`),
+      codeRule("tag", String.raw`\*[^*\n]+\*|_[^_\n]+_`),
+    ],
+    keywords: new Set(),
+    builtins: new Set(),
+  },
+};
+
+function codeGrammarFor(language) {
+  if (typeof language !== "string" || language === "") return null;
+  const key = CODE_LANGUAGE_ALIASES[language.toLowerCase()];
+  return key ? CODE_GRAMMARS[key] : null;
+}
+
+// True when the identifier at `after` is being called. The cheapest signal that
+// separates a function name from a variable, and the only structure this
+// scanner attempts.
+function isCodeCallSite(code, after) {
+  let index = after;
+  while (index < code.length && (code[index] === " " || code[index] === "\t")) index += 1;
+  return code[index] === "(";
+}
+
+// Returns runs of { type, text } covering `code` exactly — concatenating the
+// texts reproduces the input character for character, which is what lets the
+// painted block still be selected and copied as the code it is. Returns null
+// when the language is unknown or the block blew a bound, which the caller
+// reads as "leave it plain".
+function tokenizeCode(code, language) {
+  const grammar = codeGrammarFor(language);
+  if (!grammar) return null;
+
+  const tokens = [];
+  let plain = "";
+  const flushPlain = () => {
+    if (plain !== "") {
+      tokens.push({ type: "", text: plain });
+      plain = "";
+    }
+  };
+
+  let index = 0;
+  while (index < code.length) {
+    let match = null;
+    for (const rule of grammar.rules) {
+      rule.re.lastIndex = index;
+      const found = rule.re.exec(code);
+      if (found && found[0].length > 0) {
+        match = { type: rule.type, text: found[0] };
+        break;
+      }
+    }
+    if (!match) {
+      // Nothing claims this character — whitespace, an operator no grammar
+      // lists, a CJK identifier. It joins the running plain run.
+      plain += code[index];
+      index += 1;
+      continue;
+    }
+    if (match.type === "word") {
+      const word = grammar.foldWords ? match.text.toUpperCase() : match.text;
+      if (grammar.keywords.has(word)) match.type = "keyword";
+      else if (grammar.builtins.has(word)) match.type = "builtin";
+      else if (isCodeCallSite(code, index + match.text.length)) match.type = "function";
+      else match.type = "";
+    }
+    if (match.type === "") {
+      plain += match.text;
+    } else {
+      flushPlain();
+      tokens.push(match);
+    }
+    index += match.text.length;
+    if (tokens.length > CODE_HIGHLIGHT_MAX_TOKENS) return null;
+  }
+  flushPlain();
+  return tokens;
+}
+
+// Text nodes for the unclassified runs, one span per classified run. No
+// innerHTML, no string concatenation into markup — the same structural
+// argument the Markdown renderer above rests on.
+function paintCodeTokens(node, tokens) {
+  node.textContent = "";
+  for (const token of tokens) {
+    if (token.type === "") {
+      node.appendChild(document.createTextNode(token.text));
+      continue;
+    }
+    const span = document.createElement("span");
+    span.className = `tok-${token.type}`;
+    span.textContent = token.text;
+    node.appendChild(span);
+  }
+}
+
+function scheduleCodeHighlight(node, code, language) {
+  if (!codeGrammarFor(language)) return;
+  if (code.length > CODE_HIGHLIGHT_MAX_CHARS) return;
+  // Counted rather than split: a 100 KB block should not be copied into an
+  // array just to be rejected.
+  let lines = 1;
+  for (let index = 0; index < code.length; index += 1) {
+    if (code[index] === "\n") lines += 1;
+    if (lines > CODE_HIGHLIGHT_MAX_LINES) return;
+  }
+  scheduleIdleWork(() => {
+    const tokens = tokenizeCode(code, language);
+    // A block committed mid-stream is already on screen; this replaces its one
+    // text node with the coloured runs. The turn it belongs to may since have
+    // been superseded, in which case the node is detached and this paints
+    // something nobody sees — cheap, and cheaper than tracking ownership.
+    if (tokens) paintCodeTokens(node, tokens);
+  });
 }
 
 // Inline scanning. Written as a scanner rather than a chain of replacements
@@ -6338,6 +6813,19 @@ function quickSwitcherCommands(query) {
     hint: "Local route, protocol, API key",
     run: () => void openModelSettings(),
   });
+  // Appearance. Three named entries rather than one cycling toggle: a toggle
+  // that walks system → light → dark never tells you where it will land, and
+  // the palette is the one place in the app where you say what you want rather
+  // than press until it looks right. The active one says so instead of being
+  // hidden — a list that silently drops the current state reads as a bug.
+  for (const choice of THEME_CHOICES) {
+    commands.push({
+      kind: "command",
+      label: `Appearance: ${THEME_LABELS[choice]}`,
+      hint: choice === themeChoice ? "Current" : THEME_HINTS[choice],
+      run: () => setTheme(choice),
+    });
+  }
   if (!query) return commands;
   return commands.filter((command) => command.label.toLowerCase().includes(query));
 }
