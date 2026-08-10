@@ -307,7 +307,7 @@ func (e *Engine) assemblePrompt(ctx context.Context, req cloudproxy.ChatRequest,
 			log.Printf("knowledge: retrieve for turn %s: %v", req.TurnUUID, rerr)
 		} else if len(found) > 0 {
 			var used []localinference.RetrievedSource
-			userText, used = localinference.PrependKnowledgeContext(req.UserText, found)
+			userText, used = localinference.AttachKnowledgeContext(req.UserText, found)
 			localinference.EmitRetrievalEvent(dst, used)
 		}
 	}

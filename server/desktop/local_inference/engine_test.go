@@ -338,29 +338,30 @@ func TestEngine_AnnouncesRetrievedSources(t *testing.T) {
 }
 
 // A source dropped by the char budget must not be announced: the panel would
-// credit a document the model never saw.
-//
-// (Assertion updated with the rune-budget fix: the accounting now charges each
-// entry its real written size — text runes + 3 for "- " and "\n" — so the
-// largest chunk that fits exactly is budget-3 runes, not budget runes.)
-func TestPrependKnowledgeContextReportsOnlyWhatFitted(t *testing.T) {
-	big := strings.Repeat("x", maxRetrievalContextChars-3)
-	text, used := PrependKnowledgeContext("question", []RetrievedSource{
-		{Kind: "file", Label: "kept.md", Text: big},
-		{Kind: "file", Label: "dropped.md", Text: "this one is over budget"},
+// credit a document the model never saw. And the drop must be *stated* — a
+// model told to weigh evidence and handed a silently truncated subset of it
+// answers confidently from a third of the picture.
+func TestAttachKnowledgeContextReportsOnlyWhatFitted(t *testing.T) {
+	big := strings.Repeat("x", maxRetrievalContextChars-80)
+	text, used := AttachKnowledgeContext("question", []RetrievedSource{
+		{Kind: "file", Label: "kept.md", Text: big, Score: 0.7},
+		{Kind: "file", Label: "dropped.md", Text: strings.Repeat("y", 200), Score: 0.5},
 	})
 	if len(used) != 1 || used[0].Label != "kept.md" {
 		t.Fatalf("reported sources = %+v, want only kept.md", used)
 	}
-	if strings.Contains(text, "this one is over budget") {
+	if strings.Contains(text, strings.Repeat("y", 200)) {
 		t.Error("the dropped chunk reached the model after all")
+	}
+	if !strings.Contains(text, "另有 1 条") {
+		t.Errorf("the block does not declare what it omitted:\n%s", text[len(text)-300:])
 	}
 }
 
-// Every candidate blank or over budget means no context was added. Returning
-// the preamble with an empty list would tell the model it had sources.
-func TestPrependKnowledgeContextLeavesPromptAloneWhenNothingFits(t *testing.T) {
-	text, used := PrependKnowledgeContext("question", []RetrievedSource{
+// Every candidate blank or over budget means no context was added. Emitting an
+// empty block would tell the model it had been given sources.
+func TestAttachKnowledgeContextLeavesPromptAloneWhenNothingFits(t *testing.T) {
+	text, used := AttachKnowledgeContext("question", []RetrievedSource{
 		{Kind: "file", Label: "blank.md", Text: "   "},
 	})
 	if used != nil {
@@ -368,6 +369,54 @@ func TestPrependKnowledgeContextLeavesPromptAloneWhenNothingFits(t *testing.T) {
 	}
 	if text != "question" {
 		t.Errorf("prompt = %q, want it untouched", text)
+	}
+	if strings.Contains(text, memoryRecallOpen) {
+		t.Error("an empty recall block was emitted")
+	}
+}
+
+// The shape of the injection is the point of the change: the user's request
+// leads, the recalled material follows inside a delimited block that names
+// itself as low-authority, and every entry carries where it came from and how
+// good a match it was.
+func TestAttachKnowledgeContext_LowAuthorityBlockAfterTheUserTurn(t *testing.T) {
+	const question = "这一轮我要改的是导出功能"
+	text, used := AttachKnowledgeContext(question, []RetrievedSource{
+		{Kind: "file", Label: "q3-plan.md", Text: "营收增长了百分之十二", Score: 0.71},
+		{Kind: "conversation", Label: "Earlier conversation", Text: "we decided to ship on Friday", Score: 0.34},
+	})
+	if len(used) != 2 {
+		t.Fatalf("injected %d sources, want 2", len(used))
+	}
+
+	// The user's own words come first, verbatim and unwrapped.
+	if !strings.HasPrefix(text, question) {
+		t.Fatalf("the prompt no longer starts with the user's request:\n%s", text)
+	}
+	open := strings.Index(text, memoryRecallOpen)
+	if open < len(question) {
+		t.Fatalf("the recall block is not after the user turn (index %d):\n%s", open, text)
+	}
+	if !strings.HasSuffix(text, memoryRecallClose) {
+		t.Errorf("the recall block is not closed:\n%s", text)
+	}
+
+	// It says what it is, and what it is not allowed to do.
+	block := text[open:]
+	for _, phrase := range []string{"低权威", "可能已过时", "不得覆盖"} {
+		if !strings.Contains(block, phrase) {
+			t.Errorf("the block does not say %q; without it the model has no reason to rank it below the request", phrase)
+		}
+	}
+
+	// Every entry carries provenance and a score.
+	for _, want := range []string{"q3-plan.md", "文件", "0.71", "Earlier conversation", "对话", "0.34"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("entry metadata %q missing from the block:\n%s", want, block)
+		}
+	}
+	if strings.Contains(text[:open], "营收增长了百分之十二") {
+		t.Error("recalled text leaked above the user's request")
 	}
 }
 
@@ -1096,12 +1145,12 @@ func TestEngine_OpenAI_IdleUpstreamIsCutRetryable(t *testing.T) {
 // not UTF-8 bytes — Chinese text used to get a third of the capacity. And an
 // oversized chunk is skipped (continue), not a stopping point (break): it
 // must not evict smaller candidates ranked behind it.
-func TestPrependKnowledgeContext_RunesNotBytesAndSkipsOversized(t *testing.T) {
+func TestAttachKnowledgeContext_RunesNotBytesAndSkipsOversized(t *testing.T) {
 	chinese := strings.Repeat("知", 600)                        // 1800 bytes, 600 runes: fits ONLY under rune counting
 	oversized := strings.Repeat("大", maxRetrievalContextChars) // over budget on its own
 	tail := "结尾小块"
 
-	text, used := PrependKnowledgeContext("问题", []RetrievedSource{
+	text, used := AttachKnowledgeContext("问题", []RetrievedSource{
 		{Kind: "file", Label: "cn.md", Text: chinese},
 		{Kind: "file", Label: "huge.md", Text: oversized},
 		{Kind: "file", Label: "tail.md", Text: tail},

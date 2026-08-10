@@ -547,8 +547,15 @@ func TestIndexer_Retrieve_RealEmbedder(t *testing.T) {
 	if chunks[0].Score <= 0 || chunks[0].Score > 1 {
 		t.Errorf("score = %v, want a similarity in (0,1]", chunks[0].Score)
 	}
-	if len(chunks) > 1 && chunks[1].Score > chunks[0].Score {
-		t.Errorf("scores not ordered best-first: %v then %v", chunks[0].Score, chunks[1].Score)
+	// Deliberately not asserted: that scores descend. Results are ordered by
+	// reciprocal-rank fusion across the vector and lexical retrievers, so a
+	// chunk both of them found can lead one the vector half scored higher.
+	// Every score is still a real cosine similarity — asserted above — it is
+	// just no longer the sort key.
+	for n, c := range chunks {
+		if c.Kind == "" || c.Label == "" {
+			t.Errorf("chunk %d reached the caller without provenance: %+v", n, c)
+		}
 	}
 }
 

@@ -109,6 +109,21 @@ type diagnosticsResponse struct {
 	MessagesSync  diagnosticsMessagesBlock `json:"messages_sync"`
 	NetworkState  diagnosticsNetworkBlock  `json:"network_state"`
 	Auth          diagnosticsAuthBlock     `json:"auth"`
+	Knowledge     map[string]any           `json:"knowledge,omitempty"`
+}
+
+// knowledgeDiagnostics is the optional capability a wired RAG stack exposes:
+// aggregate retrieval counters, as a plain map so this package never names a
+// type from the cgo-only knowledge package. Absent on a build without RAG,
+// which is why the field is omitempty rather than a block with a
+// `configured` flag like its neighbours.
+//
+// The contract with the implementation is that everything in the map is a
+// count or a boolean. No query text, no chunk text, no file names — a support
+// transcript containing this endpoint's output must not narrow down what the
+// user asked.
+type knowledgeDiagnostics interface {
+	RetrievalDiagnostics() map[string]any
 }
 
 type diagnosticsSidecar struct {
@@ -212,6 +227,10 @@ func (s *Server) handleDiagnostics(c *gin.Context) {
 
 	if s.cfg.TokenStore != nil {
 		resp.Auth = s.probeAuthDiagnostics()
+	}
+
+	if kd, ok := s.cfg.KnowledgeIndex.(knowledgeDiagnostics); ok && kd != nil {
+		resp.Knowledge = kd.RetrievalDiagnostics()
 	}
 
 	c.JSON(http.StatusOK, resp)

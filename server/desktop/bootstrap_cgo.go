@@ -258,6 +258,14 @@ func (l *lazyKnowledge) Retrieve(ctx context.Context, uid uint64, query string, 
 		return nil, errKnowledgeClosed
 	}
 	defer l.end()
+	// Checked before load(), not only inside the retriever. The experiment
+	// switch is meant to answer "is retrieval worth it", and a control arm that
+	// still pays 223MB and a fifth of a second to load a model it will never
+	// query would be measuring the wrong thing.
+	if knowledge.RetrievalDisabled() {
+		knowledge.NoteRetrievalDisabled(query)
+		return nil, nil
+	}
 	if err := l.load(); err != nil {
 		return nil, err
 	}
@@ -275,6 +283,42 @@ func (l *lazyKnowledge) Retrieve(ctx context.Context, uid uint64, query string, 
 		})
 	}
 	return out, nil
+}
+
+// RetrievalDiagnostics reports the process's retrieval counters for
+// /system/diagnostics.
+//
+// It returns a plain map rather than a typed struct so the non-cgo desktop
+// package never has to name a type from the cgo knowledge package; the
+// diagnostics handler discovers this method by interface assertion and omits
+// the block entirely on a build where RAG does not exist.
+//
+// Everything in here is aggregate and content-free. Nothing in this map can be
+// inverted into a query, a chunk, a file name or a count precise enough to
+// fingerprint one — see the privacy note in knowledge/telemetry.go, which any
+// future addition here has to satisfy too.
+func (l *lazyKnowledge) RetrievalDiagnostics() map[string]any {
+	s := knowledge.RetrievalTelemetrySnapshot()
+	buckets := make([]int64, len(s.TopScoreBuckets))
+	copy(buckets, s.TopScoreBuckets[:])
+	return map[string]any{
+		"experiment_no_rag":     knowledge.RetrievalDisabled(),
+		"lexical_index":         l.store.FTSAvailable(),
+		"calls":                 s.Calls,
+		"disabled":              s.Disabled,
+		"suppressed":            s.Suppressed,
+		"searched":              s.Searched,
+		"errors":                s.Errors,
+		"empty":                 s.Empty,
+		"vector_candidates":     s.VectorCandidates,
+		"vector_kept":           s.VectorKept,
+		"lexical_candidates":    s.LexicalCandidates,
+		"lexical_kept":          s.LexicalKept,
+		"lexical_only_injected": s.LexicalOnlyInjected,
+		"lexical_unavailable":   s.LexicalUnavailable,
+		"injected":              s.Injected,
+		"top_score_buckets":     buckets,
+	}
 }
 
 // Close stops accepting work, waits for what is already running, and only then

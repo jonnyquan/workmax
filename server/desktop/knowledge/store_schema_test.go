@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -185,7 +186,7 @@ func TestStoreRebuildsOnVersionMismatch(t *testing.T) {
 		`SELECT value FROM _local_meta WHERE key = ?`, metaKeyVecSchemaVersion).Scan(&stored); err != nil {
 		t.Fatalf("read version back: %v", err)
 	}
-	if stored != "2" {
+	if stored != strconv.Itoa(vecSchemaVersion) {
 		t.Errorf("stored version = %q, want the current one", stored)
 	}
 }
@@ -203,11 +204,20 @@ func TestStoreSelfCheckLeavesNothingBehind(t *testing.T) {
 
 	var probes int
 	if err := sqlDB.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'w_desktop_knowledge_selfcheck%'`).Scan(&probes); err != nil {
+		`SELECT COUNT(*) FROM sqlite_master WHERE name LIKE '%selfcheck%'`).Scan(&probes); err != nil {
 		t.Fatalf("scan for probe leftovers: %v", err)
 	}
 	if probes != 0 {
 		t.Errorf("%d self-check tables were left in the user's database", probes)
+	}
+
+	// The lexical half has to have actually been probed, not skipped: a
+	// self-check that silently does nothing is worse than no self-check.
+	if !store.FTSAvailable() {
+		t.Error("the lexical self-check disabled the index it was meant to verify")
+	}
+	if hits, err := store.SearchLexical(ctx, 1, "薪资", 10); err != nil || len(hits) != 0 {
+		t.Errorf("SearchLexical = (%d hits, %v); self-check rows leaked into the real index", len(hits), err)
 	}
 
 	// And no probe rows leaked into the real table under any identity.

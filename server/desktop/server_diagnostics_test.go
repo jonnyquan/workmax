@@ -324,3 +324,71 @@ func waitForSyncLastError(t *testing.T, worker *desktopsync.SyncWorker) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// The retrieval block is optional by design: it appears only when the wired
+// KnowledgeIndex can report counters, so a CGO_ENABLED=0 sidecar (no RAG at
+// all) returns the same response shape minus one key rather than a block of
+// zeros that reads as "retrieval ran and found nothing".
+func TestHandleDiagnostics_KnowledgeBlockIsOptionalAndContentFree(t *testing.T) {
+	body := func(t *testing.T, cfg ServerConfig) map[string]any {
+		t.Helper()
+		cfg.SidecarVersion = "test-0.1.0-p1-ea"
+		cfg.LocalToken = "tok"
+		srv, err := NewServer(cfg)
+		if err != nil {
+			t.Fatalf("new server: %v", err)
+		}
+		go func() { _ = srv.Serve() }()
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = srv.Shutdown(ctx)
+		})
+		req, _ := http.NewRequest(http.MethodGet, "http://"+srv.listener.Addr().String()+"/system/diagnostics", nil)
+		req.Header.Set("X-Local-Token", "tok")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var got map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return got
+	}
+
+	withoutRAG := body(t, ServerConfig{DB: openHistoryTestDB(t)})
+	if _, ok := withoutRAG["knowledge"]; ok {
+		t.Error("a sidecar without RAG reported a knowledge block")
+	}
+
+	withRAG := body(t, ServerConfig{DB: openHistoryTestDB(t), KnowledgeIndex: countingKnowledgeIndex{}})
+	block, ok := withRAG["knowledge"].(map[string]any)
+	if !ok {
+		t.Fatalf("knowledge block missing or not an object: %#v", withRAG["knowledge"])
+	}
+	if block["calls"] != float64(7) {
+		t.Errorf("knowledge.calls = %v, want the reported 7", block["calls"])
+	}
+	// Every value has to be a count or a flag. A string here would be the
+	// first step towards a query or a file name reaching a support transcript.
+	for k, v := range block {
+		switch v.(type) {
+		case float64, bool, []any:
+		default:
+			t.Errorf("knowledge.%s is %T; the block must carry only counts and flags", k, v)
+		}
+	}
+}
+
+// countingKnowledgeIndex is a KnowledgeIndex that also reports diagnostics,
+// standing in for the lazy RAG wiring without dragging cgo into this test.
+type countingKnowledgeIndex struct{}
+
+func (countingKnowledgeIndex) IndexFile(context.Context, uint64, int64) error  { return nil }
+func (countingKnowledgeIndex) RemoveFile(context.Context, int64) (int, error)  { return 0, nil }
+func (countingKnowledgeIndex) RemoveTurn(context.Context, string) (int, error) { return 0, nil }
+func (countingKnowledgeIndex) RetrievalDiagnostics() map[string]any {
+	return map[string]any{"calls": int64(7), "suppressed": int64(2), "lexical_index": true}
+}
