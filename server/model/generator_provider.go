@@ -68,6 +68,10 @@ const (
 	MediaTypeImage = "image"
 	MediaTypeVideo = "video"
 	MediaTypeAudio = "audio"
+	// MediaTypeText labels the conversation models in w_global_model. They are
+	// catalog metadata only — routing for a chat turn stays in the Agent
+	// handler, not in w_generator_provider.
+	MediaTypeText = "text"
 )
 
 // GeneratorProviderExtraConfig 扩展配置结构

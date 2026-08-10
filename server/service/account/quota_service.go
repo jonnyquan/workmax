@@ -30,13 +30,5 @@ func (s *QuotaService) IsPremiumMember(uid int) (bool, error) {
 		return false, err
 	}
 
-	if user.Member <= model.MEMBER_SUBSCRIPTION_FREE {
-		return false, nil
-	}
-
-	if !user.MemberEndTime.IsZero() && user.MemberEndTime.Before(time.Now()) {
-		return false, nil
-	}
-
-	return true, nil
+	return model.IsActivePaidMember(user.Member, user.MemberEndTime, time.Now()), nil
 }

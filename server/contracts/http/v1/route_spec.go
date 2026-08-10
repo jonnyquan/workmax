@@ -62,9 +62,15 @@ const (
 	CredentialDesktopLoginBootstrap   CredentialPolicy = "desktop-login-bootstrap"
 	CredentialDesktopLoginTransaction CredentialPolicy = "desktop-login-transaction"
 	CredentialAgentResource           CredentialPolicy = "agent-resource"
-	CredentialProviderSignature       CredentialPolicy = "provider-signature"
-	CredentialMonitorToken            CredentialPolicy = "monitor-token"
-	CredentialAdminSession            CredentialPolicy = "admin-session"
+	// CredentialAgentDesktopShared marks an Agent route that admits BOTH the
+	// generic Portal JWT and a Desktop OAuth access token (audience
+	// workmax.desktop + the Desktop client_id). It is deliberately a distinct
+	// policy from CredentialGenericJWT so the audit shows exactly which routes
+	// a Desktop grant can reach; the target remains CredentialAgentResource.
+	CredentialAgentDesktopShared CredentialPolicy = "agent-desktop-shared"
+	CredentialProviderSignature  CredentialPolicy = "provider-signature"
+	CredentialMonitorToken       CredentialPolicy = "monitor-token"
+	CredentialAdminSession       CredentialPolicy = "admin-session"
 )
 
 // RouteSpec is the auditable identity, ownership and credential migration
@@ -156,6 +162,7 @@ func (p CredentialPolicy) Valid() bool {
 		CredentialDesktopLoginBootstrap,
 		CredentialDesktopLoginTransaction,
 		CredentialAgentResource,
+		CredentialAgentDesktopShared,
 		CredentialProviderSignature,
 		CredentialMonitorToken,
 		CredentialAdminSession:

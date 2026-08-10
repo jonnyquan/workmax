@@ -381,6 +381,7 @@ var testSchemaDDL = []string{
 		status INTEGER NOT NULL DEFAULT 1,
 		pricing_status TEXT NOT NULL DEFAULT '',
 		sort_order INTEGER NOT NULL DEFAULT 0,
+		required_tier TEXT NOT NULL DEFAULT 'free',
 		capabilities TEXT,
 		metadata TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

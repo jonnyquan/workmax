@@ -492,10 +492,16 @@ func (a *AuthApi) generateLoginResponse(user model.User) (*systemRes.LoginRespon
 		return nil, "", err
 	}
 
-	// 计算会员状态
-	memberStatus := "active"
-	if !user.MemberEndTime.IsZero() && user.MemberEndTime.Before(time.Now()) {
-		memberStatus = "expired"
+	// 计算会员状态。取值与 /api/account/quota 的 memberStatus 同词表
+	// （active / expired / free）。统一 member 枚举之前这里默认 "active"，
+	// 于是刚注册、member=0 的用户也会被登录响应报成 active 会员。
+	memberStatus := "free"
+	if user.Member > model.MEMBER_SUBSCRIPTION_FREE {
+		if model.IsActivePaidMember(user.Member, user.MemberEndTime, time.Now()) {
+			memberStatus = "active"
+		} else {
+			memberStatus = "expired"
+		}
 	}
 
 	// 计算权限

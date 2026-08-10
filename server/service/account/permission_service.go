@@ -8,12 +8,18 @@ import (
 
 type PermissionService struct{}
 
-// 会员等级常量
+// 会员等级常量——现在只是 model 那套**唯一真源**的别名。
+//
+// 这里曾经有第二套定义（MEMBER_FREE=0 / MEMBER_CREATOR=1 / MEMBER_PRO=2 /
+// MEMBER_LIFETIME=3），把 member=1 解释成"创作者版"并因此发放
+// CanUseProModel + 无限收藏夹 + 免广告。但 member=1 是"已领取免费计划"的写入值
+// （api/pro/account/stripe_api.go 的免费计划领取、以及 admin 退款降级都写 1），
+// 于是每一个领过免费计划或退过款的用户都白拿了付费能力。别名化之后这条路被堵死。
 const (
-	MEMBER_FREE     = 0 // 免费用户
-	MEMBER_CREATOR  = 1 // 创作者版
-	MEMBER_PRO      = 2 // 专业版
-	MEMBER_LIFETIME = 3 // 终身版
+	MEMBER_FREE       = model.MEMBER_SUBSCRIPTION_NONE       // 0：注册后从未领计划
+	MEMBER_FREE_PLAN  = model.MEMBER_SUBSCRIPTION_FREE       // 1：已领免费计划，仍非付费
+	MEMBER_PRO        = model.MEMBER_SUBSCRIPTION_PRO        // 2：付费会员
+	MEMBER_ENTERPRISE = model.MEMBER_SUBSCRIPTION_ENTERPRISE // 3：预留
 )
 
 // 权限限制常量
@@ -53,22 +59,6 @@ func (s *PermissionService) calculatePermissions(user *model.User) *UserPermissi
 	}
 
 	switch memberLevel {
-	case MEMBER_FREE:
-		perm.MemberName = "Free"
-		perm.CanUseProModel = false
-		perm.CanUseBatchGen = false
-		perm.CanAccessAPI = false
-		perm.FavoritesLimit = FREE_FAVORITES_LIMIT
-		perm.HasAds = true
-		perm.HasPrioritySupport = false
-	case MEMBER_CREATOR:
-		perm.MemberName = "Creator"
-		perm.CanUseProModel = true
-		perm.CanUseBatchGen = false
-		perm.CanAccessAPI = false
-		perm.FavoritesLimit = -1 // 无限
-		perm.HasAds = false
-		perm.HasPrioritySupport = false
 	case MEMBER_PRO:
 		perm.MemberName = "Pro"
 		perm.CanUseProModel = true
@@ -77,26 +67,37 @@ func (s *PermissionService) calculatePermissions(user *model.User) *UserPermissi
 		perm.FavoritesLimit = -1
 		perm.HasAds = false
 		perm.HasPrioritySupport = true
-	case MEMBER_LIFETIME:
-		perm.MemberName = "Lifetime"
+	case MEMBER_ENTERPRISE:
+		perm.MemberName = "Enterprise"
 		perm.CanUseProModel = true
 		perm.CanUseBatchGen = true
 		perm.CanAccessAPI = true
 		perm.FavoritesLimit = -1
 		perm.HasAds = false
 		perm.HasPrioritySupport = true
+	default:
+		// MEMBER_FREE / MEMBER_FREE_PLAN 以及任何未知等级都落到免费档。
+		// default 分支是有意的：统一之前未知等级会返回一个零值 perm
+		// （MemberName="" 且 FavoritesLimit=0），比免费用户还严格，且没有
+		// 任何一层告诉调用方发生了什么。
+		perm.MemberName = "Free"
+		perm.CanUseProModel = false
+		perm.CanUseBatchGen = false
+		perm.CanAccessAPI = false
+		perm.FavoritesLimit = FREE_FAVORITES_LIMIT
+		perm.HasAds = true
+		perm.HasPrioritySupport = false
 	}
 
 	return perm
 }
 
-// getMemberLevel 获取用户会员等级
+// getMemberLevel 获取用户**折算过期之后**的会员等级。
+//
+// 过期判定统一委托给 model.EffectiveMemberLevel，与计费链路同一套语义：
+// member_end_time 没写 = 无限期授予（不再被当成"零值早于 now 所以已过期"）。
 func (s *PermissionService) getMemberLevel(user *model.User) int {
-	// 检查会员是否过期
-	if user.Member > 0 && user.MemberEndTime.Before(time.Now()) {
-		return MEMBER_FREE
-	}
-	return user.Member
+	return model.EffectiveMemberLevel(user.Member, user.MemberEndTime, time.Now())
 }
 
 // CanUseProModel 检查用户是否可以使用 Pro 模型

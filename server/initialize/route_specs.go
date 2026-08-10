@@ -150,6 +150,11 @@ func httpSurfaceDeclarations() []httpSurfaceDeclaration {
 		current: httpv1.CredentialGenericJWT,
 		target:  httpv1.CredentialAgentResource,
 	}
+	agentDesktopSharedMigration := routeCredentialAssignment{
+		owner:   httpv1.CredentialOwnerAgent,
+		current: httpv1.CredentialAgentDesktopShared,
+		target:  httpv1.CredentialAgentResource,
+	}
 	adminSessionMigration := routeCredentialAssignment{
 		owner:   httpv1.CredentialOwnerAdmin,
 		current: httpv1.CredentialGenericJWTAdmin,
@@ -182,6 +187,7 @@ func httpSurfaceDeclarations() []httpSurfaceDeclaration {
 				credentialOverride("GET", "/api/v1/desktop/identity/login-transactions/:id", desktopLoginTransaction),
 				credentialOverride("POST", "/api/v1/desktop/identity/login-transactions/:id/password", desktopLoginTransaction),
 				credentialOverride("POST", "/api/v1/desktop/identity/login-transactions/:id/exchange", desktopLoginTransaction),
+				credentialOverride("GET", "/api/desktop/models", desktopOAuth),
 				credentialOverride("GET", "/api/desktop/oauth/userinfo", desktopOAuth),
 				credentialOverride("GET", "/api/desktop/sync/threads", desktopOAuth),
 				credentialOverride("GET", "/api/desktop/sync/threads/:id", desktopOAuth),
@@ -208,6 +214,16 @@ func httpSurfaceDeclarations() []httpSurfaceDeclaration {
 			assignment: agentResourceMigration,
 			mount:      mountLegacyAgentAuthenticatedSurface,
 			overrides:  legacyAgentAdminOverrides(adminSessionMigration),
+		},
+		{
+			// Same product surface as above, separate declaration because the
+			// admitted credential differs: these two routes also accept a
+			// Desktop OAuth token. Keeping them a distinct mount is what makes
+			// "which routes can a Desktop grant reach" answerable from the
+			// composition root instead of from a middleware allowlist.
+			surface:    httpv1.SurfaceLegacyAgentAuthenticated,
+			assignment: agentDesktopSharedMigration,
+			mount:      mountLegacyAgentDesktopSharedSurface,
 		},
 		{
 			surface:    httpv1.SurfaceAdminOps,

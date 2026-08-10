@@ -31,6 +31,7 @@ type UpsertInput struct {
 	Status        *int8
 	PricingStatus string
 	SortOrder     int
+	RequiredTier  string
 	Capabilities  model.JSONMap
 	Metadata      model.JSONMap
 }
@@ -44,6 +45,7 @@ func (r *Repository) Upsert(in UpsertInput) (*model.GlobalModel, error) {
 		Status:        normalizeStatus(in.Status),
 		PricingStatus: strings.TrimSpace(in.PricingStatus),
 		SortOrder:     in.SortOrder,
+		RequiredTier:  NormalizeRequiredTier(in.RequiredTier),
 		Capabilities:  normalizeJSONMap(in.Capabilities),
 		Metadata:      normalizeJSONMap(in.Metadata),
 	}
@@ -58,6 +60,7 @@ func (r *Repository) Upsert(in UpsertInput) (*model.GlobalModel, error) {
 			"status":         row.Status,
 			"pricing_status": row.PricingStatus,
 			"sort_order":     row.SortOrder,
+			"required_tier":  row.RequiredTier,
 			"capabilities":   row.Capabilities,
 			"metadata":       row.Metadata,
 		}).
@@ -90,6 +93,39 @@ func (r *Repository) ListEnabled(mediaType string) ([]model.GlobalModel, error) 
 		Order("sort_order DESC, id ASC").
 		Find(&rows).Error
 	return rows, err
+}
+
+// NormalizeRequiredTier maps a stored required_tier onto the tier vocabulary
+// in model/user.go. An empty or unrecognized value reads as free rather than
+// as "deny everyone": a typo in an ops config must not silently take a model
+// away from every user, and the runtime gate (IsPremiumMember before a
+// work-plus turn) is the real enforcement either way.
+func NormalizeRequiredTier(tier string) string {
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case model.MemberTierEnterprise:
+		return model.MemberTierEnterprise
+	case model.MemberTierPro, "premium", "paid":
+		return model.MemberTierPro
+	default:
+		return model.MemberTierFree
+	}
+}
+
+// TierSatisfiesRequirement reports whether a caller's effective tier clears a
+// row's required_tier. Ordering is free < pro < enterprise.
+func TierSatisfiesRequirement(callerTier, requiredTier string) bool {
+	return tierRank(callerTier) >= tierRank(NormalizeRequiredTier(requiredTier))
+}
+
+func tierRank(tier string) int {
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case model.MemberTierEnterprise:
+		return 2
+	case model.MemberTierPro, "premium", "paid":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func normalizeStatus(status *int8) int8 {

@@ -60,7 +60,8 @@ func runSubscriptionExpiryCheck() {
 	now := time.Now()
 
 	// 查询7天内到期的付费会员用户
-	// member > 1: 是付费会员（Free=1, Pro=2, Enterprise=3）
+	// member > MEMBER_SUBSCRIPTION_FREE: 是付费会员
+	// （NONE=0 / FREE=1 都不是付费；PRO=2、ENTERPRISE=3 才是，见 model/user.go）
 	// member_end_time BETWEEN now AND 7days: 7天内到期
 	var expiringUsers []model.User
 	sevenDaysLater := now.AddDate(0, 0, 7)

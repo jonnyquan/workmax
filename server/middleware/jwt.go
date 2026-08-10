@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"server/globals"
 	"server/model/common/response"
+	desktopoauth "server/model/desktop/oauth"
+	request "server/model/system/request"
 	"server/service"
 	"server/utils"
 	"strconv"
@@ -16,8 +18,45 @@ import (
 
 var jwtService = service.GroupServiceApp.AccountServiceGroup.JwtService
 
-// JWTAuth JWT鉴权中间件
+// isDesktopAudienceToken reports whether a parsed token was minted by the
+// Desktop OAuth token endpoint (api/desktop/oauth/oauth_token_api.go), which
+// stamps `aud: workmax.desktop` on every access token it signs.
+//
+// Portal and Desktop tokens are signed with the same key, so the audience is
+// the only thing separating them. Until this check existed, a 15-minute
+// Desktop access token — issued to a native client with a device-scoped grant
+// — was accepted by every JWTAuth-protected Portal route as a full session.
+func isDesktopAudienceToken(claims *request.CustomClaims) bool {
+	if claims == nil {
+		return false
+	}
+	return claims.VerifyAudience(desktopoauth.DesktopResourceAudience, true)
+}
+
+// JWTAuth is the Portal/Admin credential. It rejects Desktop-audience tokens:
+// a Desktop grant must never reach a Portal route.
+//
+// The two Agent routes the Desktop legitimately calls
+// (/api/work-agent/skills and /api/work-agent/chat/agent, see
+// server/desktop/cloud_proxy/cloud_routes.go) are mounted on their own group
+// with JWTAuthAcceptingDesktopAudience instead.
 func JWTAuth() gin.HandlerFunc {
+	return jwtAuth(false)
+}
+
+// JWTAuthAcceptingDesktopAudience is the explicit opt-in for routes that are
+// shared between the Portal (cookie/Bearer session JWT) and the Desktop client
+// (OAuth access token). A Desktop-audience token additionally has to carry the
+// Desktop client_id, so a token minted for some other future OAuth client
+// cannot ride in on the audience alone.
+//
+// Deliberately narrow: mount it only on routes that Desktop actually calls and
+// that have no Desktop-prefixed equivalent.
+func JWTAuthAcceptingDesktopAudience() gin.HandlerFunc {
+	return jwtAuth(true)
+}
+
+func jwtAuth(acceptDesktopAudience bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var token string
 
@@ -60,6 +99,30 @@ func JWTAuth() gin.HandlerFunc {
 			}
 			response.FailWithDetailed(gin.H{"reload": true}, err.Error(), c)
 			c.Abort()
+			return
+		}
+
+		// Audience gate. A Desktop resource token is admissible only on a route
+		// that explicitly opted in; everywhere else it is rejected outright
+		// rather than downgraded, so an accidental mount cannot silently widen
+		// the Desktop grant into a Portal session.
+		if isDesktopAudienceToken(claims) {
+			if !acceptDesktopAudience {
+				response.FailWithDetailed(gin.H{"reload": true}, "token audience is not accepted on this route", c)
+				c.Abort()
+				return
+			}
+			if claims.OAuthClientID != desktopoauth.DesktopClientID {
+				response.FailWithDetailed(gin.H{"reload": true}, "token was not issued for this OAuth client", c)
+				c.Abort()
+				return
+			}
+			// Desktop tokens are never rebaked here: they carry BufferTime=0
+			// and rotate through /api/desktop/oauth/token. Emitting a
+			// `new-token` header for one would hand the caller a Portal-shaped
+			// refresh path the OAuth flow does not own.
+			c.Set("claims", claims)
+			c.Next()
 			return
 		}
 

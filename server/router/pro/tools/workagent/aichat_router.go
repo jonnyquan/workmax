@@ -87,8 +87,12 @@ func (cr *AIChatRouter) InitAIChatRouter(Router *gin.RouterGroup) {
 	}
 
 	// Chat related routes - 核心聊天功能
+	//
+	// NOTE: POST /chat/agent and GET /skills are NOT registered here. They are
+	// the two Agent routes the Desktop client calls with a Desktop OAuth token,
+	// so they live on their own credential group — see
+	// InitDesktopSharedAIChatRouter below.
 	{
-		aichatRouter.POST("/chat/agent", apiNew.HandleAgentChat) // Agent mode with message/block streaming
 		aichatRouter.POST("/chat/conversation", apiNew.CreateConversation)
 		aichatRouter.GET("/chat/conversations", apiNew.GetConversations)
 		// Single-conversation lookup by UUID. Used to land on a deep-history
@@ -124,13 +128,6 @@ func (cr *AIChatRouter) InitAIChatRouter(Router *gin.RouterGroup) {
 		// preflight composer as a <previous-critique> block.
 		aichatRouter.POST("/chat/message/:id/rate", apiNew.RateMessage)
 
-		// F3 (2026-05-17) — skill catalog. Returns structural
-		// metadata (version + has-questionForm / has-directions
-		// / has-postScripts booleans) for every user-facing skill.
-		// Complements the FE's typed AGENT_MODES union with runtime
-		// capability flags; unblocks future skill-discovery UX
-		// (e.g. "browse skills" pages, paid-skill gating).
-		aichatRouter.GET("/skills", apiNew.ListSkills)
 		aichatRouter.POST("/skills/:agentMode/access-requests", apiNew.RequestSkillAccess)
 		aichatRouter.GET("/skills/access-requests", middleware.AdminAuth(), apiNew.ListSkillAccessRequests)
 		aichatRouter.PATCH("/skills/access-requests/:requestId/status", middleware.AdminAuth(), apiNew.UpdateSkillAccessRequestStatus)
@@ -246,6 +243,39 @@ func (cr *AIChatRouter) InitAIChatRouter(Router *gin.RouterGroup) {
 	{
 		aichatRouter.GET("/sse/stats", middleware.AdminAuth(), apiNew.GetSSEConnectionStats)
 	}
+}
+
+// InitDesktopSharedAIChatRouter registers the only two Agent routes the
+// Desktop client calls without a /api/desktop prefix:
+//
+//   - POST /api/work-agent/chat/agent  (cloud_proxy.CloudRouteChatAgent)
+//   - GET  /api/work-agent/skills      (cloud_proxy.CloudRouteSkillsList)
+//
+// They are split out of InitAIChatRouter because they need a credential the
+// rest of the Agent surface must NOT have: a group whose JWT middleware
+// accepts the Desktop resource audience. Everything else on
+// /api/work-agent/** stays on plain JWTAuth, which rejects Desktop tokens.
+//
+// Pass an unauthenticated group; this router applies its own middleware, the
+// same way DesktopSyncRouter does.
+//
+// Adding a route here widens what a Desktop OAuth token can reach — the
+// decision belongs in this file, not in a group mount somewhere else.
+func (cr *AIChatRouter) InitDesktopSharedAIChatRouter(Router *gin.RouterGroup) {
+	aichatRouter := Router.Group("api/work-agent")
+	aichatRouter.Use(middleware.JWTAuthAcceptingDesktopAudience())
+
+	apiNew := workagent.NewAIChatApiNew()
+
+	aichatRouter.POST("/chat/agent", apiNew.HandleAgentChat) // Agent mode with message/block streaming
+
+	// F3 (2026-05-17) — skill catalog. Returns structural
+	// metadata (version + has-questionForm / has-directions
+	// / has-postScripts booleans) for every user-facing skill.
+	// Complements the FE's typed AGENT_MODES union with runtime
+	// capability flags; unblocks future skill-discovery UX
+	// (e.g. "browse skills" pages, paid-skill gating).
+	aichatRouter.GET("/skills", apiNew.ListSkills)
 }
 
 // serveWorkspaceFile serves files under agent_workspace only when the caller's

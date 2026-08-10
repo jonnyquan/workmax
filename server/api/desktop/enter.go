@@ -8,6 +8,7 @@ package desktop
 import (
 	"server/api/desktop/agent"
 	"server/api/desktop/login"
+	"server/api/desktop/models"
 	"server/api/desktop/oauth"
 	"server/api/desktop/sync"
 	"server/api/desktop/version"
@@ -22,9 +23,12 @@ import (
 // startup rather than constructed per request. VersionApi has no
 // state so it's a value, not a pointer.
 type DesktopApiGroup struct {
-	AgentApi   *agent.ThreadApi
-	LoginApi   *login.LoginApi
-	OauthApi   *oauth.OauthApi
-	SyncApi    *sync.SyncApi
-	VersionApi version.VersionApi
+	AgentApi *agent.ThreadApi
+	LoginApi *login.LoginApi
+	// ModelCatalogApi serves GET /api/desktop/models — the conversation-model
+	// catalog the client uses to let a user pick a model by name.
+	ModelCatalogApi *models.ModelCatalogApi
+	OauthApi        *oauth.OauthApi
+	SyncApi         *sync.SyncApi
+	VersionApi      version.VersionApi
 }

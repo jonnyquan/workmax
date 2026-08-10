@@ -80,7 +80,12 @@ func TestHTTPRouteSpecsCredentialMatrix(t *testing.T) {
 		{"GET /api/work-agent/conversations/:threadId", httpv1.SurfaceLegacyAgentPublic, httpv1.CredentialOwnerAgent, httpv1.CredentialPublicShareRead, httpv1.CredentialPublicShareRead},
 		{"GET /api/internal/monitor/summary", httpv1.SurfaceMonitor, httpv1.CredentialOwnerMonitor, httpv1.CredentialMonitorToken, httpv1.CredentialMonitorToken},
 		{"GET /api/account/quota", httpv1.SurfacePortalAuthenticated, httpv1.CredentialOwnerPortal, httpv1.CredentialGenericJWT, httpv1.CredentialPortalSession},
-		{"POST /api/work-agent/chat/agent", httpv1.SurfaceLegacyAgentAuthenticated, httpv1.CredentialOwnerAgent, httpv1.CredentialGenericJWT, httpv1.CredentialAgentResource},
+		// The two Desktop-shared Agent routes. They are the ONLY non-/api/desktop
+		// routes a Desktop OAuth token may reach; everything else on the Agent
+		// surface stays generic-jwt, which now rejects the Desktop audience.
+		{"POST /api/work-agent/chat/agent", httpv1.SurfaceLegacyAgentAuthenticated, httpv1.CredentialOwnerAgent, httpv1.CredentialAgentDesktopShared, httpv1.CredentialAgentResource},
+		{"GET /api/work-agent/skills", httpv1.SurfaceLegacyAgentAuthenticated, httpv1.CredentialOwnerAgent, httpv1.CredentialAgentDesktopShared, httpv1.CredentialAgentResource},
+		{"GET /api/work-agent/design-systems", httpv1.SurfaceLegacyAgentAuthenticated, httpv1.CredentialOwnerAgent, httpv1.CredentialGenericJWT, httpv1.CredentialAgentResource},
 		{"GET /api/work-agent/metrics/render-runners", httpv1.SurfaceLegacyAgentAuthenticated, httpv1.CredentialOwnerAdmin, httpv1.CredentialGenericJWTAdmin, httpv1.CredentialAdminSession},
 		{"GET /api/admin/dashboard/getBasicStatistics", httpv1.SurfaceAdminOps, httpv1.CredentialOwnerAdmin, httpv1.CredentialGenericJWTAdmin, httpv1.CredentialAdminSession},
 	}
@@ -126,7 +131,12 @@ func TestHTTPRouteSpecsExposeCredentialMigrations(t *testing.T) {
 			}
 		case spec.Surface == httpv1.SurfaceLegacyAgentAuthenticated:
 			agentMigrations++
-			if spec.CurrentCredential != httpv1.CredentialGenericJWT || spec.TargetCredential != httpv1.CredentialAgentResource {
+			// Two admitted credentials converge on the same target: the plain
+			// Agent routes (generic JWT) and the two Desktop-shared routes,
+			// which additionally accept a Desktop OAuth token.
+			currentIsAdmissible := spec.CurrentCredential == httpv1.CredentialGenericJWT ||
+				spec.CurrentCredential == httpv1.CredentialAgentDesktopShared
+			if !currentIsAdmissible || spec.TargetCredential != httpv1.CredentialAgentResource {
 				t.Errorf("unexpected Agent credential migration: %+v", spec)
 			}
 		default:

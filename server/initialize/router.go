@@ -4,6 +4,7 @@ import (
 	"server/api"
 	desktopAgentApi "server/api/desktop/agent"
 	desktopLoginApi "server/api/desktop/login"
+	desktopModelsApi "server/api/desktop/models"
 	desktopOauthApi "server/api/desktop/oauth"
 	desktopSyncApi "server/api/desktop/sync"
 	"server/globals"
@@ -43,6 +44,7 @@ func Routers() *gin.Engine {
 	// is populated.
 	systemDB := globals.GraDBs["system"]
 	api.ApiGroupApp.DesktopApiGroup.AgentApi = desktopAgentApi.NewThreadApi(systemDB)
+	api.ApiGroupApp.DesktopApiGroup.ModelCatalogApi = desktopModelsApi.NewModelCatalogApi(systemDB)
 	api.ApiGroupApp.DesktopApiGroup.OauthApi = desktopOauthApi.NewOauthApi(systemDB)
 	api.ApiGroupApp.DesktopApiGroup.SyncApi = desktopSyncApi.NewSyncApi(systemDB)
 	if systemDB == nil {
@@ -69,6 +71,7 @@ func Routers() *gin.Engine {
 	mountMonitorSurface(newMonitorGroup(Router))
 	mountPortalAuthenticatedSurface(newPortalAuthenticatedGroup(Router))
 	mountLegacyAgentAuthenticatedSurface(newLegacyAgentAuthenticatedGroup(Router))
+	mountLegacyAgentDesktopSharedSurface(Router.Group(""))
 	mountAdminSurface(newAdminGroup(Router))
 
 	return Router

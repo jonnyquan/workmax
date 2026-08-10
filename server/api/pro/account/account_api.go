@@ -67,14 +67,20 @@ func (a *AccountApi) GetUserQuota(c *gin.Context) {
 		return
 	}
 
-	memberStatus := ""
-	if user.Member > 0 {
-		memberStatus = "active"
-		if !user.MemberEndTime.IsZero() && user.MemberEndTime.Before(time.Now()) {
+	// memberStatus 只有三个取值：active / expired / free。
+	//
+	// 统一 member 枚举之前这里用 `Member > 0` 判"有会员"，于是领过免费计划的
+	// 用户（member=1）会被报成 active，进而在下面的 loadActiveCreditsPacks 里
+	// 把订阅来源的 credits pack 计进展示余额——而真正扣费那条链路
+	// （CreditsPackService.isSubscriptionCreditsActiveTx 用 `member <= FREE`）
+	// 从来就不认这些 pack。展示与可花额度对不上。现在两边同一套判定。
+	memberStatus := "free"
+	if user.Member > model.MEMBER_SUBSCRIPTION_FREE {
+		if model.IsActivePaidMember(user.Member, user.MemberEndTime, time.Now()) {
+			memberStatus = "active"
+		} else {
 			memberStatus = "expired"
 		}
-	} else {
-		memberStatus = "free"
 	}
 
 	// Credits 现场汇总（w_credits_pack 是唯一真源）。这里用一次 pack

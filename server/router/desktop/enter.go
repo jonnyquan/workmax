@@ -7,6 +7,7 @@ package desktop
 type RouterGroup struct {
 	DesktopAgentRouter
 	DesktopLoginRouter
+	DesktopModelsRouter
 	DesktopOauthRouter
 	DesktopSyncRouter
 	DesktopVersionRouter

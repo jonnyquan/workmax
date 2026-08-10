@@ -52,7 +52,9 @@ func newTestApiWithUserInfo(t *testing.T) (*gin.Engine, *OauthApi, *model.User) 
 		"user42@example.com",
 		"User Forty Two",
 		"https://example.com/avatar.png",
-		1,
+		// A real paid member. member=1 is the FREE-plan write value, not a paid
+		// tier — TestUserInfo_FreePlanMemberIsNotReportedAsPro pins that case.
+		model.MEMBER_SUBSCRIPTION_PRO,
 		time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
 		time.Now().UTC(),
 		time.Now().UTC(),
@@ -129,14 +131,23 @@ func TestUserInfo_Happy(t *testing.T) {
 		t.Errorf("AvatarURL: got %q", resp.AvatarURL)
 	}
 	if resp.Tier != "pro" {
-		t.Errorf("Tier: got %q, want pro (Member=1)", resp.Tier)
+		t.Errorf("Tier: got %q, want pro (Member=MEMBER_SUBSCRIPTION_PRO)", resp.Tier)
+	}
+	if resp.MemberStatus != "active" {
+		t.Errorf("MemberStatus: got %q, want active", resp.MemberStatus)
 	}
 	if resp.TierExpiresAt == "" {
 		t.Error("TierExpiresAt: empty (expected ISO 8601 from MemberEndTime)")
 	}
-	// Quota fields present and zero (P1 wires real values).
+	// This fixture's minimal schema has no w_credits_pack table, so the
+	// credits read fails — and must degrade to zeros rather than failing the
+	// whole account snapshot. TestUserInfo_ReportsRealCredits covers the
+	// populated path.
 	if resp.Quota.MonthUsed != 0 || resp.Quota.MonthLimit != 0 {
-		t.Errorf("Quota: got %+v, want zero-valued stub", resp.Quota)
+		t.Errorf("Quota: got %+v, want zeros when the credits read fails", resp.Quota)
+	}
+	if resp.Credits.Total != 0 || resp.Credits.Remaining != 0 {
+		t.Errorf("Credits: got %+v, want zeros when the credits read fails", resp.Credits)
 	}
 }
 
@@ -266,17 +277,108 @@ func TestFormatUserID(t *testing.T) {
 	}
 }
 
-func TestTierFromMember(t *testing.T) {
-	cases := map[int]string{
-		-1:  "free", // negative is treated as free (defensive)
-		0:   "free",
-		1:   "pro",
-		2:   "pro",
-		100: "pro",
+// Tier derivation moved to model.EffectiveMemberTier so Desktop, the Portal
+// and the model catalog cannot drift. Pin the mapping this endpoint depends
+// on, including the case that used to be wrong: member=1 is the free-plan
+// value and must NOT report as pro.
+func TestTierMappingForUserInfo(t *testing.T) {
+	future := time.Now().Add(24 * time.Hour)
+
+	cases := []struct {
+		name   string
+		member int
+		end    time.Time
+		want   string
+	}{
+		{"negative is defensive free", -1, future, "free"},
+		{"never enrolled", model.MEMBER_SUBSCRIPTION_NONE, time.Time{}, "free"},
+		{"free plan claimed", model.MEMBER_SUBSCRIPTION_FREE, future, "free"},
+		{"paid pro", model.MEMBER_SUBSCRIPTION_PRO, future, "pro"},
+		{"expired pro", model.MEMBER_SUBSCRIPTION_PRO, time.Now().Add(-time.Hour), "free"},
+		{"enterprise", model.MEMBER_SUBSCRIPTION_ENTERPRISE, future, "enterprise"},
 	}
-	for in, want := range cases {
-		if got := tierFromMember(in); got != want {
-			t.Errorf("tierFromMember(%d): got %q, want %q", in, got, want)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := model.EffectiveMemberTier(tc.member, tc.end, time.Now()); got != tc.want {
+				t.Errorf("tier(member=%d) = %q, want %q", tc.member, got, tc.want)
+			}
+		})
+	}
+}
+
+// The regression this endpoint shipped with: a user who claimed the free plan
+// (member=1, with a real future member_end_time) was reported to the Desktop
+// as a Pro member with an expiry date, while the chat handler refused them the
+// Pro model. Client and server must agree.
+func TestUserInfo_FreePlanMemberIsNotReportedAsPro(t *testing.T) {
+	r, api, _ := newTestApiWithUserInfo(t)
+	if err := api.DB.Exec(
+		`INSERT INTO w_user (email, nickname, avatar, member, member_end_time, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"freeplan@example.com", "Free Plan", "", model.MEMBER_SUBSCRIPTION_FREE,
+		time.Now().Add(30*24*time.Hour).UTC(), time.Now().UTC(), time.Now().UTC(),
+	).Error; err != nil {
+		t.Fatalf("seed free-plan user: %v", err)
+	}
+	var uid uint
+	if err := api.DB.Raw(`SELECT id FROM w_user WHERE email = ?`, "freeplan@example.com").Scan(&uid).Error; err != nil {
+		t.Fatalf("lookup free-plan user id: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/desktop/oauth/userinfo", nil)
+	req.Header.Set("Authorization", "Bearer "+mintAccessTokenForTest(t, uid, "workmax-desktop"))
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body %s", w.Code, w.Body.String())
+	}
+	var resp userinfoResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Tier != "free" {
+		t.Errorf("Tier: got %q, want free for a free-plan member", resp.Tier)
+	}
+	if resp.MemberStatus != "free" {
+		t.Errorf("MemberStatus: got %q, want free", resp.MemberStatus)
+	}
+	if resp.TierExpiresAt != "" {
+		t.Errorf("TierExpiresAt: got %q — a free plan window is not a tier expiry", resp.TierExpiresAt)
+	}
+}
+
+// An expired paid member is handled as unpaid: free tier, no expiry date
+// dangling in the past, and member_status says why.
+func TestUserInfo_ExpiredPaidMemberReadsAsFree(t *testing.T) {
+	r, api, _ := newTestApiWithUserInfo(t)
+	if err := api.DB.Exec(
+		`INSERT INTO w_user (email, nickname, avatar, member, member_end_time, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"lapsed@example.com", "Lapsed", "", model.MEMBER_SUBSCRIPTION_PRO,
+		time.Now().Add(-24*time.Hour).UTC(), time.Now().UTC(), time.Now().UTC(),
+	).Error; err != nil {
+		t.Fatalf("seed lapsed user: %v", err)
+	}
+	var uid uint
+	if err := api.DB.Raw(`SELECT id FROM w_user WHERE email = ?`, "lapsed@example.com").Scan(&uid).Error; err != nil {
+		t.Fatalf("lookup lapsed user id: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/desktop/oauth/userinfo", nil)
+	req.Header.Set("Authorization", "Bearer "+mintAccessTokenForTest(t, uid, "workmax-desktop"))
+	r.ServeHTTP(w, req)
+
+	var resp userinfoResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Tier != "free" {
+		t.Errorf("Tier: got %q, want free for a lapsed member", resp.Tier)
+	}
+	if resp.MemberStatus != "expired" {
+		t.Errorf("MemberStatus: got %q, want expired", resp.MemberStatus)
+	}
+	if resp.TierExpiresAt != "" {
+		t.Errorf("TierExpiresAt: got %q, want empty once the window has passed", resp.TierExpiresAt)
 	}
 }

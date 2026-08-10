@@ -82,5 +82,8 @@ func IsUserPremium(uid uint) bool {
 	if err := globals.GraDBs["system"].First(user, uid).Error; err != nil {
 		return false
 	}
-	return user.Member > 1 && time.Now().Before(user.MemberEndTime)
+	// 判定统一走 model.IsActivePaidMember —— 之前这里手写的 `Member > 1 &&
+	// now.Before(MemberEndTime)` 把"未写 member_end_time 的无限期授予"误判成
+	// 非会员，与计费链路相反。
+	return model.IsActivePaidMember(user.Member, user.MemberEndTime, time.Now())
 }

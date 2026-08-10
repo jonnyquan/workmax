@@ -37,6 +37,7 @@ func mountDesktopResourceSurface(group *gin.RouterGroup) {
 	desktop := router.RouterGroupApp.Desktop
 	desktop.DesktopAgentRouter.InitDesktopAgentRouter(group)
 	desktop.DesktopLoginRouter.InitDesktopLoginRouter(group)
+	desktop.DesktopModelsRouter.InitDesktopModelsRouter(group)
 	desktop.DesktopOauthRouter.InitDesktopOauthRouter(group)
 	desktop.DesktopSyncRouter.InitDesktopSyncRouter(group)
 	desktop.DesktopVersionRouter.InitDesktopVersionRouter(group)
@@ -76,6 +77,14 @@ func mountLegacyAgentAuthenticatedSurface(group *gin.RouterGroup) {
 	tools.TeamRouter.InitTeamRouter(group)
 	tools.GlobalCatalogRouter.InitGlobalCatalogRouter(group)
 	tools.WorkAgentRouter.AIChatRouter.InitAIChatRouter(group)
+}
+
+// mountLegacyAgentDesktopSharedSurface carries the two Agent routes the
+// Desktop client calls with a Desktop OAuth access token. They keep their
+// current URLs and handlers; only the credential differs from the rest of the
+// Agent surface, which is exactly why they are mounted separately.
+func mountLegacyAgentDesktopSharedSurface(group *gin.RouterGroup) {
+	router.RouterGroupApp.Tools.WorkAgentRouter.AIChatRouter.InitDesktopSharedAIChatRouter(group)
 }
 
 func mountAdminSurface(group *gin.RouterGroup) {
