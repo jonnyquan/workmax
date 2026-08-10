@@ -389,6 +389,33 @@ var testSchemaDDL = []string{
 		deleted_at DATETIME,
 		UNIQUE(model_id, media_type)
 	)`,
+	// w_desktop_model_gateway_usage - the Desktop model gateway's metering
+	// row (migrations/20260815_create_desktop_model_gateway_usage.sql). One
+	// row per gateway call: who asked, which catalog model, which platform
+	// credential paid, how many tokens moved.
+	`CREATE TABLE w_desktop_model_gateway_usage (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		uid INTEGER NOT NULL,
+		request_id TEXT NOT NULL,
+		protocol TEXT NOT NULL,
+		model_id TEXT NOT NULL,
+		upstream_model TEXT NOT NULL DEFAULT '',
+		provider_account_id INTEGER NOT NULL DEFAULT 0,
+		stream INTEGER NOT NULL DEFAULT 0,
+		status TEXT NOT NULL DEFAULT 'completed',
+		http_status INTEGER NOT NULL DEFAULT 0,
+		error_class TEXT NOT NULL DEFAULT '',
+		input_tokens INTEGER NOT NULL DEFAULT 0,
+		output_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+		total_tokens INTEGER NOT NULL DEFAULT 0,
+		duration_ms INTEGER NOT NULL DEFAULT 0,
+		started_at DATETIME,
+		UNIQUE(request_id)
+	)`,
 	`CREATE TABLE w_generation_object (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		uid INTEGER NOT NULL DEFAULT 0,

@@ -8,6 +8,7 @@ package desktop
 import (
 	"server/api/desktop/agent"
 	"server/api/desktop/login"
+	modelgateway "server/api/desktop/modelgateway"
 	"server/api/desktop/models"
 	"server/api/desktop/oauth"
 	"server/api/desktop/sync"
@@ -28,6 +29,10 @@ type DesktopApiGroup struct {
 	// ModelCatalogApi serves GET /api/desktop/models — the conversation-model
 	// catalog the client uses to let a user pick a model by name.
 	ModelCatalogApi *models.ModelCatalogApi
+	// ModelGatewayApi serves POST /api/desktop/model-gateway/* — the bare
+	// model API the Desktop's local tool loop calls so it can use official
+	// models without ever holding a provider key.
+	ModelGatewayApi *modelgateway.GatewayApi
 	OauthApi        *oauth.OauthApi
 	SyncApi         *sync.SyncApi
 	VersionApi      version.VersionApi

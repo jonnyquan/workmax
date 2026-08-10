@@ -4,6 +4,7 @@ import (
 	"server/api"
 	desktopAgentApi "server/api/desktop/agent"
 	desktopLoginApi "server/api/desktop/login"
+	desktopModelGatewayApi "server/api/desktop/modelgateway"
 	desktopModelsApi "server/api/desktop/models"
 	desktopOauthApi "server/api/desktop/oauth"
 	desktopSyncApi "server/api/desktop/sync"
@@ -45,6 +46,10 @@ func Routers() *gin.Engine {
 	systemDB := globals.GraDBs["system"]
 	api.ApiGroupApp.DesktopApiGroup.AgentApi = desktopAgentApi.NewThreadApi(systemDB)
 	api.ApiGroupApp.DesktopApiGroup.ModelCatalogApi = desktopModelsApi.NewModelCatalogApi(systemDB)
+	// The gateway is built once: it owns a process-wide upstream connection
+	// pool and a process-wide rate-limit registry, neither of which means
+	// anything if rebuilt per request.
+	api.ApiGroupApp.DesktopApiGroup.ModelGatewayApi = desktopModelGatewayApi.NewGatewayApi(systemDB, globals.GraConf.ModelGateway)
 	api.ApiGroupApp.DesktopApiGroup.OauthApi = desktopOauthApi.NewOauthApi(systemDB)
 	api.ApiGroupApp.DesktopApiGroup.SyncApi = desktopSyncApi.NewSyncApi(systemDB)
 	if systemDB == nil {

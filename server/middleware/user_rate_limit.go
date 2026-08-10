@@ -35,10 +35,10 @@ type UserRateLimitRegistry struct {
 }
 
 type userBucket struct {
-	op               string
-	perMinute        int
+	op                string
+	perMinute         int
 	perUserConcurrent int
-	users            map[uint]*userState
+	users             map[uint]*userState
 }
 
 type userState struct {
@@ -53,10 +53,24 @@ type userState struct {
 // picked up — consistent with how generator_api wires generateGuard.
 func NewCanvasRateLimitRegistry() *UserRateLimitRegistry {
 	cfg := globals.GraConf.Canvas.RateLimit
+	return NewUserRateLimitRegistry(cfg.EffectiveGlobalConcurrent(), cfg.Resolve)
+}
+
+// NewUserRateLimitRegistry builds a registry from an explicit global cap and
+// bucket resolver, so surfaces other than Canvas can reuse this mechanism
+// rather than growing a second per-user limiter with its own eviction and
+// window semantics. The bucket type keeps its Canvas name — it is a plain
+// {PerMinute, PerUserConcurrent} pair and renaming it would churn every
+// existing call site for no behavioural gain.
+//
+// Callers that want the standard 429 body use Limiter(op); callers that must
+// answer in a foreign protocol's error shape (the Desktop model gateway
+// answers in Anthropic/OpenAI error JSON) use Acquire directly.
+func NewUserRateLimitRegistry(globalConcurrent int, resolve func(op string) config.CanvasRateLimitBucket) *UserRateLimitRegistry {
 	reg := &UserRateLimitRegistry{
 		buckets:          map[string]*userBucket{},
-		globalConcurrent: cfg.EffectiveGlobalConcurrent(),
-		resolve:          cfg.Resolve,
+		globalConcurrent: globalConcurrent,
+		resolve:          resolve,
 	}
 	go reg.janitor()
 	return reg
@@ -94,6 +108,13 @@ func (r *UserRateLimitRegistry) janitor() {
 		}
 		r.mu.Unlock()
 	}
+}
+
+// Acquire is the exported form of acquire, for callers that own their own
+// denial response body. Contract is identical: release is nil on denial and
+// MUST be called on success.
+func (r *UserRateLimitRegistry) Acquire(uid uint, op string) (release func(), retryAfter int, ok bool, reason string) {
+	return r.acquire(uid, op)
 }
 
 // acquire attempts to reserve a slot for uid in op's bucket. release is

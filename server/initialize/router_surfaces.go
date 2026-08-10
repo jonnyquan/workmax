@@ -37,6 +37,7 @@ func mountDesktopResourceSurface(group *gin.RouterGroup) {
 	desktop := router.RouterGroupApp.Desktop
 	desktop.DesktopAgentRouter.InitDesktopAgentRouter(group)
 	desktop.DesktopLoginRouter.InitDesktopLoginRouter(group)
+	desktop.DesktopModelGatewayRouter.InitDesktopModelGatewayRouter(group)
 	desktop.DesktopModelsRouter.InitDesktopModelsRouter(group)
 	desktop.DesktopOauthRouter.InitDesktopOauthRouter(group)
 	desktop.DesktopSyncRouter.InitDesktopSyncRouter(group)

@@ -20,8 +20,13 @@ type Server struct {
 	// separate agent-worker consumes only its Worker-owned subset; no current
 	// route or Desktop transport consumes it.
 	AgentPlatformRollout *AgentPlatformRollout `mapstructure:"agent_platform_rollout" json:"agent_platform_rollout" yaml:"agent_platform_rollout"`
-	Generator            Generator             `mapstructure:"generator" json:"generator" yaml:"generator"`
-	Canvas               Canvas                `mapstructure:"canvas" json:"canvas" yaml:"canvas"`
-	Statics              Statics               `mapstructure:"statics" json:"statics" yaml:"statics"`
-	Credits              Credits               `mapstructure:"credits" json:"credits" yaml:"credits"`
+	// ModelGateway configures the Desktop model gateway — the bare-model
+	// proxy the local tool loop calls so it can use official models without
+	// ever holding a provider key. Absent block = enabled with built-in
+	// abuse guards; see server/config/model_gateway.go.
+	ModelGateway *ModelGateway `mapstructure:"model_gateway" json:"model_gateway" yaml:"model_gateway"`
+	Generator    Generator     `mapstructure:"generator" json:"generator" yaml:"generator"`
+	Canvas       Canvas        `mapstructure:"canvas" json:"canvas" yaml:"canvas"`
+	Statics      Statics       `mapstructure:"statics" json:"statics" yaml:"statics"`
+	Credits      Credits       `mapstructure:"credits" json:"credits" yaml:"credits"`
 }

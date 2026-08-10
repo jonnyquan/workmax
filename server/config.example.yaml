@@ -176,6 +176,34 @@ agent_platform_rollout:
     transactional_outbox: false
     exactly_once_settlement: false
 
+# Desktop model gateway (POST /api/desktop/model-gateway/*).
+#
+# The bare-model API the Desktop's LOCAL tool loop calls so it can use official
+# models without ever holding a provider key: the client sends our URL plus its
+# own Desktop OAuth bearer, and the server attaches the platform credential
+# (w_workagent_account) on the way out.
+#
+# Because every call spends platform money, this whole block is taps rather
+# than tuning. Omitting it entirely is fine — the built-in defaults shown below
+# still apply. Set enabled: false to close the tap without a route change.
+model_gateway:
+  # enabled: false
+  # Decoded request-body cap. A model request is mostly conversation history.
+  max_request_bytes: 4194304
+  # Total upstream exchange budget, streaming included.
+  request_timeout_seconds: 600
+  # How long to wait for the upstream's status line. Separate from the total
+  # budget so a stalled connect fails fast while a long stream does not.
+  response_header_timeout_seconds: 90
+  rate_limit:
+    # Per-user fixed window. Shared across both protocol routes so a caller
+    # cannot double their budget by alternating between them.
+    per_minute: 60
+    # One Desktop runs one tool loop at a time; a client opening many parallel
+    # streams is either broken or hostile.
+    per_user_concurrent: 2
+    global_concurrent: 64
+
 generator:
   rate_limit:
     per_minute: 30
