@@ -25,8 +25,12 @@ import (
 // the platform never pays for a call it did not admit.
 
 // providerAPIKey is deliberately distinctive so a leak assertion can search
-// for it in a whole response — headers, body, and error prose alike.
-const providerAPIKey = "sk-ant-platform-secret-key-DO-NOT-LEAK"
+// for it in a whole response — headers, body, and error prose alike. The
+// sk-test- prefix is the one secret-audit.sh exempts: a fixture that looks
+// like a live provider key would fail the repo's own credential scan on
+// every run, and silencing that scan to keep a fixture would be the wrong
+// trade.
+const providerAPIKey = "sk-test-platform-secret-key-DO-NOT-LEAK"
 
 type fakeAccountSource struct {
 	account *ProviderAccount
@@ -462,7 +466,7 @@ func TestGateway_NeverLeaksProviderCredentialOnAnyPath(t *testing.T) {
 	seedForbidden := func(h *harness) []string {
 		return []string{
 			providerAPIKey,
-			"sk-ant-platform",
+			"sk-test-platform",
 			h.upstream.URL,
 			"platform-anthropic-1",
 			"apiKey",
