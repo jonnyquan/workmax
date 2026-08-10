@@ -56,11 +56,11 @@ func (s *Server) handleListWorkspaceFiles(c *gin.Context) {
 	// Ownership first: the workspace directory is keyed by uuid alone, so
 	// without this check any local caller could list another identity's
 	// produced files by guessing uuids. The thread row is the authority.
-	uid, _, err := s.currentAgentTurnSession()
-	if err != nil {
-		s.writeAgentTurnSessionError(c, err)
+	identity, ok := s.requestOwner(c)
+	if !ok {
 		return
 	}
+	uid := identity.UID
 	var threadID uint64
 	if err := s.cfg.DB.Raw(
 		`SELECT id FROM w_workagent_thread WHERE uuid = ? AND uid = ?`,
@@ -99,11 +99,11 @@ func (s *Server) handleRevealWorkspace(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_thread_uuid"})
 		return
 	}
-	uid, _, err := s.currentAgentTurnSession()
-	if err != nil {
-		s.writeAgentTurnSessionError(c, err)
+	identity, ok := s.requestOwner(c)
+	if !ok {
 		return
 	}
+	uid := identity.UID
 	var threadID uint64
 	if err := s.cfg.DB.Raw(
 		`SELECT id FROM w_workagent_thread WHERE uuid = ? AND uid = ?`,

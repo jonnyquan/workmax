@@ -52,8 +52,8 @@ func TestEnsureDefaultLocalAccount(t *testing.T) {
 	if len(accounts) != 1 {
 		t.Fatalf("expected the default account, got %d", len(accounts))
 	}
-	if accounts[0].Name != defaultLocalAccountName || !accounts[0].Active {
-		t.Fatalf("default account = %+v, want active %q", accounts[0], defaultLocalAccountName)
+	if accounts[0].Name != defaultLocalAccountName() || !accounts[0].Active {
+		t.Fatalf("default account = %+v, want active %q", accounts[0], defaultLocalAccountName())
 	}
 	if accounts[0].UID != localSingleUserUID {
 		t.Fatalf("default uid = %d, want %d", accounts[0].UID, localSingleUserUID)
@@ -220,7 +220,7 @@ func TestRenameLocalAccount(t *testing.T) {
 	if renamed.UID != created.UID {
 		t.Fatalf("rename moved the uid: %d → %d — the name is a label, not the identity", created.UID, renamed.UID)
 	}
-	if _, err := renameLocalAccount(db, created.ID, defaultLocalAccountName); !errors.Is(err, errLocalAccountTaken) {
+	if _, err := renameLocalAccount(db, created.ID, defaultLocalAccountName()); !errors.Is(err, errLocalAccountTaken) {
 		t.Fatalf("rename onto existing name: %v, want errLocalAccountTaken", err)
 	}
 	if _, err := renameLocalAccount(db, 99, "x"); !errors.Is(err, errLocalAccountNotFound) {
@@ -228,5 +228,72 @@ func TestRenameLocalAccount(t *testing.T) {
 	}
 	if _, err := renameLocalAccount(db, created.ID, "\n"); !errors.Is(err, errLocalAccountName) {
 		t.Fatalf("rename invalid: %v, want errLocalAccountName", err)
+	}
+}
+
+// The default identity's NAME comes from the operating system: on first run
+// the app already knows who you are, so it should not ask, and should not
+// call you "Local". The name is a label — nothing below checks that a uid
+// moved, because a uid must never move for a name.
+func TestSanitizeOSUserName(t *testing.T) {
+	long := strings.Repeat("名", 100)
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain full name", "Ming Zhang", "Ming Zhang"},
+		{"cjk", "张明", "张明"},
+		{"surrounding space", "  Ming  ", "Ming"},
+		{"control characters become spaces", "Ming\tZhang\n", "Ming Zhang"},
+		{"domain qualified login", `WORKGROUP\ming`, "ming"},
+		{"overlong is cut to the column, not rejected", long, strings.Repeat("名", maxLocalAccountName)},
+		{"empty stays empty for the caller to reject", "   ", ""},
+	}
+	for _, tc := range cases {
+		if got := sanitizeOSUserName(tc.in); got != tc.want {
+			t.Errorf("%s: sanitizeOSUserName(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
+		}
+	}
+	// Whatever the OS says, what lands in the column has passed the same
+	// normalization a typed name does.
+	for _, candidate := range []string{"Ming Zhang", "张明", long, "", "\x00"} {
+		normalized, err := normalizeLocalAccountName(sanitizeOSUserName(candidate))
+		if err != nil {
+			continue // rejected → the caller falls back, which is the point
+		}
+		if normalized == "" || len([]rune(normalized)) > maxLocalAccountName {
+			t.Errorf("normalized OS name %q is not storable", normalized)
+		}
+	}
+}
+
+func TestDefaultLocalAccountNameIsAlwaysStorable(t *testing.T) {
+	name := defaultLocalAccountName()
+	normalized, err := normalizeLocalAccountName(name)
+	if err != nil || normalized != name {
+		t.Fatalf("defaultLocalAccountName() = %q (err %v), want an already-normalized name", name, err)
+	}
+}
+
+// The one machine that must NOT be renamed: one that already has accounts.
+// The name there may have been chosen by the person using it.
+func TestEnsureDefaultLocalAccountNeverRenamesAnExistingRow(t *testing.T) {
+	db := openLocalAccountsTestDB(t)
+	if err := db.Exec(
+		`INSERT INTO w_desktop_local_account (id, name, is_active, created_at, last_used_at)
+		 VALUES (1, 'Local', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+	).Error; err != nil {
+		t.Fatalf("seed pre-existing account: %v", err)
+	}
+	if err := ensureDefaultLocalAccount(db); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	accounts, err := listLocalAccounts(db)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(accounts) != 1 || accounts[0].Name != "Local" || accounts[0].UID != localSingleUserUID {
+		t.Fatalf("existing account was disturbed: %+v", accounts)
 	}
 }

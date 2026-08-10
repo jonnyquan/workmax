@@ -31,7 +31,7 @@ type threadFileUploadResponse struct {
 // decoupled so the strict /agent/chat decoder is untouched and a large file
 // never inflates the chat body.
 func (s *Server) handleUploadThreadFile(c *gin.Context) {
-	if s.cfg.LocalFiles == nil || s.cfg.DB == nil || s.cfg.TokenStore == nil {
+	if s.cfg.LocalFiles == nil || s.cfg.DB == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "file_upload_unavailable"})
 		return
 	}
@@ -40,14 +40,14 @@ func (s *Server) handleUploadThreadFile(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_thread_uuid"})
 		return
 	}
-	uid, _, err := s.currentAgentTurnSession()
-	if err != nil {
-		// File ownership needs a stable uid. Unauthenticated local-route users
-		// resolve to localSingleUserUID inside currentAgentTurnSession (L3d); a
-		// failure here means neither local nor cloud session is usable.
-		s.writeAgentTurnSessionError(c, err)
+	// The file lands on this disk under this thread's owner. That owner always
+	// exists — a signed-out machine has a local account — so the only refusal
+	// here is a session we cannot bind at all.
+	identity, ok := s.requestOwner(c)
+	if !ok {
 		return
 	}
+	uid := identity.UID
 
 	// Resolve the local thread row id (the thread must already exist — created
 	// locally via L3a or synced from cloud).
@@ -149,11 +149,11 @@ func (s *Server) handleListThreadFiles(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_thread_uuid"})
 		return
 	}
-	uid, _, err := s.currentAgentTurnSession()
-	if err != nil {
-		s.writeAgentTurnSessionError(c, err)
+	identity, ok := s.requestOwner(c)
+	if !ok {
 		return
 	}
+	uid := identity.UID
 
 	var threadID uint64
 	if err := s.cfg.DB.Raw(

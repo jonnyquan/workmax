@@ -42,13 +42,21 @@
         <button id="local-account-row" class="local-account-row" type="button" hidden>
           <span id="local-account-avatar" class="local-account-avatar">L</span>
           <span id="local-account-name" class="local-account-name">Local</span>
-          <span class="local-account-hint">Switch</span>
+          <span id="local-account-hint" class="local-account-hint">Switch</span>
         </button>
         <div id="local-account-panel" class="sidebar-form local-account-panel" hidden>
           <div class="sidebar-form-heading">
-            <strong>Local accounts</strong>
-            <span>Separate workspaces on this machine. Not a lock — the data on disk is shared.</span>
+            <strong>This machine</strong>
+            <span>You are already someone here. A WorkMax account is something you connect to this identity, not a way to get one.</span>
           </div>
+          <div id="local-account-binding" class="local-account-binding">
+            <p id="local-account-binding-state" class="local-account-binding-state"></p>
+            <div class="local-account-binding-actions">
+              <button id="local-account-connect" type="button">Connect account</button>
+              <button id="local-account-disconnect" type="button" hidden>Disconnect</button>
+            </div>
+          </div>
+          <p id="local-account-switch-note" class="local-account-hint-line" hidden></p>
           <ol id="local-account-list" class="local-account-list"></ol>
           <form id="local-account-create-form" novalidate>
             <div class="local-account-create">
@@ -68,7 +76,7 @@
         <div class="sidebar-actions">
           <button id="refresh-button" type="button">Refresh</button>
           <button id="models-button" type="button">Models</button>
-          <button id="login-button" class="primary" type="button" hidden>Sign in</button>
+          <button id="login-button" class="primary" type="button" hidden>Connect account</button>
         </div>
         <form id="model-settings-form" class="sidebar-form model-settings-form" hidden novalidate>
           <div class="sidebar-form-heading">
@@ -246,13 +254,13 @@
           <div id="onboarding-paths" class="onboarding-paths" hidden>
             <button id="onboarding-signin" class="onboarding-card" type="button">
               <span class="onboarding-icon tone-blue" aria-hidden="true">☁</span>
-              <strong>Sign in to WorkMax</strong>
-              <span>Sync conversations across devices and use cloud models.</span>
+              <strong>Connect a WorkMax account</strong>
+              <span>Cloud models, and your conversations follow you to other devices.</span>
             </button>
             <button id="onboarding-local" class="onboarding-card" type="button">
               <span class="onboarding-icon tone-green" aria-hidden="true">⌂</span>
               <strong>Use a local model</strong>
-              <span>No account. Point WorkMax at a local endpoint — everything stays on this machine.</span>
+              <span>Point WorkMax at an endpoint on this machine. Nothing leaves it.</span>
             </button>
           </div>
           <div id="starter-prompts" class="starter-prompts" hidden></div>

@@ -452,6 +452,57 @@ textarea:focus-visible {
   list-style: none;
 }
 
+/* The binding block: what this local identity is connected to, and the one
+   action that changes it. It sits above the identity list because "who am I
+   here" is answered before "which of my workspaces". */
+.local-account-binding {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+  padding: 9px 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--muted) / 0.35);
+}
+
+.local-account-binding-state {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.local-account-binding-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.local-account-binding-actions button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+}
+
+.local-account-binding-actions button:hover:not(:disabled) {
+  background: hsl(var(--muted) / 0.6);
+}
+
+.local-account-binding-actions button:disabled {
+  opacity: 0.6;
+}
+
+.local-account-hint-line {
+  margin: 0 0 8px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .local-account-item {
   display: flex;
   align-items: center;

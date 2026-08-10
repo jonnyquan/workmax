@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
@@ -42,36 +41,6 @@ type legacyAgentTurnStreamInput struct {
 // filtering keeps local-only threads/messages naturally isolated from real
 // accounts. Compare noLocalHistoryUID = 1<<63-1.
 const localSingleUserUID = uint64(1) << 62
-
-func (s *Server) currentAgentTurnSession() (uint64, cloudproxy.SessionLease, error) {
-	if s.cfg.TokenStore == nil {
-		if s.shouldUseLocalRoute() {
-			return s.localRouteUID(), cloudproxy.SessionLease{}, nil
-		}
-		return 0, cloudproxy.SessionLease{}, cloudproxy.ErrNoSession
-	}
-	snapshot, err := s.cfg.TokenStore.GetSnapshot()
-	if err != nil {
-		if s.shouldUseLocalRoute() {
-			return s.localRouteUID(), cloudproxy.SessionLease{}, nil
-		}
-		return 0, cloudproxy.SessionLease{}, err
-	}
-	if snapshot.Pair.AccessToken == "" || snapshot.Pair.IsRefreshExpired(time.Now().UTC()) {
-		if s.shouldUseLocalRoute() {
-			return s.localRouteUID(), cloudproxy.SessionLease{}, nil
-		}
-		return 0, cloudproxy.SessionLease{}, cloudproxy.ErrNoSession
-	}
-	uid, err := cloudproxy.ExtractUIDFromAccessToken(snapshot.Pair.AccessToken)
-	if err != nil || uid == 0 {
-		return 0, cloudproxy.SessionLease{}, errors.New("agent turn session has no subject")
-	}
-	if err := snapshot.Lease.Check(); err != nil {
-		return 0, cloudproxy.SessionLease{}, err
-	}
-	return uint64(uid), snapshot.Lease, nil
-}
 
 func (s *Server) agentTurnLock(turnUUID string) *sync.Mutex {
 	value, _ := s.agentTurnLocks.LoadOrStore(turnUUID, &sync.Mutex{})
@@ -117,11 +86,13 @@ func (s *Server) handleListRecoverableAgentTurns(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_limit"})
 		return
 	}
-	uid, lease, err := s.currentAgentTurnSession()
-	if err != nil {
-		s.writeAgentTurnSessionError(c, err)
+	// Reading your own interrupted turns is local bookkeeping. It needs an
+	// owner, not a cloud session.
+	identity, ok := s.requestOwner(c)
+	if !ok {
 		return
 	}
+	uid, lease := identity.UID, identity.Lease
 	items, err := listRecoverableAgentTurnIntents(s.cfg.DB, lease, uid, limit)
 	if err != nil {
 		if errors.Is(err, cloudproxy.ErrSessionChanged) {
@@ -135,7 +106,8 @@ func (s *Server) handleListRecoverableAgentTurns(c *gin.Context) {
 }
 
 func (s *Server) handleReplayAgentTurn(c *gin.Context) {
-	if s.cfg.Proxy == nil || s.cfg.DB == nil || s.cfg.TokenStore == nil {
+	useLocalRoute := s.shouldUseLocalRoute()
+	if s.cfg.DB == nil || s.cfg.TokenStore == nil || (!useLocalRoute && s.cfg.Proxy == nil) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "agent_turn_recovery_unavailable"})
 		return
 	}
@@ -144,11 +116,19 @@ func (s *Server) handleReplayAgentTurn(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_turn_uuid"})
 		return
 	}
-	uid, lease, err := s.currentAgentTurnSession()
-	if err != nil {
-		s.writeAgentTurnSessionError(c, err)
+	identity, ok := s.requestOwner(c)
+	if !ok {
 		return
 	}
+	// Same rule as a first attempt: a replay that goes to the cloud needs a
+	// cloud session; a replay onto the local model does not.
+	if !useLocalRoute {
+		if err := identity.RequireCloud(); err != nil {
+			s.writeAgentTurnSessionError(c, err)
+			return
+		}
+	}
+	uid, lease := identity.UID, identity.Lease
 	intent, thread, err := loadOwnedAgentTurnIntentAndThread(s.cfg.DB, lease, uid, turnUUID)
 	if err != nil {
 		s.writeAgentTurnIntentLoadError(c, err)
@@ -181,11 +161,13 @@ func (s *Server) handleCancelAgentTurn(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_turn_uuid"})
 		return
 	}
-	uid, lease, err := s.currentAgentTurnSession()
-	if err != nil {
-		s.writeAgentTurnSessionError(c, err)
+	// Cancelling is always local bookkeeping — it stops a turn this machine
+	// started, whoever it belongs to.
+	identity, ok := s.requestOwner(c)
+	if !ok {
 		return
 	}
+	uid, lease := identity.UID, identity.Lease
 	canceled, err := cancelAgentTurnIntent(s.cfg.DB, lease, uid, turnUUID)
 	if err != nil {
 		if errors.Is(err, errAgentTurnIntentNotFound) {

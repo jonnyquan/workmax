@@ -28,19 +28,20 @@ import (
 
 // appBootExpectations are the requests renderer.js makes on boot.
 //
-// Only one is required, and that is not a weak check — it is the whole chain.
-// For /auth/status to arrive, shim.js must have installed window.workmaxLocal,
-// renderer.js must have accepted it as a valid bridge, the fetch must have
-// resolved against the capability path, the proxy must have injected the token,
-// and the sidecar must have answered. Nothing downstream of that is a new kind
-// of proof.
+// Two are required, and together they are the whole chain. For /auth/status to
+// arrive, shim.js must have installed window.workmaxLocal, renderer.js must
+// have accepted it as a valid bridge, the fetch must have resolved against the
+// capability path, the proxy must have injected the token, and the sidecar
+// must have answered.
 //
-// Everything else renderer.js does on boot is gated on being signed in:
-// threads, the skill catalog and recoverable turns are only loaded when
-// /auth/status reports "authenticated". This harness has no cloud session, so
-// their absence is the renderer behaving correctly. Listing them as required
-// would make the check fail for the wrong reason — which it did, the first
-// time it ran.
+// The thread list joins it because history is no longer session-gated: this
+// harness has no cloud session, and a signed-out machine now loads its own
+// local identity's conversations. Its ABSENCE would mean the app had gone back
+// to hiding a user's own data behind a sign-in wall, which is exactly the
+// regression this harness should catch in a real packaged window.
+//
+// The skill catalog stays optional — it is the one boot call that genuinely
+// needs a cloud session.
 var appBootExpectations = struct {
 	required []bootRequest
 	optional []bootRequest
@@ -48,10 +49,10 @@ var appBootExpectations = struct {
 	required: []bootRequest{
 		{"auth status", "GET", "/auth/status",
 			"renderer.js calls this first; reaching it proves shim.js installed the globals, renderer.js accepted them, and the same-origin path carried the request to the sidecar"},
+		{"thread list", "GET", "/agent/threads",
+			"identity always resolves, so a signed-out window must still read this machine's own local history"},
 	},
 	optional: []bootRequest{
-		{"thread list", "GET", "/agent/threads",
-			"session-gated: renderer.js only loads threads once /auth/status reports authenticated"},
 		{"skill catalog", "GET", "/agent/skills/catalog",
 			"session-gated, and goes through the typed bridge rather than the legacy fetch"},
 		{"model route", "GET", "/settings/model-route",
@@ -154,7 +155,8 @@ func reportAppBoot(watcher *bootWatcher, waited time.Duration) int {
 	}
 	log.Printf("verify-app: VERDICT — the unmodified renderer booted against a real sidecar in a real")
 	log.Printf("verify-app:   webview and reached it through the shim. This is the whole path, not a")
-	log.Printf("verify-app:   piece of it. The session-gated requests are absent because there is no")
-	log.Printf("verify-app:   cloud session here; run this signed in to exercise them too.")
+	log.Printf("verify-app:   piece of it — including this machine's own local history, which loads")
+	log.Printf("verify-app:   without an account. The skill catalog is absent because it is the one")
+	log.Printf("verify-app:   boot call that needs a cloud session; run this signed in for that.")
 	return 0
 }

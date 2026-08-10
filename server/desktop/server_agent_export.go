@@ -45,11 +45,11 @@ func (s *Server) handleExportThread(c *gin.Context) {
 	// Ownership exactly as the workspace routes check it: the thread row
 	// under the caller's uid is the authority, and a foreign uuid is not
 	// found rather than forbidden.
-	uid, _, err := s.currentAgentTurnSession()
-	if err != nil {
-		s.writeAgentTurnSessionError(c, err)
+	identity, ok := s.requestOwner(c)
+	if !ok {
 		return
 	}
+	uid := identity.UID
 	var (
 		threadID   uint64
 		threadName string

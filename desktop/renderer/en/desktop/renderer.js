@@ -24,12 +24,17 @@ import {
   exportThreadButton,
   fileInput,
   localAccountAvatar,
+  localAccountBindingState,
+  localAccountConnectButton,
   localAccountCreateForm,
+  localAccountDisconnectButton,
+  localAccountHint,
   localAccountListEl,
   localAccountNameEl,
   localAccountNameInput,
   localAccountPanel,
   localAccountRow,
+  localAccountSwitchNote,
   loginButton,
   loginCancelButton,
   loginEmail,
@@ -84,6 +89,7 @@ import {
   isValidChatText,
   parseAgentModes,
   parseAuthStatus,
+  parseCloudBinding,
   parseDesktopBridgeResult,
   parseLocalAccounts,
   parseLoginTransactionResult,
@@ -122,9 +128,10 @@ import {
 import {
   attachDroppedFiles,
   buildStarterCards,
-  canUseAgent,
+  canSendTurn,
   cancelNewThreadDraft,
   hasAttemptedCreateDraft,
+  isLocalIdentity,
   isLocalOnlySession,
   openNewThreadForm,
   removeRecoverableTurn,
@@ -268,9 +275,17 @@ export const state = {
   // turn (localSingleUserUID, L3d/D2), so it is what decides whether this app
   // is usable without an account.
   localRoute: false,
-  // Named local identities (登录这块的"本地账户"半边). Loaded on the signed-out
-  // path only; the active one decides which uid the local route runs as.
+  // Named local identities (登录这块的"本地账户"半边). Always loaded, signed in
+  // or not: the active one is who this machine is, and it is what owns local
+  // work whenever no cloud account is connected.
   localAccounts: [],
+  // Whether this machine's identity currently has a WorkMax account connected
+  // to it, and (masked) which one. A binding, not a login state: it grants
+  // cloud routing and sync, and connecting or disconnecting moves no data.
+  cloudBinding: { state: "unbound", user_id: "" },
+  // True while a disconnect (logout) is in flight, so the button cannot be
+  // pressed twice into two revocations of the same session.
+  disconnecting: false,
   localAccountPanelOpen: false,
   // The id being renamed inline, or null. While set, background repaints
   // (auth polling → updateComposerState) must NOT rebuild the account list —
@@ -285,6 +300,10 @@ export const state = {
   toolLoop: false,
 };
 
+// The sidecar's LAST-RESORT name for this machine's identity — what it writes
+// when the operating system will not say who is logged in. A real OS name is a
+// real name and gets shown; this one is a placeholder, and repeating it next
+// to a "Local" runtime chip would just say Local twice.
 export const defaultLocalAccountLabel = "Local";
 
 export class SessionChangedError extends Error {
@@ -720,6 +739,7 @@ async function loadLocalAccounts(
   const local = desktopLocalAccountsBridge();
   if (!local) return false;
   let accounts;
+  let binding;
   try {
     const result = parseDesktopBridgeResult(
       await local.listAccounts(),
@@ -727,11 +747,13 @@ async function loadLocalAccounts(
     );
     if (!result.ok) return false;
     accounts = parseLocalAccounts(result.data);
+    binding = parseCloudBinding(result.data);
   } catch {
     return false;
   }
   if (!fences.session.isCurrent(expectedSessionGeneration)) return false;
   state.localAccounts = accounts;
+  state.cloudBinding = binding;
   renderLocalAccountArea();
   return true;
 }
@@ -740,12 +762,16 @@ export function activeLocalAccount() {
   return state.localAccounts.find((account) => account.active) || null;
 }
 
-// The switcher shows only in local-only sessions: with a cloud session the
-// local account is not what turns run as, and showing it would claim it is.
+// Who you are on this machine, and what — if anything — that identity is
+// connected to. It used to hide itself whenever a cloud session existed, on
+// the grounds that the local account was not what turns ran as. True, and
+// exactly why it should be visible: "connected to …42" is the fact that
+// explains where the work is going, and hiding it made connecting and
+// disconnecting feel like signing in and out of the app itself.
 export function renderLocalAccountArea() {
   if (!localAccountRow || !localAccountPanel) return;
   const active = activeLocalAccount();
-  const visible = isLocalOnlySession() && active !== null;
+  const visible = active !== null;
   localAccountRow.hidden = !visible;
   if (!visible) {
     state.localAccountPanelOpen = false;
@@ -757,12 +783,67 @@ export function renderLocalAccountArea() {
   if (localAccountAvatar) {
     localAccountAvatar.textContent = Array.from(active.name)[0].toUpperCase();
   }
+  if (localAccountHint) {
+    // The row names the machine's identity; the hint says what that identity
+    // is currently connected to, so a bound session never reads as "you are
+    // this local account and nothing else is going on".
+    localAccountHint.textContent =
+      state.cloudBinding?.state === "bound"
+        ? "Connected"
+        : state.cloudBinding?.state === "expired"
+          ? "Reconnect"
+          : "Switch";
+  }
   localAccountPanel.hidden = !state.localAccountPanelOpen;
-  if (!state.localAccountPanelOpen || !localAccountListEl) return;
+  if (!state.localAccountPanelOpen) return;
+  renderLocalAccountBinding();
+  if (!localAccountListEl) return;
   if (state.localAccountRenamingID !== null) return;
+  // Switching identities decides who owns LOCAL work. While an account is
+  // connected, new work belongs to that account, so a switch here would be a
+  // control that changes nothing — a dead action wearing a label. The list is
+  // shown when it means something, and explained when it does not.
+  const switchable = isLocalIdentity();
+  if (localAccountSwitchNote) {
+    localAccountSwitchNote.hidden = switchable;
+    localAccountSwitchNote.textContent = switchable
+      ? ""
+      : "While an account is connected, new conversations belong to it. Disconnect to work as this machine's own identities again.";
+  }
+  localAccountListEl.hidden = !switchable;
+  if (localAccountCreateForm) localAccountCreateForm.hidden = !switchable;
+  if (!switchable) return;
   localAccountListEl.textContent = "";
   for (const account of state.localAccounts) {
     localAccountListEl.appendChild(renderLocalAccountItem(account));
+  }
+}
+
+// The binding line: bound / expired / unbound, and the one action that
+// changes it. Disconnect is the existing logout — no data moves, which is why
+// the copy promises exactly that and nothing more.
+function renderLocalAccountBinding() {
+  const binding = state.cloudBinding || { state: "unbound", user_id: "" };
+  const named = binding.user_id ? " (" + binding.user_id + ")" : "";
+  if (localAccountBindingState) {
+    localAccountBindingState.textContent =
+      binding.state === "bound"
+        ? "Connected to a WorkMax account" + named + " — cloud models and sync are available."
+        : binding.state === "expired"
+          ? "The connected WorkMax account" + named + " needs signing in again. Local work is unaffected."
+          : "No WorkMax account connected. Everything here is local to this machine.";
+  }
+  if (localAccountConnectButton) {
+    localAccountConnectButton.hidden = binding.state === "bound";
+    localAccountConnectButton.textContent =
+      binding.state === "expired" ? "Sign in again" : "Connect account";
+  }
+  if (localAccountDisconnectButton) {
+    localAccountDisconnectButton.hidden = binding.state === "unbound";
+    localAccountDisconnectButton.textContent = state.disconnecting
+      ? "Disconnecting..."
+      : "Disconnect";
+    localAccountDisconnectButton.disabled = state.disconnecting === true;
   }
 }
 
@@ -773,7 +854,7 @@ export function renderComposerChips() {
   const runtime = document.querySelector("#runtime-chip");
   const accountChip = document.querySelector("#account-chip");
   if (runtime) {
-    if (!canUseAgent()) {
+    if (!canSendTurn()) {
       runtime.hidden = true;
     } else if (state.localRoute) {
       runtime.textContent = state.toolLoop ? "⌂ Local · tools" : "⌂ Local · chat";
@@ -784,9 +865,8 @@ export function renderComposerChips() {
     }
   }
   if (accountChip) {
-    const account = isLocalOnlySession() ? activeLocalAccount() : null;
-    // The default identity is nobody in particular; naming it next to a
-    // "Local" runtime chip would just say Local twice.
+    const account = isLocalIdentity() ? activeLocalAccount() : null;
+    // See defaultLocalAccountLabel: the placeholder name is not worth a chip.
     if (account && account.name !== defaultLocalAccountLabel) {
       accountChip.textContent = account.name;
       accountChip.hidden = false;
@@ -941,6 +1021,41 @@ async function deleteLocalAccountByID(account) {
     setStatus(String(error.message || error), "error");
   }
   await loadLocalAccounts();
+}
+
+// Disconnecting an account is the existing logout, said in the words that
+// describe what it does: the account stops authorizing cloud work, and the
+// local identity that was there the whole time is what remains. No data is
+// moved in either direction — the rows an account owns stay its own, and
+// reconnecting the same account finds them again.
+async function disconnectCloudAccount() {
+  const desktop = window.desktopBridge;
+  const auth = isRecord(desktop) ? desktop.auth : null;
+  if (!isRecord(auth) || typeof auth.logout !== "function") {
+    setStatus("Disconnecting is unavailable in this Desktop build", "error");
+    return;
+  }
+  if (state.disconnecting) return;
+  state.disconnecting = true;
+  renderLocalAccountArea();
+  try {
+    const result = parseDesktopBridgeResult(await auth.logout(), "logout result");
+    if (!result.ok) {
+      const raw = isRecord(result.error) ? result.error.error : result.error;
+      throw new Error(sanitizeErrorMessage(raw) || "Could not disconnect the account");
+    }
+  } catch (error) {
+    state.disconnecting = false;
+    setStatus(String(error.message || error), "error");
+    renderLocalAccountArea();
+    return;
+  }
+  state.disconnecting = false;
+  state.localAccountPanelOpen = false;
+  setStatus("Account disconnected. You are working as this machine's identity again.");
+  // A full reload, for the same reason an account switch is: every loaded
+  // thread belonged to the identity that just left.
+  await refresh();
 }
 
 function toggleLocalAccountPanel() {
@@ -1340,21 +1455,20 @@ export async function handleSessionChanged() {
     if (!fences.session.isCurrent(generation) || !auth) return;
     loginButton.hidden = auth.state === "authenticated";
     if (auth.state !== "authenticated") {
-      // The account went away rather than changing. If the local route is
-      // configured this is still a usable app, so land on the signed-out local
-      // session instead of an empty workbench.
+      // The account went away rather than changing — a disconnect, or a
+      // session that expired. This machine's own identity is still here, so
+      // land on it with its workbench loaded instead of an empty shell.
       state.localRoute = false;
       await loadLocalModes(generation);
       if (!fences.session.isCurrent(generation)) return;
-      if (state.localRoute) {
-        await Promise.allSettled([
-          loadThreads(generation),
-          loadRecoverableTurns(generation),
-        ]);
-      }
+      await Promise.allSettled([
+        loadThreads(generation),
+        loadRecoverableTurns(generation),
+      ]);
     }
     if (auth.state === "authenticated") {
       state.localRoute = false;
+      void loadLocalAccounts(generation);
       const results = await Promise.allSettled([
         loadThreads(generation),
         loadSkills(generation),
@@ -1400,7 +1514,7 @@ export function submitChat(event) {
   );
   const userText = chatInput.value.trim();
   if (
-    !canUseAgent() ||
+    !canSendTurn() ||
     !agent ||
     !thread ||
     !state.allowedModes.includes(state.selectedMode) ||
@@ -1993,6 +2107,23 @@ async function stopActiveTurn() {
   }
 }
 
+// What the app says when no account is connected. One sentence, in one place,
+// because two paths write it (boot, and the login machinery landing on idle)
+// and they used to disagree — one described a usable local workbench, the
+// other a sign-in wall.
+function signedOutStatusMessage(authState = state.auth?.state) {
+  if (state.localRoute) {
+    return "Local model route. No account connected — history stays on this machine.";
+  }
+  if (authState === "expired") {
+    return "The connected account needs signing in again. Your local work is still here.";
+  }
+  const identity = activeLocalAccount();
+  return identity
+    ? `Working as ${identity.name} on this machine. Connect an account or a local model to start a conversation.`
+    : "Working on this machine. Connect an account or a local model to start a conversation.";
+}
+
 function setLoginFormState(visible, submitting = false) {
   loginForm.hidden = !visible;
   loginButton.hidden = visible || state.auth?.state === "authenticated";
@@ -2031,7 +2162,10 @@ async function applyLoginTransactionResult(result, pollSubmitting = false, gener
       if (state.modesParseSkew) {
         setStatus("App and sidecar are out of sync: the sidecar's answers no longer match this UI. Restart the app; if this persists, reinstall.", "error");
       } else {
-        setStatus("Signed out. Sign in to sync your cloud history.");
+        // The login machinery has the last word on this path, so it must say
+        // the same thing boot does: no account connected is a state of the
+        // app, not a wall in front of it.
+        setStatus(signedOutStatusMessage());
       }
       return;
     case "awaiting_password":
@@ -2320,29 +2454,21 @@ export async function refresh() {
       renderThreads();
       emptyState.hidden = false;
       threadPanel.hidden = true;
-      // Signed out is not the same as unusable. If the local route is
-      // configured the sidecar will serve turns under its single local user,
-      // so load what that user has instead of stopping at the sign-in wall.
+      // No account connected is not the same as no identity. The sidecar
+      // resolves this machine's local account either way, so the workbench —
+      // history, interrupted turns, accounts — loads unconditionally. Whether
+      // a PROMPT can be sent is a separate question, answered by localRoute
+      // below and by the composer.
       await loadLocalModes(generation);
       if (!fences.session.isCurrent(generation)) return;
-      if (state.localRoute) {
-        setStatus("Local model route. Signed out — history stays on this machine.");
-        await Promise.all([
-          loadThreads(generation),
-          loadRecoverableTurns(generation),
-        ]);
-        if (!fences.session.isCurrent(generation)) return;
-        renderEmptyState();
-        updateComposerState();
-        await restoreLoginTransaction();
-        return;
-      }
+      await Promise.allSettled([
+        loadThreads(generation),
+        loadRecoverableTurns(generation),
+      ]);
+      if (!fences.session.isCurrent(generation)) return;
+      renderEmptyState();
       updateComposerState();
-      setStatus(
-        auth.state === "expired"
-          ? "Your session expired. Sign in again to sync your cloud history."
-          : "Signed out. Sign in to sync your cloud history."
-      );
+      setStatus(signedOutStatusMessage(auth.state));
       await restoreLoginTransaction();
       // Last word on purpose: whatever the login machinery wrote above, a
       // version skew is the thing the user actually needs to know about.
@@ -2357,6 +2483,10 @@ export async function refresh() {
     state.localRoute = false;
     setLoginFormState(false);
     setStatus(`Authenticated${auth.tier ? ` · ${auth.tier}` : ""}. Reading local cache.`);
+    // The local identity is loaded here too, not only on the signed-out path:
+    // a connected account is a binding ON that identity, and the sidebar has
+    // to be able to say which one it is bound to — and offer to disconnect.
+    void loadLocalAccounts(generation);
     await Promise.all([
       loadThreads(generation),
       loadSkills(generation),
@@ -2468,7 +2598,7 @@ fileInput.addEventListener("change", () => {
 threadPanel.addEventListener("dragover", (event) => {
   if (!event.dataTransfer) return;
   event.preventDefault();
-  if (state.selectedThreadUUID && canUseAgent()) {
+  if (state.selectedThreadUUID) {
     threadPanel.classList.add("drop-target");
   }
 });
@@ -2541,6 +2671,16 @@ if (localAccountRow) {
 if (localAccountCreateForm) {
   localAccountCreateForm.addEventListener("submit", (event) => {
     void submitCreateLocalAccount(event);
+  });
+}
+if (localAccountConnectButton) {
+  localAccountConnectButton.addEventListener("click", () => {
+    void login();
+  });
+}
+if (localAccountDisconnectButton) {
+  localAccountDisconnectButton.addEventListener("click", () => {
+    void disconnectCloudAccount();
   });
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -70,7 +71,7 @@ func TestLocalAccountsListSeedsDefault(t *testing.T) {
 	if parsed.Count != 1 || len(parsed.Items) != 1 {
 		t.Fatalf("expected the default account, got %s", body)
 	}
-	if parsed.Items[0].Name != defaultLocalAccountName || !parsed.Items[0].Active {
+	if parsed.Items[0].Name != defaultLocalAccountName() || !parsed.Items[0].Active {
 		t.Fatalf("default row wrong: %s", body)
 	}
 	// uid crosses JSON as a string: 2^62 does not survive float64 parsing.
@@ -276,7 +277,10 @@ func TestLocalAccountsRenameRoute(t *testing.T) {
 		t.Fatalf("renamed = %+v", renamed)
 	}
 	// The rename is a label change: the account still owns the same uid data.
-	if resp, body := localAccountsRequest(t, http.MethodPatch, base+"/local/accounts/2", tok, `{"name":"Local"}`); resp.StatusCode != http.StatusConflict || !strings.Contains(string(body), "name_taken") {
+	// The name it collides with is the first account's, which is now the OS
+	// user rather than a constant — read it rather than assume it.
+	taken := `{"name":` + strconv.Quote(defaultLocalAccountName()) + `}`
+	if resp, body := localAccountsRequest(t, http.MethodPatch, base+"/local/accounts/2", tok, taken); resp.StatusCode != http.StatusConflict || !strings.Contains(string(body), "name_taken") {
 		t.Fatalf("dup rename: %d %s", resp.StatusCode, body)
 	}
 	if resp, _ := localAccountsRequest(t, http.MethodPatch, base+"/local/accounts/99", tok, `{"name":"x"}`); resp.StatusCode != http.StatusNotFound {

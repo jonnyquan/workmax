@@ -62,7 +62,13 @@ var errAgentChatBodyTooLarge = errors.New("chat request body too large")
 // cancellation). The renderer learns the outcome by consuming the
 // stream — there's no separate JSON response.
 func (s *Server) handleAgentChat(c *gin.Context) {
-	if s.cfg.Proxy == nil || s.cfg.DB == nil || s.cfg.TokenStore == nil {
+	// What a turn genuinely needs: local storage for the intent, and a session
+	// subsystem to tell a connected account from a signed-out machine. The
+	// cloud Proxy is required only when the turn is actually going there —
+	// demanding it up front is what made the signed-out local route, which the
+	// sidecar has served since L3d, unreachable over HTTP.
+	useLocalRoute := s.shouldUseLocalRoute()
+	if s.cfg.DB == nil || s.cfg.TokenStore == nil || (!useLocalRoute && s.cfg.Proxy == nil) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error": "agent_turn_recovery_unavailable",
 		})
@@ -108,11 +114,20 @@ func (s *Server) handleAgentChat(c *gin.Context) {
 		return
 	}
 
-	uid, lease, err := s.currentAgentTurnSession()
-	if err != nil {
-		s.writeAgentTurnSessionError(c, err)
+	identity, ok := s.requestOwner(c)
+	if !ok {
 		return
 	}
+	// A turn that leaves this machine needs a cloud session; a turn that runs
+	// on the local model does not. This is the ONLY place the difference
+	// matters — the identity above is the same either way.
+	if !useLocalRoute {
+		if err := identity.RequireCloud(); err != nil {
+			s.writeAgentTurnSessionError(c, err)
+			return
+		}
+	}
+	uid, lease := identity.UID, identity.Lease
 	digest, err := digestAgentTurnIntent(body.ThreadUUID, body.UserText, body.ChatMode)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "agent_turn_intent_invalid"})
@@ -577,7 +592,7 @@ func (s *Server) handleListThreads(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	uid := s.activeLocalHistoryUID()
+	uid := s.resolveIdentity().UID
 	rows, err := ListLocalThreads(s.cfg.DB, uid, limit, includePaused)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -606,7 +621,7 @@ func (s *Server) handleListMessages(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	uid := s.activeLocalHistoryUID()
+	uid := s.resolveIdentity().UID
 	rows, err := ListLocalMessages(s.cfg.DB, uid, uuid, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -657,45 +672,11 @@ func (s *Server) triggerMessagesSync(threadUUID string, uid uint64) {
 	s.cfg.MessagesSyncer.Trigger(threadUUID, cloudID, uid)
 }
 
-// activeLocalHistoryUID returns the uid embedded in the current local
-// access token. It intentionally does not refresh the token: local
-// history reads should remain cheap and offline-friendly. A zero
-// return means "no active uid filter" only for legacy tests /
-// diagnostic boots without TokenStore. When TokenStore is configured
-// but no parseable token exists or the refresh chain has expired,
-// return a no-match sentinel so local endpoints do not expose stale
-// rows from a prior account while the renderer is unauthenticated,
-// expired, or the token entry is corrupt.
-func (s *Server) activeLocalHistoryUID() uint64 {
-	if s.cfg.TokenStore == nil {
-		if s.shouldUseLocalRoute() {
-			return s.localRouteUID()
-		}
-		return 0
-	}
-	pair, err := s.cfg.TokenStore.Get()
-	if err != nil || pair == nil || pair.AccessToken == "" {
-		if s.shouldUseLocalRoute() {
-			return s.localRouteUID()
-		}
-		return noLocalHistoryUID
-	}
-	if pair.IsRefreshExpired(time.Now().UTC()) {
-		if s.shouldUseLocalRoute() {
-			return s.localRouteUID()
-		}
-		return noLocalHistoryUID
-	}
-	uid, err := cloudproxy.ExtractUIDFromAccessToken(pair.AccessToken)
-	if err != nil || uid == 0 {
-		if s.shouldUseLocalRoute() {
-			return s.localRouteUID()
-		}
-		return noLocalHistoryUID
-	}
-	return uint64(uid)
-}
-
+// noLocalHistoryUID is the no-match sentinel: an identity that must not read
+// or write any row. resolveIdentity returns it for the one fail-closed state
+// (a stored session that cannot be bound to a subject, or one replaced
+// mid-request), so a broken credential shows nothing rather than showing
+// somebody else's cache. Compare localSingleUserUID, which is a real owner.
 const noLocalHistoryUID = uint64(1<<63 - 1)
 
 func localHistoryLimitQuery(r *http.Request, defaultLimit, maxLimit int) (int, error) {

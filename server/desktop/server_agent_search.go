@@ -53,7 +53,7 @@ func (s *Server) handleSearchMessages(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_query"})
 		return
 	}
-	uid := s.activeLocalHistoryUID()
+	uid := s.resolveIdentity().UID
 	needle := strings.ToLower(query)
 
 	rows, err := s.cfg.DB.Raw(

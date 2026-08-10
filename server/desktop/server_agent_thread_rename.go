@@ -47,11 +47,11 @@ func (s *Server) handleRenameAgentThread(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_thread_uuid"})
 		return
 	}
-	uid, _, err := s.currentAgentTurnSession()
-	if err != nil {
-		s.writeAgentTurnSessionError(c, err)
+	identity, ok := s.requestOwner(c)
+	if !ok {
 		return
 	}
+	uid := identity.UID
 	name, err := decodeRenameAgentThreadRequest(c.Request)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_name"})

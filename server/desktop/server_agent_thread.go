@@ -42,7 +42,10 @@ type pendingAgentThreadResponse struct {
 // active session's local SQLite cache. The same caller-provided v4 UUID flows
 // through every layer, making both automatic 401 retry and user retry safe.
 func (s *Server) handlePutAgentThread(c *gin.Context) {
-	if s.cfg.Proxy == nil || s.cfg.TokenStore == nil || s.cfg.DB == nil {
+	// A thread is created wherever its owner lives. Local storage and a
+	// session subsystem are the real dependencies; the cloud Proxy is one only
+	// when this thread is going to have a cloud counterpart.
+	if s.cfg.DB == nil || s.cfg.TokenStore == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "agent_create_unavailable"})
 		return
 	}
@@ -70,20 +73,22 @@ func (s *Server) handlePutAgentThread(c *gin.Context) {
 	}
 	request.AgentMode, _ = NormalizeDesktopAgentMode(request.AgentMode)
 
-	// Local route: build the thread locally without requiring a cloud session
-	// (L3d, D2). An unauthenticated local-only user gets localSingleUserUID; an
-	// authenticated local-route user keeps their real uid. Cloud path below is
-	// untouched.
-	if s.shouldUseLocalRoute() {
-		uid := s.localRouteUID()
-		if pair, _, acqErr := cloudproxy.AcquireAccessTokenWithLease(
-			c.Request.Context(), s.cfg.TokenStore, s.cfg.Proxy.CloudClient(),
-		); acqErr == nil {
-			if u, uidErr := cloudproxy.ExtractUIDFromAccessToken(pair.AccessToken); uidErr == nil && u != 0 {
-				uid = uint64(u)
-			}
-		}
-		row, created, err := s.createLocalAgentThread(uid, threadUUID, request)
+	identity, ok := s.requestOwner(c)
+	if !ok {
+		return
+	}
+
+	// Two reasons a thread is born local: the turns will run on the local
+	// model, or there is no connected account for it to exist in. The second
+	// is what makes a signed-out machine usable rather than a browsing museum.
+	//
+	// The identity is resolved ABOVE this branch on purpose. This is where the
+	// route used to decide the owner too: it re-acquired a cloud token (a
+	// network refresh, on the offline-first path) and let a bound account
+	// silently take over a local create. Route decides where a turn runs;
+	// identity decides who owns the row.
+	if s.shouldUseLocalRoute() || !identity.IsCloud() {
+		row, created, err := s.createLocalAgentThread(identity.UID, threadUUID, request)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "local_thread_create_failed"})
 			return
@@ -96,6 +101,10 @@ func (s *Server) handlePutAgentThread(c *gin.Context) {
 		return
 	}
 
+	if s.cfg.Proxy == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "agent_create_unavailable"})
+		return
+	}
 	cloud := s.cfg.Proxy.CloudClient()
 	pair, lease, err := cloudproxy.AcquireAccessTokenWithLease(
 		c.Request.Context(),

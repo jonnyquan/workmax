@@ -389,11 +389,15 @@ func (s *Server) handleTriggerSync(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	activeUID := s.activeLocalHistoryUID()
-	if activeUID == noLocalHistoryUID {
+	// Sync is the one thing a local identity genuinely cannot do: there is no
+	// cloud side to pull from. A boot with no session subsystem at all
+	// (TokenStore nil — diagnostics) keeps the legacy unconditional trigger.
+	identity := s.resolveIdentity()
+	if s.cfg.TokenStore != nil && !identity.IsCloud() {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "no active desktop session"})
 		return
 	}
+	activeUID := identity.UID
 	s.cfg.ThreadsSyncer.Trigger("manual")
 
 	// Optional per-thread messages trigger. Reuses the existing

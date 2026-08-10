@@ -549,6 +549,24 @@ export function parseLocalAccounts(data) {
   });
 }
 
+// The other half of /local/accounts: whether this machine's identity has a
+// WorkMax account connected to it. Deliberately lenient about ABSENCE — a
+// sidecar that predates the field is simply an unbound one — and strict about
+// content, because "bound to …42" is a claim about where work goes.
+export function parseCloudBinding(data) {
+  const binding = isRecord(data) ? data.binding : null;
+  if (!isRecord(binding)) {
+    return { state: "unbound", user_id: "" };
+  }
+  const state =
+    binding.state === "bound" || binding.state === "expired" ? binding.state : "unbound";
+  const userID =
+    typeof binding.user_id === "string" && isSafeProtocolString(binding.user_id, 32)
+      ? binding.user_id
+      : "";
+  return { state, user_id: state === "unbound" ? "" : userID };
+}
+
 export function isValidChatText(value) {
   if (typeof value !== "string" || !hasWellFormedUTF16(value)) return false;
   const trimmed = value.trim();

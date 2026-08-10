@@ -55,11 +55,11 @@ func (s *Server) handleDeleteAgentThread(c *gin.Context) {
 	}
 	// The same identity resolution as a turn: a signed-in user deletes their
 	// own rows, a signed-out local-route user deletes the local single user's.
-	uid, _, err := s.currentAgentTurnSession()
-	if err != nil {
-		s.writeAgentTurnSessionError(c, err)
+	identity, ok := s.requestOwner(c)
+	if !ok {
 		return
 	}
+	uid := identity.UID
 
 	var (
 		threadID  uint64

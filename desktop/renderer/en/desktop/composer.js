@@ -322,14 +322,14 @@ export function updateComposerState() {
   // now-impossible one.
   const palette = document.querySelector("#quick-switcher");
   if (palette && !palette.hidden) renderQuickSwitcher();
-  const authenticated = canUseAgent();
+  const canSend = canSendTurn();
   const hasThread = Boolean(state.selectedThreadUUID);
   const hasMode = state.allowedModes.includes(state.selectedMode);
   const active = state.activeTurn !== null;
   const cancelConfirmationPending = state.cancelConfirmationTurnID !== null;
   const recoverable = selectedRecoverableTurn();
   const ready =
-    authenticated &&
+    canSend &&
     hasThread &&
     state.agentAvailable &&
     !state.skillsLoading &&
@@ -350,7 +350,7 @@ export function updateComposerState() {
   // The chip keeps the mode visible when the selector has nothing to select.
   const modeChip = document.querySelector("#mode-chip");
   if (modeChip) {
-    const shown = singleSkill && authenticated && state.selectedMode !== "";
+    const shown = singleSkill && canSend && state.selectedMode !== "";
     modeChip.hidden = !shown;
     if (shown) modeChip.textContent = state.selectedMode.toUpperCase();
   }
@@ -361,9 +361,12 @@ export function updateComposerState() {
 
   if (state.recoveringSession) {
     composerStatus.textContent = "Your signed-in account changed. Select a thread again.";
-  } else if (!authenticated) {
-    composerStatus.textContent =
-      "Sign in, or choose a local model under Models, to start a conversation.";
+  } else if (!canSend) {
+    // Not a locked door: everything else on screen already works. What is
+    // missing is a model, and both ways of getting one are named.
+    composerStatus.textContent = hasThread
+      ? "This conversation is yours and stays here. To send a prompt, connect a WorkMax account or set a local model under Models."
+      : "Browse and organize freely. To send a prompt, connect a WorkMax account or set a local model under Models.";
   } else if (!hasThread) {
     composerStatus.textContent = isLocalOnlySession()
       ? "Select or create a thread. It stays on this machine."
@@ -399,22 +402,34 @@ export function updateComposerState() {
   updateNewThreadState();
 }
 
-// Whether the agent can be driven at all right now.
+// Two levels, because there are two different questions.
 //
-// It used to be "is there a cloud session", which made the local route
-// unreachable: the sidecar has served unauthenticated turns since L3d, but the
-// renderer disabled its composer, hid the new-thread button and never even
-// loaded local threads, so the signed-out local-first configuration existed
-// only on the server side.
-export function canUseAgent() {
+// canSendTurn is "does a prompt have anywhere to go" — a connected account or
+// a configured local model. It is a fact about MODELS, and there is no way to
+// be polite around it: with neither, a turn cannot run.
+//
+// The workbench is the other level, and it has no predicate any more because
+// the answer is always yes. The sidecar always resolves an identity (this
+// machine's local account when no account is connected), so history, drafts,
+// settings and account switching are always available. They used to hang off
+// canUseAgent, which meant a first-run user with no local model configured
+// could not even see their own conversations — the app locked the door to a
+// room that was already theirs.
+export function canSendTurn() {
   return state.auth?.state === "authenticated" || state.localRoute;
 }
 
-// Signed out and running locally. Worth naming because several messages have
-// to say something different in this state — "sign in" is not the answer to
-// anything here.
+// Working as this machine's own identity: no cloud account connected. Worth
+// naming because several messages have to say something different here —
+// "sign in" is not the answer to anything in this state.
+export function isLocalIdentity() {
+  return state.auth?.state !== "authenticated";
+}
+
+// Local identity AND a local model: the fully offline configuration, where
+// the composer can promise that nothing leaves the machine.
 export function isLocalOnlySession() {
-  return state.localRoute && state.auth?.state !== "authenticated";
+  return state.localRoute && isLocalIdentity();
 }
 
 function canGenerateThreadUUID() {
@@ -432,9 +447,11 @@ function generateThreadUUID() {
   return value;
 }
 
+// Starting a conversation is workbench work, not model work: the sidecar
+// creates it under this machine's identity when no account is connected. You
+// can gather sources and name the thing before deciding where the model runs.
 export function canOpenNewThread() {
   return (
-    canUseAgent() &&
     state.agentAvailable &&
     state.createAvailable &&
     canGenerateThreadUUID() &&
@@ -498,20 +515,25 @@ export function buildStarterCards() {
 }
 
 export function renderEmptyState() {
-  const authenticated = canUseAgent();
-  // First run, neither path chosen yet: the two ways of working are equal
-  // citizens shown side by side, not a sign-in wall with the local path
-  // buried in a settings button. 登录 = 本地模型 + 远程授权, at first sight.
+  const canSend = canSendTurn();
+  // First run: the question is NOT "who are you" — the machine already knows,
+  // and the sidecar has already resolved that identity. The only open question
+  // is where the model runs, and the two answers are equal citizens.
   const onboarding = document.querySelector("#onboarding-paths");
-  if (onboarding) onboarding.hidden = authenticated;
-  if (!authenticated) {
-    emptyTitle.textContent = "How do you want to work?";
+  if (onboarding) onboarding.hidden = canSend;
+  if (!canSend) {
+    const account = activeLocalAccount();
+    emptyTitle.textContent =
+      account && account.name !== defaultLocalAccountLabel
+        ? "You're working as " + account.name
+        : "You're working on this machine";
     emptyDescription.textContent =
-      "Both paths lead to the same app. You can sign in later, or switch models any time.";
+      "Your conversations and files are already here and already yours. One thing left: where should the model run?";
   } else {
     // One question, Codex-style: the app is usable, so the headline invites
     // work instead of describing machinery. The identity joins the question
-    // when it is a real name — "What should we make, Local?" is nobody.
+    // when it is a real name — "What should we make, Local?" is nobody, and
+    // "Local" is exactly the placeholder the sidecar falls back to.
     const account = isLocalOnlySession() ? activeLocalAccount() : null;
     emptyTitle.textContent =
       account && account.name !== defaultLocalAccountLabel
@@ -528,11 +550,13 @@ export function renderEmptyState() {
       emptyDescription.textContent = "Pick a conversation on the left, or start fresh below.";
     }
   }
-  emptyNewThreadButton.hidden = !authenticated || !state.createAvailable;
+  emptyNewThreadButton.hidden = !state.createAvailable;
   const starters = document.querySelector("#starter-prompts");
   if (starters) {
-    // Same conditions as the button they are a richer version of.
-    starters.hidden = emptyNewThreadButton.hidden;
+    // The starters are a richer New thread button, and they promise a turn.
+    // Offering them before there is a model to run one would be a card that
+    // fills the composer and then cannot send it.
+    starters.hidden = emptyNewThreadButton.hidden || !canSend;
   }
 }
 
@@ -600,11 +624,10 @@ function classifyCreateThreadFailure(result) {
 }
 
 export function updateNewThreadState() {
-  // canUseAgent, not the raw cloud-auth state: a signed-out session with a
-  // local route creates local threads. This was the one predicate left on
-  // the old check — the form would open (canOpenNewThread) but the submit
-  // stayed disabled forever, which the packaged-app smoke caught.
-  const authenticated = canUseAgent();
+  // No model predicate here, and that is deliberate: the form and the button
+  // that opens it must obey ONE condition. They disagreed once already (the
+  // form opened, the submit stayed disabled forever — the packaged-app smoke
+  // caught it), and the fix is not a second copy of the same test.
   const hasMode = state.allowedModes.includes(newThreadMode.value);
   const attempted = state.createDraft?.attempted === true;
   const pending = state.createDraft?.pending === true;
@@ -612,7 +635,6 @@ export function updateNewThreadState() {
   const validName = isValidThreadName(newThreadName.value.trim());
   const canSubmit =
     state.createFormOpen &&
-    authenticated &&
     state.agentAvailable &&
     state.createAvailable &&
     !state.skillsLoading &&
@@ -732,7 +754,6 @@ export async function submitNewThread(event) {
   const name = newThreadName.value.trim();
   const mode = newThreadMode.value;
   if (
-    !canUseAgent() ||
     !agent ||
     !state.agentAvailable ||
     state.skillsLoading ||
@@ -860,7 +881,9 @@ export async function submitNewThread(event) {
 // the conversation, or a paste. All three land in the same upload path, so
 // the chips, the Sources panel, and the send-time union behave identically.
 export function attachDroppedFiles(files) {
-  if (!state.selectedThreadUUID || !canUseAgent()) return;
+  // Sources belong to the thread, not to the model: a machine with no model
+  // configured can still gather what a later turn will read.
+  if (!state.selectedThreadUUID) return;
   for (const file of Array.from(files || [])) {
     uploadThreadFile(file);
   }

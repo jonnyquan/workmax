@@ -5,6 +5,7 @@ package desktop
 import (
 	"errors"
 	"fmt"
+	"os/user"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -47,9 +48,11 @@ func localAccountUID(id int64) uint64 {
 }
 
 const (
-	defaultLocalAccountName = "Local"
-	maxLocalAccountName     = 64
-	maxLocalAccounts        = 32
+	// fallbackLocalAccountName is used only when the operating system will not
+	// tell us who is logged in, or tells us something that cannot be a name.
+	fallbackLocalAccountName = "Local"
+	maxLocalAccountName      = 64
+	maxLocalAccounts         = 32
 )
 
 var (
@@ -68,9 +71,63 @@ func normalizeLocalAccountName(value string) (string, error) {
 	return name, nil
 }
 
+// defaultLocalAccountName is who this machine says you are before you have
+// told it anything: the operating system's user.
+//
+// It is a DISPLAY NAME and nothing else. It never becomes a uid, never appears
+// in a query predicate, and is not compared against anything — the identity is
+// still the AUTOINCREMENT row id. Deriving a uid from a username would be a
+// second, weaker identity key on top of the one that already guarantees zero
+// migration, and a rename would silently move somebody's data.
+//
+// Full name first (人 reads "Ming Zhang" and recognizes themselves), login
+// name second, and the literal fallback last. Anything the OS gives us that
+// cannot survive normalization is treated as absent rather than mangled.
+func defaultLocalAccountName() string {
+	current, err := user.Current()
+	if err != nil || current == nil {
+		return fallbackLocalAccountName
+	}
+	for _, candidate := range []string{current.Name, current.Username} {
+		if name, err := normalizeLocalAccountName(sanitizeOSUserName(candidate)); err == nil {
+			return name
+		}
+	}
+	return fallbackLocalAccountName
+}
+
+// sanitizeOSUserName makes an OS-supplied name eligible for the same
+// normalization every user-typed name goes through. The OS is not a form: it
+// can hand back a domain-qualified login, control characters, or a name longer
+// than the column allows. Trimming those is not a second normalization —
+// normalizeLocalAccountName still has the final say, and still rejects.
+func sanitizeOSUserName(value string) string {
+	// "DOMAIN\user" / "user@host": the person is the last segment.
+	if index := strings.LastIndexAny(value, `\/`); index >= 0 {
+		value = value[index+1:]
+	}
+	cleaned := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, value)
+	cleaned = strings.TrimSpace(cleaned)
+	if utf8.RuneCountInString(cleaned) > maxLocalAccountName {
+		runes := []rune(cleaned)
+		cleaned = strings.TrimSpace(string(runes[:maxLocalAccountName]))
+	}
+	return cleaned
+}
+
 // ensureDefaultLocalAccount guarantees the table always has an active row.
 // Called from the read path: the default account is how the pre-accounts
 // world keeps working — its uid IS the old single-user uid.
+//
+// The name is chosen ONCE, when the row is created. A machine that already has
+// accounts is never renamed from here: the name may have been chosen by the
+// person using it, and "we know better than you what you are called" is not a
+// migration anyone asked for.
 func ensureDefaultLocalAccount(db *gorm.DB) error {
 	var count int64
 	if err := db.Raw(`SELECT COUNT(*) FROM w_desktop_local_account`).Row().Scan(&count); err != nil {
@@ -82,7 +139,7 @@ func ensureDefaultLocalAccount(db *gorm.DB) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	return db.Exec(
 		`INSERT INTO w_desktop_local_account (name, is_active, created_at, last_used_at) VALUES (?, 1, ?, ?)`,
-		defaultLocalAccountName, now, now,
+		defaultLocalAccountName(), now, now,
 	).Error
 }
 

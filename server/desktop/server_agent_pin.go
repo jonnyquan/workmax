@@ -40,11 +40,11 @@ func (s *Server) handleSetThreadPin(c *gin.Context, pinned bool) {
 	}
 	// Ownership as everywhere else: you pin your own threads, and a foreign
 	// uuid is not found rather than forbidden.
-	uid, _, err := s.currentAgentTurnSession()
-	if err != nil {
-		s.writeAgentTurnSessionError(c, err)
+	identity, ok := s.requestOwner(c)
+	if !ok {
 		return
 	}
+	uid := identity.UID
 	var threadID uint64
 	if err := s.cfg.DB.Raw(
 		`SELECT id FROM w_workagent_thread WHERE uuid = ? AND uid = ?`,

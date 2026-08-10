@@ -408,10 +408,11 @@ func TestAgentTurn_CancelWinsBeforeUpstreamTransition(t *testing.T) {
 	proxy := cloudproxy.NewProxy(client, store, db)
 	proxy.HTTPClient = upstream.Client()
 	server := &Server{cfg: ServerConfig{DB: db, TokenStore: store, Proxy: proxy}}
-	uid, lease, err := server.currentAgentTurnSession()
-	if err != nil {
-		t.Fatal(err)
+	identity := server.resolveIdentity()
+	if !identity.IsCloud() {
+		t.Fatalf("identity = %+v, want the connected account", identity)
 	}
+	uid, lease := identity.UID, identity.Lease
 	digest, _ := digestAgentTurnIntent("thr-cancel-wins", "frozen", "ppt")
 	intent, thread, _, err := ensureAgentTurnIntent(
 		db, lease, uid, serverTestTurnUUID, "thr-cancel-wins", "frozen", "ppt", digest,
@@ -659,10 +660,11 @@ func TestStreamLegacyAgentTurn_LocalRoute(t *testing.T) {
 		Proxy:          nil, // local 路径不应触碰云端 Proxy
 	}}
 
-	uid, lease, err := server.currentAgentTurnSession()
-	if err != nil {
-		t.Fatal(err)
+	identity := server.resolveIdentity()
+	if !identity.IsCloud() {
+		t.Fatalf("identity = %+v, want the connected account", identity)
 	}
+	uid, lease := identity.UID, identity.Lease
 	digest, _ := digestAgentTurnIntent("thr-local-route", "hi", "general")
 	intent, thread, _, err := ensureAgentTurnIntent(
 		db, lease, uid, serverTestTurnUUID, "thr-local-route", "hi", "general", digest,
@@ -725,42 +727,6 @@ func ensureLocalModelSettingsDB(t *testing.T, db *gorm.DB) *LocalModelSettingsSt
 		t.Fatalf("put local settings: %v", err)
 	}
 	return store
-}
-
-// TestCurrentAgentTurnSession_LocalFallbackUnauthenticated: an unauthenticated
-// user (TokenStore configured but no session) with preferred_route=local must
-// resolve to localSingleUserUID + empty lease (L3d), NOT 401/ErrNoSession.
-func TestCurrentAgentTurnSession_LocalFallbackUnauthenticated(t *testing.T) {
-	db := openServerTestDB(t)
-	modelSettings := ensureLocalModelSettingsDB(t, db)
-	store := cloudproxy.NewTokenStore(newMemKeychain()) // no Save = unauthenticated
-	server := &Server{cfg: ServerConfig{
-		DB: db, TokenStore: store, ModelSettings: modelSettings, LocalInference: &fakeLocalRunner{},
-	}}
-	uid, lease, err := server.currentAgentTurnSession()
-	if err != nil {
-		t.Fatalf("unauthenticated local route must not error: %v", err)
-	}
-	if uid != localSingleUserUID {
-		t.Fatalf("uid = %d, want localSingleUserUID = %d", uid, localSingleUserUID)
-	}
-	if lease.Epoch() != 0 {
-		t.Fatalf("lease Epoch = %d, want 0 (empty lease for local)", lease.Epoch())
-	}
-}
-
-// TestActiveLocalHistoryUID_LocalFallbackUnauthenticated: unauthenticated + local
-// route must see local threads (localSingleUserUID), not the no-match sentinel.
-func TestActiveLocalHistoryUID_LocalFallbackUnauthenticated(t *testing.T) {
-	db := openServerTestDB(t)
-	modelSettings := ensureLocalModelSettingsDB(t, db)
-	server := &Server{cfg: ServerConfig{
-		DB: db, TokenStore: cloudproxy.NewTokenStore(newMemKeychain()),
-		ModelSettings: modelSettings, LocalInference: &fakeLocalRunner{},
-	}}
-	if got := server.activeLocalHistoryUID(); got != localSingleUserUID {
-		t.Fatalf("activeLocalHistoryUID = %d, want localSingleUserUID = %d", got, localSingleUserUID)
-	}
 }
 
 // TestEnsureAgentTurnIntent_EmptyLeaseLocalUID: the L3d lease change lets the

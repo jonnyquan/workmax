@@ -24,6 +24,13 @@ import (
 type localAccountsResponse struct {
 	Items []LocalAccount `json:"items"`
 	Count int            `json:"count"`
+	// Binding answers the other half of "who am I here": whether this
+	// machine's identity currently has a WorkMax account connected to it, and
+	// which one. It lives on this route because it is a property OF the local
+	// identity, not a separate session screen — and it is derived from the
+	// token snapshot, so connecting or disconnecting stores and removes
+	// nothing.
+	Binding CloudBinding `json:"binding"`
 }
 
 func (s *Server) handleListLocalAccounts(c *gin.Context) {
@@ -36,7 +43,11 @@ func (s *Server) handleListLocalAccounts(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "local_accounts_unavailable"})
 		return
 	}
-	c.JSON(http.StatusOK, localAccountsResponse{Items: items, Count: len(items)})
+	c.JSON(http.StatusOK, localAccountsResponse{
+		Items:   items,
+		Count:   len(items),
+		Binding: s.cloudBinding(),
+	})
 }
 
 const maxLocalAccountBodyBytes = 2 << 10

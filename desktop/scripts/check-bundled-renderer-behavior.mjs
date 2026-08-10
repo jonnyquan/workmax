@@ -873,7 +873,11 @@ async function testUnauthenticatedLogin() {
   rendererDocument = document;
   assert.equal(document.byId.get("login-button").hidden, false);
   assert.equal(document.byId.get("login-form").hidden, true);
-  assert.match(document.byId.get("status-card").textContent, /Signed out\. Sign in to sync/);
+  assert.match(
+    document.byId.get("status-card").textContent,
+    /Working on this machine\. Connect an account or a local model/,
+    "no account connected is a state of a usable app, not a wall in front of it",
+  );
   assert.deepEqual(statusCalls, [[]]);
 
   document.byId.get("login-button").click();
@@ -1003,6 +1007,11 @@ async function testCancelFencesLatePasswordCompletion() {
       if (pathname === "/auth/status") {
         return response({ state: "unauthenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
+      // Boot reads local history with or without an account: identity always
+      // resolves, so the workbench is not gated on signing in.
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [] });
+      }
       throw new Error(`unexpected fetch path ${pathname}`);
     },
   };
@@ -1037,7 +1046,9 @@ async function testCancelFencesLatePasswordCompletion() {
   assert.equal(document.byId.get("login-password").value, "");
   assert.equal(document.byId.get("login-form").hidden, true);
   assert.match(document.byId.get("status-card").textContent, /Sign-in was canceled/);
-  assert.deepEqual(calls, ["/auth/status"]);
+  // The boot pair and nothing else: a canceled sign-in must not re-read the
+  // session or replay anything.
+  assert.deepEqual(calls, ["/auth/status", "/agent/threads?include_paused=false"]);
 }
 
 async function testAmbiguousPasswordResponseReconcilesSessionWithoutReplay() {
@@ -1094,8 +1105,13 @@ async function testAmbiguousPasswordResponseReconcilesSessionWithoutReplay() {
   assert.equal(document.byId.get("login-password").value, "");
   assert.equal(document.byId.get("login-form").hidden, true);
   assert.match(document.byId.get("status-card").textContent, /Authenticated/);
+  // Boot reads local history as this machine's identity; the reconcile then
+  // re-reads the session once and loads the account's history. What matters
+  // is that the password was not replayed — asserted above — and that the
+  // session is read exactly twice.
   assert.deepEqual(calls, [
     "/auth/status",
+    "/agent/threads?include_paused=false",
     "/auth/status",
     "/agent/threads?include_paused=false",
   ]);
@@ -1312,6 +1328,9 @@ async function testRejectsMalformedLoginTransactionResult() {
         if (pathname === "/auth/status") {
           return response({ state: "unauthenticated", updated_at: "2026-05-21T00:00:00Z" });
         }
+        if (pathname === "/agent/threads?include_paused=false") {
+          return response({ items: [] });
+        }
         throw new Error(`unexpected fetch path ${pathname}`);
       },
     };
@@ -1342,7 +1361,9 @@ async function testRejectsMalformedLoginTransactionResult() {
       /private-error|private-location|private-extra/u
     );
     assert.equal(document.byId.get("status-card").classList.contains("error"), true);
-    assert.deepEqual(calls, ["/auth/status"]);
+    // The boot pair only: a malformed begin result must not send the app
+    // looking for a session it does not have.
+    assert.deepEqual(calls, ["/auth/status", "/agent/threads?include_paused=false"]);
   }
 }
 
@@ -3874,7 +3895,7 @@ async function testStreamedAnswerGainsActionsWhenReconcileFails() {
 // app, and until now the renderer did not believe it: the sidecar has served
 // unauthenticated turns since L3d, but the composer was gated on a cloud
 // session, so the local-first configuration existed only on the server.
-function localModeBridge({ localRoute, accounts }) {
+function localModeBridge({ localRoute, accounts, binding }) {
   const calls = [];
   const bridge = {
     async fetch(pathname) {
@@ -3907,12 +3928,18 @@ function localModeBridge({ localRoute, accounts }) {
       async cancelTurn(turnID) { return { turnID, canceled: true }; },
     },
   };
-  const accountCalls = { list: 0, created: [], selected: [], renamed: [], deleted: [] };
+  const accountCalls = { list: 0, created: [], selected: [], renamed: [], deleted: [], logouts: 0 };
   if (accounts) {
     desktopBridge.local = {
       async listAccounts() {
         accountCalls.list += 1;
-        return typedSuccess({ items: accounts.slice(), count: accounts.length });
+        // binding is what the sidecar answers alongside the accounts: whether
+        // this machine's identity has a cloud account connected to it.
+        return typedSuccess({
+          items: accounts.slice(),
+          count: accounts.length,
+          binding: binding ?? { state: "unbound" },
+        });
       },
       async createAccount(name) {
         accountCalls.created.push(name);
@@ -4712,18 +4739,130 @@ async function testModesParseFailureNamesTheSkew() {
   );
 }
 
-async function testLocalAccountRowHiddenWithoutLocalRoute() {
+// The identity exists before any model does. A machine with no account and no
+// local model is still SOMEBODY's — the switcher used to hide itself here,
+// which said the opposite.
+async function testLocalIdentityIsNamedWithoutAnyModel() {
   const accounts = [
-    { id: 1, name: "Local", active: true },
-    { id: 2, name: "Ming", active: false },
+    { id: 1, name: "Ming", active: true },
+    { id: 2, name: "Work", active: false },
   ];
   const { bridge, desktopBridge } = localModeBridge({ localRoute: false, accounts });
   const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
   assert.equal(
     document.byId.get("local-account-row").hidden,
+    false,
+    "you are someone on this machine before you connect anything",
+  );
+  assert.equal(document.byId.get("local-account-name").textContent, "Ming");
+
+  document.byId.get("local-account-row").click();
+  await settle();
+  assert.match(
+    document.byId.get("local-account-binding-state").textContent,
+    /No WorkMax account connected/i,
+    "the panel states the binding, not a login state",
+  );
+  assert.equal(
+    document.byId.get("local-account-connect").hidden,
+    false,
+    "connecting is offered as an action ON this identity",
+  );
+  assert.equal(
+    document.byId.get("local-account-disconnect").hidden,
     true,
-    "without a usable local route the switcher would gate nothing — hide it",
+    "there is nothing to disconnect from yet",
+  );
+  const switcherNames = walk(
+    document.byId.get("local-account-list"),
+    (node) => node.classList?.contains("local-account-item"),
+  ).map((node) => node.textContent);
+  assert.equal(switcherNames.length, 2, "both local identities are switchable without any model");
+}
+
+// Connected: the same row, now stating what it is bound to — and offering the
+// one action that changes it. Switching local identities is NOT offered,
+// because while an account is connected new work belongs to that account and
+// a switch would change nothing.
+async function testConnectedAccountIsShownAsABindingOnTheLocalIdentity() {
+  const accounts = [{ id: 1, name: "Ming", active: true }];
+  const { bridge, desktopBridge } = localModeBridge({
+    localRoute: false,
+    accounts,
+    binding: { state: "bound", user_id: "…42" },
+  });
+  let logoutCalls = 0;
+  bridge.fetch = async (pathname) => {
+    if (pathname === "/auth/status") {
+      return response({
+        state: logoutCalls === 0 ? "authenticated" : "unauthenticated",
+        tier: "pro",
+        updated_at: "2026-08-08T00:00:00Z",
+      });
+    }
+    if (pathname === "/agent/threads?include_paused=false") return response({ items: [] });
+    if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+    throw new Error(`unexpected fetch path ${pathname}`);
+  };
+  desktopBridge.agent.listSkills = async () =>
+    typedSuccess({ items: [], count: 0, allowed_modes: ["ppt"] });
+  desktopBridge.auth = {
+    async beginLogin() { return { state: "awaiting_password" }; },
+    async loginStatus() { return { state: "idle" }; },
+    async submitLoginPassword() { throw new Error("not exercised"); },
+    async cancelLogin() { return { state: "idle" }; },
+    async logout() {
+      logoutCalls += 1;
+      // The sidecar's logout, unchanged: the binding goes away, the local
+      // identity does not.
+      desktopBridge.local.listAccounts = async () =>
+        typedSuccess({ items: accounts.slice(), count: accounts.length, binding: { state: "unbound" } });
+      return typedSuccess({ ok: true, revoke_status: "ok" });
+    },
+  };
+
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
+  await settle();
+  assert.equal(
+    document.byId.get("local-account-row").hidden,
+    false,
+    "a connected account does not erase who you are on this machine",
+  );
+  document.byId.get("local-account-row").click();
+  await settle();
+  assert.match(
+    document.byId.get("local-account-binding-state").textContent,
+    /Connected to a WorkMax account \(…42\)/,
+    "the panel names the connected account, masked",
+  );
+  assert.equal(document.byId.get("local-account-connect").hidden, true);
+  assert.equal(document.byId.get("local-account-disconnect").hidden, false);
+  assert.equal(
+    document.byId.get("local-account-list").hidden,
+    true,
+    "switching local identities while bound would change nothing — do not offer it",
+  );
+
+  document.byId.get("local-account-disconnect").click();
+  await settle();
+  await settle();
+  await settle();
+  assert.equal(logoutCalls, 1, "Disconnect is the existing logout");
+  assert.equal(
+    document.byId.get("chat-input").disabled,
+    true,
+    "with the account gone and no local model, a prompt has nowhere to run",
+  );
+  assert.equal(
+    document.byId.get("local-account-row").hidden,
+    false,
+    "and the machine's own identity is still right there",
+  );
+  assert.match(
+    document.byId.get("status-card").textContent,
+    /Working as Ming on this machine/,
+    "the app lands on the local identity rather than a sign-in wall",
   );
 }
 
@@ -4767,27 +4906,67 @@ async function testSignedOutLocalRouteCanDriveTheAgent() {
   assert.equal(document.byId.get("send-button").disabled, false);
 }
 
-// The other half of the rule: without the local route there is no signed-out
-// path, and the renderer must not offer one it cannot fulfil.
-async function testSignedOutWithoutLocalRouteStaysGated() {
-  const { bridge, desktopBridge } = localModeBridge({ localRoute: false });
+// The other half of the rule, and the change this whole pass is about: with
+// no account AND no local model, the WORKBENCH is still yours — history,
+// drafts, settings, identities — and only SENDING is out of reach. The app
+// used to answer this state by hiding everything behind a sign-in wall.
+async function testSignedOutWithoutAModelKeepsTheWorkbench() {
+  const accounts = [{ id: 1, name: "Ming", active: true }];
+  const { bridge, desktopBridge } = localModeBridge({ localRoute: false, accounts });
   const { document, ns } = await runRenderer(bridge, desktopBridge);
+  await settle();
 
   assert.match(
     document.byId.get("thread-list").textContent,
-    /No cached threads yet/,
-    "with no local route there is no local user whose threads could be shown",
+    /Offline notes/,
+    "the machine's own history belongs to the machine's own identity — show it",
   );
-  assert.equal(document.byId.get("chat-input").disabled, true);
   assert.match(
     document.byId.get("empty-title").textContent,
-    /How do you want to work/,
-    "the empty state must offer a way forward",
+    /You're working as Ming/,
+    "the first-run question is where the model runs, not who you are",
   );
   assert.equal(
     document.byId.get("onboarding-paths").hidden,
     false,
-    "both ways of working are presented side by side, not a sign-in wall",
+    "both ways of getting a model are presented side by side",
+  );
+  assert.equal(
+    document.byId.get("empty-new-thread-button").disabled,
+    false,
+    "starting a conversation is workbench work: the sidecar creates it locally",
+  );
+  assert.equal(
+    document.byId.get("starter-prompts").hidden,
+    true,
+    "the starter cards promise a turn — do not offer them before there is a model to run one",
+  );
+
+  // The form opens AND submits: one predicate, no model required.
+  document.byId.get("empty-new-thread-button").click();
+  await settle();
+  assert.equal(document.byId.get("new-thread-form").hidden, false);
+  const nameInput = document.byId.get("new-thread-name");
+  nameInput.value = "Notes before I decide";
+  nameInput.dispatch("input");
+  assert.equal(
+    document.byId.get("new-thread-submit-button").disabled,
+    false,
+    "a conversation can be started before choosing where the model runs",
+  );
+  document.byId.get("new-thread-cancel-button").click();
+  await settle();
+
+  // Opening a conversation works. Sending does not, and says why.
+  walk(document.byId.get("thread-list"), (node) => node.classList?.contains("thread-button"))[0].click();
+  await settle();
+  assert.equal(document.byId.get("thread-panel").hidden, false, "the conversation opens");
+  assert.equal(document.byId.get("chat-input").disabled, true);
+  assert.equal(document.byId.get("send-button").disabled, true);
+  assert.match(
+    document.byId.get("composer-status").textContent,
+    /connect a WorkMax account or set a local model/i,
+    "the composer names both ways forward instead of saying 'sign in'",
   );
 }
 
@@ -7667,8 +7846,9 @@ await testPaletteRunsCommands();
 await testPaletteOpensWithoutThreads();
 await testPinnedThreadsLeadTheSidebar();
 await testModesParseFailureNamesTheSkew();
-await testLocalAccountRowHiddenWithoutLocalRoute();
-await testSignedOutWithoutLocalRouteStaysGated();
+await testLocalIdentityIsNamedWithoutAnyModel();
+await testConnectedAccountIsShownAsABindingOnTheLocalIdentity();
+await testSignedOutWithoutAModelKeepsTheWorkbench();
 await testAssistantMarkdownIsRenderedAsElements();
 await testAppearanceIsThreeStateAndPersisted();
 await testCodeTokenizerClassifiesTheLanguagesWeShip();
