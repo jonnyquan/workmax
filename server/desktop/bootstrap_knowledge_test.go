@@ -4,102 +4,228 @@ package desktop
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
-	"github.com/glebarez/sqlite"
-	"gorm.io/gorm"
-
-	localinference "server/desktop/local_inference"
-	migrationsdesktop "server/desktop/migrations_desktop"
+	"server/desktop/knowledge/assets"
 )
 
-// recordingKnowledgeHooks counts pass-through calls so the gate's behavior is
-// observable without any cgo knowledge stack.
-type recordingKnowledgeHooks struct {
-	indexCalls    int
-	retrieveCalls int
+// fakeAssets drives knowledgeAssets without a network or a cgo resolver: it is
+// the whole acquisition policy under test, and none of it needs either.
+type fakeAssets struct {
+	mu sync.Mutex
+
+	presentErr error
+	plan       assets.Plan
+	planErr    error
+	fetchErr   error
+
+	planCalls  int
+	fetchCalls int
+	fetched    chan struct{}
+	release    chan struct{}
+	now        time.Time
 }
 
-func (r *recordingKnowledgeHooks) IndexTurn(context.Context, string, string, string) error {
-	r.indexCalls++
-	return nil
-}
-
-func (r *recordingKnowledgeHooks) Retrieve(context.Context, uint64, string, int) ([]localinference.RetrievedSource, error) {
-	r.retrieveCalls++
-	return []localinference.RetrievedSource{{Kind: "file", Label: "a.md", Text: "fact", Score: 0.9}}, nil
-}
-
-func openKnowledgeGateTestDB(t *testing.T) *gorm.DB {
+func newFakeAssets(t *testing.T, dir string) (*knowledgeAssets, *fakeAssets) {
 	t.Helper()
-	dsn := "file:knowledge-gate-" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+	f := &fakeAssets{
+		presentErr: errors.New("assets not on disk"),
+		plan: assets.Plan{
+			Origin:     "embedded",
+			Platform:   "darwin/arm64",
+			Assets:     []assets.Asset{{Name: "model", Path: "knowledge/model.onnx", Size: 100}},
+			TotalBytes: 100,
+		},
+		fetched: make(chan struct{}, 4),
+		release: make(chan struct{}),
+		now:     time.Unix(1_700_000_000, 0),
 	}
-	if _, err := migrationsdesktop.Apply(db); err != nil {
-		t.Fatalf("apply migrations: %v", err)
+	k := &knowledgeAssets{
+		dir: dir,
+		present: func() error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			return f.presentErr
+		},
+		plan: func(string) (assets.Plan, error) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.planCalls++
+			return f.plan, f.planErr
+		},
+		fetch: func(context.Context, string, assets.Plan) error {
+			f.mu.Lock()
+			f.fetchCalls++
+			err := f.fetchErr
+			f.mu.Unlock()
+			f.fetched <- struct{}{}
+			<-f.release
+			return err
+		},
+		now: func() time.Time {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			return f.now
+		},
 	}
-	return db
+	return k, f
 }
 
-// Phase 0.2: the vec0 store is not uid-partitioned yet, so with more than one
-// local account retrieval must be skipped entirely (privacy stopgap), while
-// index writes keep flowing. Single-account behavior is unchanged.
-func TestMultiAccountRetrievalGate(t *testing.T) {
-	db := openKnowledgeGateTestDB(t)
-	if err := ensureDefaultLocalAccount(db); err != nil {
-		t.Fatalf("seed default account: %v", err)
-	}
-	inner := &recordingKnowledgeHooks{}
-	gate := &multiAccountRetrievalGate{inner: inner, db: db}
+func (f *fakeAssets) set(fn func(*fakeAssets)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(f)
+}
 
-	// Single account: retrieval passes through untouched.
-	got, err := gate.Retrieve(context.Background(), 1, "q", 4)
-	if err != nil || len(got) != 1 {
-		t.Fatalf("single-account Retrieve = (%v, %v), want one pass-through hit", got, err)
-	}
-	if inner.retrieveCalls != 1 {
-		t.Fatalf("inner retrieve calls = %d, want 1", inner.retrieveCalls)
-	}
+func (f *fakeAssets) counts() (plans, fetches int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.planCalls, f.fetchCalls
+}
 
-	// Second account appears: retrieval is disabled, silently and safely.
-	if _, err := createLocalAccount(db, "second"); err != nil {
-		t.Fatalf("create second account: %v", err)
-	}
-	got, err = gate.Retrieve(context.Background(), 1, "q", 4)
-	if err != nil {
-		t.Fatalf("multi-account Retrieve must not error, got %v", err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("multi-account Retrieve = %+v, want nothing injected", got)
-	}
-	if inner.retrieveCalls != 1 {
-		t.Errorf("inner retrieve reached %d calls; the gate must not consult the un-partitioned index", inner.retrieveCalls)
-	}
+// The offline path: assets already on disk must never consult a manifest, let
+// alone reach for the network. A user who installed the assets once has to keep
+// working on a plane.
+func TestKnowledgeAssetsPresentSkipsEverything(t *testing.T) {
+	k, f := newFakeAssets(t, t.TempDir())
+	f.set(func(f *fakeAssets) { f.presentErr = nil })
 
-	// Index writes keep flowing in both configurations.
-	if err := gate.IndexTurn(context.Background(), "turn", "u", "a"); err != nil {
-		t.Fatalf("IndexTurn through the gate: %v", err)
+	if err := k.ensure(); err != nil {
+		t.Fatalf("ensure with assets present = %v, want nil", err)
 	}
-	if inner.indexCalls != 1 {
-		t.Errorf("inner index calls = %d, want 1 (indexing must not be gated)", inner.indexCalls)
+	if plans, fetches := f.counts(); plans != 0 || fetches != 0 {
+		t.Errorf("present assets triggered %d manifest reads and %d downloads, want 0 and 0", plans, fetches)
 	}
 }
 
-// A DB where the account table cannot be counted fails closed: no retrieval,
-// no error — guessing single-account wrong would leak across accounts.
-func TestMultiAccountRetrievalGateFailsClosed(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:knowledge-gate-closed?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+// The state the open-source tree actually ships in: nothing pinned for this
+// platform. It must be a named, actionable answer — not a silent no-op, and not
+// a retry loop.
+func TestKnowledgeAssetsUnpinnedPlatformIsExplicit(t *testing.T) {
+	dir := t.TempDir()
+	k, f := newFakeAssets(t, dir)
+	f.set(func(f *fakeAssets) {
+		f.planErr = fmt.Errorf("%w: darwin/arm64 (manifest: embedded)", assets.ErrUnsupportedPlatform)
+	})
+
+	err := k.ensure()
+	if err == nil {
+		t.Fatal("ensure with nothing pinned must report why")
 	}
-	// No migrations: w_desktop_local_account does not exist.
-	inner := &recordingKnowledgeHooks{}
-	gate := &multiAccountRetrievalGate{inner: inner, db: db}
-	got, rerr := gate.Retrieve(context.Background(), 1, "q", 4)
-	if rerr != nil || len(got) != 0 || inner.retrieveCalls != 0 {
-		t.Fatalf("fail-closed violated: got=%v err=%v innerCalls=%d", got, rerr, inner.retrieveCalls)
+	msg := err.Error()
+	for _, want := range []string{dir, assets.ManifestPathEnv, "model.onnx"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q does not mention %q; a user cannot act on it", msg, want)
+		}
+	}
+	if _, fetches := f.counts(); fetches != 0 {
+		t.Errorf("an unpinned platform started %d downloads, want 0", fetches)
+	}
+
+	// Repeated calls inside the retry window reuse the answer instead of
+	// re-reading the manifest on every turn.
+	if err2 := k.ensure(); err2.Error() != msg {
+		t.Errorf("second ensure = %v, want the remembered %v", err2, err)
+	}
+	if plans, _ := f.counts(); plans != 1 {
+		t.Errorf("manifest read %d times inside the retry window, want 1", plans)
+	}
+
+	// Past the window it tries again — plugging in a manifest must eventually
+	// take effect without a restart.
+	f.set(func(f *fakeAssets) { f.now = f.now.Add(knowledgeAssetRetry + time.Second) })
+	_ = k.ensure()
+	if plans, _ := f.counts(); plans != 2 {
+		t.Errorf("manifest read %d times after the retry window, want 2", plans)
+	}
+}
+
+// A first run downloads in the background: the caller is told "not yet", not
+// made to wait, and only one download runs however many turns ask.
+func TestKnowledgeAssetsDownloadsOnceInBackground(t *testing.T) {
+	k, f := newFakeAssets(t, t.TempDir())
+
+	if err := k.ensure(); !errors.Is(err, errKnowledgeAssetsFetching) {
+		t.Fatalf("first ensure = %v, want the downloading sentinel", err)
+	}
+	select {
+	case <-f.fetched:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no download started")
+	}
+
+	// While it runs, more callers arrive and must not pile on.
+	for range 3 {
+		if err := k.ensure(); !errors.Is(err, errKnowledgeAssetsFetching) {
+			t.Fatalf("ensure during download = %v, want the downloading sentinel", err)
+		}
+	}
+	if _, fetches := f.counts(); fetches != 1 {
+		t.Fatalf("%d downloads running, want 1", fetches)
+	}
+
+	// It finishes and the assets appear.
+	f.set(func(f *fakeAssets) { f.presentErr = nil })
+	close(f.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if err := k.ensure(); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("ensure never reported the assets as ready after the download finished")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A failed download is remembered for a while and then retried. Forgetting it
+// immediately would mean one download attempt per turn on a broken network.
+func TestKnowledgeAssetsBacksOffAfterFailure(t *testing.T) {
+	k, f := newFakeAssets(t, t.TempDir())
+	f.set(func(f *fakeAssets) { f.fetchErr = errors.New("connection reset") })
+	close(f.release)
+
+	if err := k.ensure(); !errors.Is(err, errKnowledgeAssetsFetching) {
+		t.Fatalf("first ensure = %v, want the downloading sentinel", err)
+	}
+	<-f.fetched
+	// Wait for the failure to be recorded.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err := k.ensure()
+		if err != nil && strings.Contains(err.Error(), "connection reset") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("download failure was never surfaced, last = %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, fetches := f.counts(); fetches != 1 {
+		t.Errorf("%d download attempts inside the backoff window, want 1", fetches)
+	}
+
+	f.set(func(f *fakeAssets) { f.now = f.now.Add(knowledgeAssetRetry + time.Second) })
+	if err := k.ensure(); !errors.Is(err, errKnowledgeAssetsFetching) {
+		t.Fatalf("ensure after the backoff = %v, want a fresh attempt", err)
+	}
+	<-f.fetched
+}
+
+// Downloads must land under the per-user data directory. The packaged
+// resources directory is inside a signed app bundle and is not writable.
+func TestKnowledgeDownloadDirIsUnderTheDataDir(t *testing.T) {
+	if got, want := knowledgeDownloadDir("/data"), filepath.Join("/data", knowledgeDownloadDirName); got != want {
+		t.Errorf("knowledgeDownloadDir = %q, want %q", got, want)
+	}
+	if got := knowledgeDownloadDir(""); got != knowledgeDownloadDirName {
+		t.Errorf("knowledgeDownloadDir(\"\") = %q, want a relative fallback", got)
 	}
 }

@@ -4,11 +4,16 @@ package desktop
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
+	"path/filepath"
 	"sync"
+	"time"
 
 	"gorm.io/gorm"
 
+	"server/desktop/knowledge/assets"
 	localinference "server/desktop/local_inference"
 	localrender "server/desktop/local_render"
 )
@@ -29,10 +34,15 @@ type KnowledgeDeps struct {
 	DB    *gorm.DB
 	Files *localrender.Store
 
-	// ResourcesDir is the packaged native asset root. Empty → the knowledge
-	// package falls back to WORKMAX_RESOURCES_DIR, then a "resources"
-	// directory beside the working directory.
+	// ResourcesDir is the packaged native asset root — inside the app bundle
+	// on a signed build, which is why nothing is ever written there. Empty →
+	// the knowledge package falls back to WORKMAX_RESOURCES_DIR, then a
+	// "resources" directory beside the working directory.
 	ResourcesDir string
+
+	// DataDir is the per-user data root. Downloaded assets land under it,
+	// because it is the one location that is both writable and per-user.
+	DataDir string
 }
 
 // KnowledgeWiring is the RAG surface the rest of the boot consumes. A zero
@@ -74,49 +84,162 @@ func resolveKnowledge(deps KnowledgeDeps) KnowledgeWiring {
 	// is enabled here would misreport both the memory in use and when the
 	// startup cost is actually paid.
 	log.Printf("knowledge: local RAG available (%d-dim embeddings, loaded on first use)", wiring.Dim)
-	if wiring.Hooks != nil {
-		wiring.Hooks = &multiAccountRetrievalGate{inner: wiring.Hooks, db: deps.DB}
-	}
 	return wiring
 }
 
-// multiAccountRetrievalGate is the Phase 0 privacy stopgap for the vec0 table
-// having no uid column: retrieval is un-partitioned, so with more than one
-// local account, account A's indexed content would be injected into account
-// B's conversation. Until the Phase 3.1 schema rebuild adds uid to the KNN
-// filter, Retrieve is disabled whenever w_desktop_local_account holds more
-// than one row. Index writes keep flowing untouched — chunks already record
-// their source uid, so everything indexed now becomes retrievable again the
-// moment the partitioned schema lands.
-type multiAccountRetrievalGate struct {
-	inner localinference.KnowledgeHooks
-	db    *gorm.DB
+// knowledgeDownloadDirName is where downloaded native assets live, under the
+// data dir. Separate from the packaged resources directory on purpose: that
+// one is inside a code-signed app bundle and read-only.
+const knowledgeDownloadDirName = "knowledge_resources"
 
-	// logOnce keeps the "retrieval disabled" explanation to one line per boot
-	// instead of one per turn.
-	logOnce sync.Once
+// knowledgeAssetRetry is how long a failed acquisition is remembered before
+// another call is allowed to try again. Long enough that a machine with no
+// hosted assets does not re-read a manifest on every keystroke; short enough
+// that plugging in a network cable fixes it within one coffee.
+const knowledgeAssetRetry = 10 * time.Minute
+
+// errKnowledgeAssetsFetching is returned while a background download runs. It
+// is a "not yet", not a failure: the turn that triggered it proceeds without
+// retrieval and a later one will have it.
+var errKnowledgeAssetsFetching = errors.New("knowledge: embedding assets are downloading in the background")
+
+// knowledgeAssets acquires the native embedding assets without ever blocking a
+// boot or a turn on the network.
+//
+// The order matters and encodes the whole delivery policy:
+//
+//  1. Already on disk (packaged with the app, downloaded earlier, or put there
+//     by the user)? Use them. This is the only path an offline machine takes,
+//     and it costs three stat calls.
+//  2. Not on disk, but a manifest pins them for this platform? Start ONE
+//     background download, bounded by a timeout and a size cap, and tell the
+//     caller to come back later.
+//  3. Not on disk and nothing pinned? Say so, once, with both fixes named.
+//     This is the state the open-source tree ships in, and making it explicit
+//     is the point — it used to be a silent ErrUnsupportedPlatform that read
+//     as "RAG is broken" to everyone who hit it.
+//
+// The three collaborators are injected so this policy is testable — including
+// on a CGO_ENABLED=0 build, where the real resolver does not exist.
+type knowledgeAssets struct {
+	// dir is where downloads land and are looked for.
+	dir string
+
+	// present reports nil when the assets are usable right now.
+	present func() error
+
+	// plan resolves the manifest for dir.
+	plan func(dir string) (assets.Plan, error)
+
+	// fetch downloads a plan's missing assets into dir.
+	fetch func(ctx context.Context, dir string, p assets.Plan) error
+
+	now func() time.Time
+
+	mu       sync.Mutex
+	fetching bool
+	lastErr  error
+	retryAt  time.Time
+	logged   map[string]bool
 }
 
-func (g *multiAccountRetrievalGate) IndexTurn(ctx context.Context, turnUUID, userText, assistantText string) error {
-	return g.inner.IndexTurn(ctx, turnUUID, userText, assistantText)
+func newKnowledgeAssets(dir string, present func() error) *knowledgeAssets {
+	return &knowledgeAssets{
+		dir:     dir,
+		present: present,
+		plan:    assets.PlanFor,
+		fetch: func(ctx context.Context, dir string, p assets.Plan) error {
+			return assets.EnsurePlan(ctx, dir, p, nil)
+		},
+		now: time.Now,
+	}
 }
 
-func (g *multiAccountRetrievalGate) Retrieve(ctx context.Context, uid uint64, query string, topK int) ([]localinference.RetrievedSource, error) {
-	var count int64
-	if err := g.db.Raw(`SELECT COUNT(*) FROM w_desktop_local_account`).Row().Scan(&count); err != nil {
-		// Fail closed: if single-account cannot be proven, skipping retrieval
-		// costs one turn some context; guessing wrong leaks another account's
-		// documents into this conversation.
-		g.logOnce.Do(func() {
-			log.Printf("knowledge: retrieval disabled: cannot count local accounts (%v); the shared vector index is not uid-partitioned yet", err)
-		})
-		return nil, nil
+// ensure reports nil when the assets are ready to load, and otherwise an error
+// describing what is being done about it.
+func (k *knowledgeAssets) ensure() error {
+	if err := k.present(); err == nil {
+		return nil
 	}
-	if count > 1 {
-		g.logOnce.Do(func() {
-			log.Printf("knowledge: retrieval disabled: %d local accounts share one un-partitioned vector index; indexing continues, retrieval returns once the schema rebuild (Phase 3.1) adds uid filtering", count)
-		})
-		return nil, nil
+
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.fetching {
+		return errKnowledgeAssetsFetching
 	}
-	return g.inner.Retrieve(ctx, uid, query, topK)
+	if k.lastErr != nil && k.now().Before(k.retryAt) {
+		return k.lastErr
+	}
+
+	plan, err := k.plan(k.dir)
+	if err != nil {
+		k.lastErr = k.describePlanFailure(err)
+		k.retryAt = k.now().Add(knowledgeAssetRetry)
+		return k.lastErr
+	}
+
+	k.fetching = true
+	k.lastErr = nil
+	k.logOnce("fetch-start", fmt.Sprintf(
+		"knowledge: downloading %d embedding assets (%d MB, pinned by %s) into %s; retrieval turns on when it finishes",
+		len(plan.Assets), plan.TotalBytes>>20, plan.Origin, k.dir))
+	go k.download(plan)
+	return errKnowledgeAssetsFetching
+}
+
+// describePlanFailure turns "no assets pinned" from a bare sentinel into the
+// two things a person can actually do about it.
+func (k *knowledgeAssets) describePlanFailure(err error) error {
+	if errors.Is(err, assets.ErrUnsupportedPlatform) {
+		msg := fmt.Sprintf(
+			"knowledge: no embedding assets are pinned for this platform, so local retrieval stays off. "+
+				"Supply them either by putting libonnxruntime + knowledge/model.onnx + knowledge/tokenizer.json in %s, "+
+				"or by pointing %s at a manifest that pins them (%v)",
+			k.dir, assets.ManifestPathEnv, err)
+		k.logOnce("unsupported", msg)
+		return errors.New(msg)
+	}
+	k.logOnce("plan-error", fmt.Sprintf("knowledge: embedding assets unavailable: %v", err))
+	return err
+}
+
+// download runs the acquisition and records its outcome for the next ensure.
+func (k *knowledgeAssets) download(plan assets.Plan) {
+	ctx, cancel := context.WithTimeout(context.Background(), assets.DownloadTimeout)
+	defer cancel()
+	err := k.fetch(ctx, k.dir, plan)
+
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.fetching = false
+	if err != nil {
+		k.lastErr = fmt.Errorf("knowledge: downloading embedding assets: %w", err)
+		k.retryAt = k.now().Add(knowledgeAssetRetry)
+		log.Printf("knowledge: embedding asset download failed, retrying no sooner than %s: %v", knowledgeAssetRetry, err)
+		return
+	}
+	k.lastErr = nil
+	k.retryAt = time.Time{}
+	log.Printf("knowledge: embedding assets installed in %s; local retrieval is now available", k.dir)
+}
+
+// logOnce keeps one explanation per distinct reason per process, so a state
+// that persists for a whole session does not narrate itself once per turn.
+func (k *knowledgeAssets) logOnce(key, msg string) {
+	if k.logged == nil {
+		k.logged = map[string]bool{}
+	}
+	if k.logged[key] {
+		return
+	}
+	k.logged[key] = true
+	log.Print(msg)
+}
+
+// knowledgeDownloadDir is where a given data dir keeps downloaded assets.
+func knowledgeDownloadDir(dataDir string) string {
+	if dataDir == "" {
+		return knowledgeDownloadDirName
+	}
+	return filepath.Join(dataDir, knowledgeDownloadDirName)
 }

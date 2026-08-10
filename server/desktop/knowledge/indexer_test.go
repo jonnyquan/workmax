@@ -50,6 +50,149 @@ func (fakeVectorizer) EmbedBatch(_ context.Context, texts []string) ([][]float32
 // indexerTestUID is the local user these tests index and retrieve as.
 const indexerTestUID uint64 = 42
 
+// Two local accounts on one machine must not read each other's knowledge. This
+// is the property the vec0 uid partition key exists for, and the reason Phase
+// 0's blunt stopgap — switch retrieval off entirely whenever a second local
+// account exists — could be removed. Asserted end to end through the indexer,
+// on the fake vectorizer, so it runs in CI without the native model.
+func TestIndexer_RetrievalIsPartitionedByUID(t *testing.T) {
+	db := openIndexerTestDB(t)
+	fileStore := localrender.NewStore(db, t.TempDir())
+	kstore, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	idx := NewIndexer(fileStore, fakeVectorizer{}, kstore)
+	ctx := context.Background()
+
+	const accountA, accountB = indexerTestUID, indexerTestUID + 1
+
+	saved, err := fileStore.SaveThreadFile(accountA, 7, "thr-a", "salary.txt",
+		strings.NewReader("alice earns one hundred thousand"))
+	if err != nil {
+		t.Fatalf("SaveThreadFile: %v", err)
+	}
+	if err := idx.IndexFile(ctx, accountA, saved.FileID); err != nil {
+		t.Fatalf("IndexFile: %v", err)
+	}
+	if err := idx.IndexTurn(ctx, accountA, "turn-a", "what is my salary", "one hundred thousand"); err != nil {
+		t.Fatalf("IndexTurn: %v", err)
+	}
+
+	mine, err := idx.Retrieve(ctx, accountA, "salary", 5)
+	if err != nil {
+		t.Fatalf("Retrieve as owner: %v", err)
+	}
+	if len(mine) == 0 {
+		t.Fatal("the account that indexed the content cannot retrieve it")
+	}
+
+	theirs, err := idx.Retrieve(ctx, accountB, "salary", 5)
+	if err != nil {
+		t.Fatalf("Retrieve as other account: %v", err)
+	}
+	if len(theirs) != 0 {
+		t.Fatalf("account B retrieved account A's content: %+v", theirs)
+	}
+
+	// Deleting a source is deliberately not uid-scoped: source ids are unique
+	// per machine, and text of a deleted file must not survive under any
+	// identity.
+	if n, err := idx.RemoveFile(ctx, saved.FileID); err != nil || n == 0 {
+		t.Fatalf("RemoveFile = (%d, %v), want a positive count", n, err)
+	}
+	after, _ := idx.Retrieve(ctx, accountA, "salary", 5)
+	for _, h := range after {
+		if h.Kind == "file" {
+			t.Fatalf("deleted file still retrievable: %+v", h)
+		}
+	}
+}
+
+// The migration story end to end: a schema bump drops every chunk, and the
+// files the user uploaded come back on their own. Without this, bumping
+// vecSchemaVersion would be a silent data loss dressed up as an upgrade.
+func TestIndexer_ReindexAfterSchemaRebuild(t *testing.T) {
+	db := openIndexerTestDB(t)
+	fileStore := localrender.NewStore(db, t.TempDir())
+	ctx := context.Background()
+
+	const accountA, accountB = indexerTestUID, indexerTestUID + 1
+
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	idx := NewIndexer(fileStore, fakeVectorizer{}, store)
+
+	a, err := fileStore.SaveThreadFile(accountA, 1, "thr-a", "a.txt", strings.NewReader("alpha content here"))
+	if err != nil {
+		t.Fatalf("save a: %v", err)
+	}
+	b, err := fileStore.SaveThreadFile(accountB, 2, "thr-b", "b.txt", strings.NewReader("beta content here"))
+	if err != nil {
+		t.Fatalf("save b: %v", err)
+	}
+	if err := idx.IndexFile(ctx, accountA, a.FileID); err != nil {
+		t.Fatalf("index a: %v", err)
+	}
+	if err := idx.IndexFile(ctx, accountB, b.FileID); err != nil {
+		t.Fatalf("index b: %v", err)
+	}
+
+	// A version this binary does not know: the table is dropped and rebuilt.
+	sqlDB, _ := db.DB()
+	if _, err := sqlDB.ExecContext(ctx,
+		`UPDATE _local_meta SET value = ? WHERE key = ?`, "99", metaKeyVecSchemaVersion); err != nil {
+		t.Fatalf("forge version: %v", err)
+	}
+	rebuilt, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore after drift: %v", err)
+	}
+	if rebuilt.RebuiltFrom() == "" {
+		t.Fatal("the store did not rebuild on a version mismatch")
+	}
+	idx2 := NewIndexer(fileStore, fakeVectorizer{}, rebuilt)
+	if hits, _ := idx2.Retrieve(ctx, accountA, "alpha", 5); len(hits) != 0 {
+		t.Fatalf("chunks survived a rebuild: %+v", hits)
+	}
+
+	n, err := idx2.ReindexPendingFiles(ctx)
+	if err != nil {
+		t.Fatalf("ReindexPendingFiles: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("re-indexed %d files, want 2", n)
+	}
+	if _, pending := rebuilt.ReindexPending(ctx); pending {
+		t.Error("a completed re-index must clear the marker")
+	}
+
+	// Restored, and restored to the right owners.
+	for _, c := range []struct {
+		uid   uint64
+		query string
+		label string
+	}{{accountA, "alpha", "a.txt"}, {accountB, "beta", "b.txt"}} {
+		hits, err := idx2.Retrieve(ctx, c.uid, c.query, 5)
+		if err != nil {
+			t.Fatalf("Retrieve as %d: %v", c.uid, err)
+		}
+		if len(hits) != 1 {
+			t.Fatalf("uid %d got %d hits after re-index, want exactly its own file", c.uid, len(hits))
+		}
+		if hits[0].Label != c.label {
+			t.Errorf("uid %d retrieved %q, want %q", c.uid, hits[0].Label, c.label)
+		}
+	}
+
+	// Idempotent: nothing pending, nothing to do.
+	if n, err := idx2.ReindexPendingFiles(ctx); err != nil || n != 0 {
+		t.Errorf("second ReindexPendingFiles = (%d, %v), want (0, nil)", n, err)
+	}
+}
+
 // Retrieval labels are what the user sees in place of "the model said so".
 // This runs on the fake vectorizer, so unlike the real-embedder test below it
 // executes everywhere, including CI without the native model.
@@ -85,19 +228,21 @@ func TestIndexer_RetrieveLabelsFilesAndScopesNamesToTheOwner(t *testing.T) {
 		t.Errorf("label = %q, want the name the user uploaded", hits[0].Label)
 	}
 
-	// The same chunks, retrieved as the other local identity. The chunk store
-	// has no uid column so the text is still found — but the name belongs to a
-	// row this uid does not own, and showing it would attribute the passage to
-	// a file this session cannot open.
-	other, err := idx.Retrieve(ctx, indexerTestUID+1, "revenue", 5)
+	// The generic label is the fallback for a hit whose file row has gone away
+	// (deleted from disk, or written before the row existed). Retrieval already
+	// succeeded; a missing name must cost the label, not the answer.
+	if _, err := fileStore.DeleteThreadFiles(indexerTestUID, 7, "thr-1"); err != nil {
+		t.Fatalf("DeleteThreadFiles: %v", err)
+	}
+	orphan, err := idx.Retrieve(ctx, indexerTestUID, "revenue", 5)
 	if err != nil {
-		t.Fatalf("Retrieve as other uid: %v", err)
+		t.Fatalf("Retrieve after the file row went away: %v", err)
 	}
-	if len(other) == 0 {
-		t.Fatal("no hits for the other uid")
+	if len(orphan) == 0 {
+		t.Fatal("no hits once the file row is gone")
 	}
-	if other[0].Label != "Indexed file" {
-		t.Errorf("label = %q, want the generic label when the file row is not this uid's", other[0].Label)
+	if orphan[0].Label != "Indexed file" {
+		t.Errorf("label = %q, want the generic label when the file row no longer exists", orphan[0].Label)
 	}
 }
 
@@ -112,17 +257,17 @@ func TestIndexer_IndexFileAndRemove(t *testing.T) {
 
 	// ~1.7 KiB of text → several chunks.
 	content := strings.Repeat("the quick brown fox jumps over the lazy dog. ", 60)
-	saved, err := fileStore.SaveThreadFile(42, 7, "thr-1", "notes.txt", strings.NewReader(content))
+	saved, err := fileStore.SaveThreadFile(indexerTestUID, 7, "thr-1", "notes.txt", strings.NewReader(content))
 	if err != nil {
 		t.Fatalf("SaveThreadFile: %v", err)
 	}
 
 	ctx := context.Background()
-	if err := idx.IndexFile(ctx, 42, saved.FileID); err != nil {
+	if err := idx.IndexFile(ctx, indexerTestUID, saved.FileID); err != nil {
 		t.Fatalf("IndexFile: %v", err)
 	}
 
-	hits, err := kstore.Search(ctx, basis(0), 50)
+	hits, err := kstore.Search(ctx, indexerTestUID, basis(0), 50)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -143,10 +288,10 @@ func TestIndexer_IndexFileAndRemove(t *testing.T) {
 	count := len(hits)
 
 	// Re-indexing replaces (idempotent): same count, no duplicates.
-	if err := idx.IndexFile(ctx, 42, saved.FileID); err != nil {
+	if err := idx.IndexFile(ctx, indexerTestUID, saved.FileID); err != nil {
 		t.Fatalf("re-IndexFile: %v", err)
 	}
-	hits2, _ := kstore.Search(ctx, basis(0), 50)
+	hits2, _ := kstore.Search(ctx, indexerTestUID, basis(0), 50)
 	if len(hits2) != count {
 		t.Errorf("re-index changed count: %d -> %d", count, len(hits2))
 	}
@@ -159,7 +304,7 @@ func TestIndexer_IndexFileAndRemove(t *testing.T) {
 	if n == 0 {
 		t.Error("RemoveFile removed 0 chunks")
 	}
-	hits3, _ := kstore.Search(ctx, basis(0), 50)
+	hits3, _ := kstore.Search(ctx, indexerTestUID, basis(0), 50)
 	if len(hits3) != 0 {
 		t.Errorf("expected 0 chunks after remove, got %d", len(hits3))
 	}
@@ -184,7 +329,7 @@ func TestIndexer_SkipsNonText(t *testing.T) {
 	if err := idx.IndexFile(context.Background(), 1, saved.FileID); err != nil {
 		t.Fatalf("IndexFile empty: %v", err)
 	}
-	hits, _ := kstore.Search(context.Background(), basis(0), 5)
+	hits, _ := kstore.Search(context.Background(), 1, basis(0), 5)
 	if len(hits) != 0 {
 		t.Errorf("empty file should index nothing, got %d chunks", len(hits))
 	}
@@ -220,12 +365,12 @@ func TestIndexer_RealEmbedder(t *testing.T) {
 	content := "Cats are small carnivorous mammals and popular household pets.\n\n" +
 		"Cats sleep up to sixteen hours per day and are most active at dawn and dusk.\n\n" +
 		"The domestic cat has excellent hearing and a powerful sense of smell."
-	saved, err := fileStore.SaveThreadFile(1, 1, "thr", "cats.txt", strings.NewReader(content))
+	saved, err := fileStore.SaveThreadFile(indexerTestUID, 1, "thr", "cats.txt", strings.NewReader(content))
 	if err != nil {
 		t.Fatalf("SaveThreadFile: %v", err)
 	}
 	ctx := context.Background()
-	if err := idx.IndexFile(ctx, 1, saved.FileID); err != nil {
+	if err := idx.IndexFile(ctx, indexerTestUID, saved.FileID); err != nil {
 		t.Fatalf("IndexFile: %v", err)
 	}
 
@@ -233,7 +378,7 @@ func TestIndexer_RealEmbedder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Embed query: %v", err)
 	}
-	hits, err := kstore.Search(ctx, q, 3)
+	hits, err := kstore.Search(ctx, indexerTestUID, q, 3)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -259,10 +404,10 @@ func TestIndexer_IndexTurnAndRemove(t *testing.T) {
 
 	userText := "What is retrieval-augmented generation?"
 	aiText := strings.Repeat("RAG combines retrieval with generation. ", 40) // multi-chunk
-	if err := idx.IndexTurn(ctx, "turn-1", userText, aiText); err != nil {
+	if err := idx.IndexTurn(ctx, indexerTestUID, "turn-1", userText, aiText); err != nil {
 		t.Fatalf("IndexTurn: %v", err)
 	}
-	hits, _ := kstore.Search(ctx, basis(0), 10)
+	hits, _ := kstore.Search(ctx, indexerTestUID, basis(0), 10)
 	if len(hits) == 0 {
 		t.Fatal("no turns indexed")
 	}
@@ -275,25 +420,25 @@ func TestIndexer_IndexTurnAndRemove(t *testing.T) {
 	count := len(hits)
 
 	// Re-index is idempotent (replace): same count, no duplicates.
-	if err := idx.IndexTurn(ctx, "turn-1", userText, aiText); err != nil {
+	if err := idx.IndexTurn(ctx, indexerTestUID, "turn-1", userText, aiText); err != nil {
 		t.Fatalf("re-IndexTurn: %v", err)
 	}
-	hits2, _ := kstore.Search(ctx, basis(0), 10)
+	hits2, _ := kstore.Search(ctx, indexerTestUID, basis(0), 10)
 	if len(hits2) != count {
 		t.Errorf("re-index changed count: %d -> %d", count, len(hits2))
 	}
 
 	// Empty turn clears the source's chunks.
-	if err := idx.IndexTurn(ctx, "turn-1", "  ", ""); err != nil {
+	if err := idx.IndexTurn(ctx, indexerTestUID, "turn-1", "  ", ""); err != nil {
 		t.Fatalf("empty IndexTurn: %v", err)
 	}
-	hits3, _ := kstore.Search(ctx, basis(0), 10)
+	hits3, _ := kstore.Search(ctx, indexerTestUID, basis(0), 10)
 	if len(hits3) != 0 {
 		t.Errorf("empty turn should clear chunks, got %d", len(hits3))
 	}
 
 	// RemoveTurn drops a turn's chunks.
-	if err := idx.IndexTurn(ctx, "turn-2", "q", "meaningful answer text"); err != nil {
+	if err := idx.IndexTurn(ctx, indexerTestUID, "turn-2", "q", "meaningful answer text"); err != nil {
 		t.Fatalf("IndexTurn turn-2: %v", err)
 	}
 	n, err := idx.RemoveTurn(ctx, "turn-2")
@@ -326,7 +471,7 @@ func TestIndexer_IndexTurn_RealEmbedder(t *testing.T) {
 	idx := NewIndexer(nil, emb, kstore)
 	ctx := context.Background()
 
-	if err := idx.IndexTurn(ctx, "turn-sd",
+	if err := idx.IndexTurn(ctx, indexerTestUID, "turn-sd",
 		"How do I bake sourdough bread at home?",
 		"To bake sourdough: feed the starter until active, mix flour water and salt, "+
 			"bulk ferment for a few hours, shape the loaf, cold proof overnight, "+
@@ -338,7 +483,7 @@ func TestIndexer_IndexTurn_RealEmbedder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Embed query: %v", err)
 	}
-	hits, err := kstore.Search(ctx, q, 3)
+	hits, err := kstore.Search(ctx, indexerTestUID, q, 3)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -374,11 +519,11 @@ func TestIndexer_Retrieve_RealEmbedder(t *testing.T) {
 	idx := NewIndexer(nil, emb, kstore)
 	ctx := context.Background()
 
-	if err := idx.IndexTurn(ctx, "turn-cats", "tell me about cats",
+	if err := idx.IndexTurn(ctx, indexerTestUID, "turn-cats", "tell me about cats",
 		"Cats are carnivorous mammals that sleep up to sixteen hours per day."); err != nil {
 		t.Fatalf("index cats: %v", err)
 	}
-	if err := idx.IndexTurn(ctx, "turn-python", "how do I read a file in python",
+	if err := idx.IndexTurn(ctx, indexerTestUID, "turn-python", "how do I read a file in python",
 		"In Python, use open() to open a file then call read() to get its contents."); err != nil {
 		t.Fatalf("index python: %v", err)
 	}

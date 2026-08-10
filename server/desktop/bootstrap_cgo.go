@@ -25,25 +25,51 @@ import (
 
 func init() { knowledgeProvider = buildKnowledgeWiring }
 
-// buildKnowledgeWiring resolves the native assets but does NOT load them.
+// buildKnowledgeWiring opens the vector store eagerly and defers everything
+// expensive.
 //
-// Loading them costs about 223MB resident and a fifth of a second, measured:
-// 32MB/48ms without the index against 255MB/136-251ms with it. That is the
-// floor, paid before a single query — the ONNX Runtime environment and the
-// model session, not anything the user asked for.
+// The split is deliberate and the two halves have opposite costs. The store is
+// pure SQL: opening it reconciles the vec0 schema version and self-checks the
+// sqlite-vec code path in single-digit milliseconds, and doing that at boot is
+// the only way a schema rebuild or a broken sqlite-vec shows up in the boot log
+// instead of surfacing as an empty answer an hour later.
 //
-// Eager loading meant a user who had once downloaded the assets paid that
-// every launch forever, including the launches where they never opened the
-// knowledge base. So construction is deferred to first use: presence of the
-// assets decides whether retrieval is *available*, and the first actual call
-// decides when it is *loaded*.
+// The embedder is the opposite: about 223MB resident and a fifth of a second,
+// measured — 32MB/48ms without the index against 255MB/136-251ms with it. That
+// is a floor paid before a single query. Eager loading meant a user who had
+// once downloaded the assets paid it every launch forever, including the
+// launches where they never opened the knowledge base. So it is built on first
+// use, and the native assets it needs are acquired on first use too.
 func buildKnowledgeWiring(deps KnowledgeDeps) (KnowledgeWiring, error) {
-	res, err := knowledge.ResolveResourcesIn(deps.ResourcesDir)
+	store, err := knowledge.NewStore(deps.DB)
 	if err != nil {
-		return KnowledgeWiring{}, fmt.Errorf("native resources unresolved: %w", err)
+		return KnowledgeWiring{}, fmt.Errorf("vector store: %w", err)
+	}
+	if from := store.RebuiltFrom(); from != "" {
+		log.Printf("knowledge: vector index rebuilt from schema %s; previously indexed files are re-embedded in the background, past conversation turns are not", from)
 	}
 
-	lazy := &lazyKnowledge{deps: deps, res: res}
+	downloadDir := knowledgeDownloadDir(deps.DataDir)
+	lazy := &lazyKnowledge{
+		deps:  deps,
+		store: store,
+		// A delete never needs a model: it removes rows the indexer wrote, and
+		// the store that owns them is already open. Giving the delete path its
+		// own vectorizer-less indexer is what keeps "delete a thread" from
+		// loading 223MB of ONNX Runtime to do it.
+		deleter: knowledge.NewIndexer(nil, nil, store),
+	}
+	// The presence probe is deliberately side-effect free: it answers "are the
+	// files there", and load() re-resolves the paths for itself afterwards, so
+	// two goroutines asking at once cannot hand each other a stale resolution.
+	lazy.assets = newKnowledgeAssets(downloadDir, func() error {
+		_, err := lazy.resolveResources()
+		return err
+	})
+	if err := lazy.assets.ensure(); err == nil {
+		log.Printf("knowledge: embedding assets ready")
+	}
+
 	return KnowledgeWiring{
 		Index: lazy,
 		Hooks: lazy,
@@ -59,13 +85,18 @@ func buildKnowledgeWiring(deps KnowledgeDeps) (KnowledgeWiring, error) {
 // nothing downstream can tell the difference between this and the real thing
 // except in how much memory an idle app uses.
 type lazyKnowledge struct {
-	deps KnowledgeDeps
-	res  knowledge.Resources
+	deps    KnowledgeDeps
+	store   *knowledge.Store
+	deleter *knowledge.Indexer
+	assets  *knowledgeAssets
 
-	once     sync.Once
+	loadMu   sync.Mutex
 	indexer  *knowledge.Indexer
 	embedder *knowledge.Embedder
-	initErr  error
+	// loadErr remembers only *embedder* failures. Asset acquisition failures
+	// are deliberately not cached here: they are the ones that fix themselves
+	// when a download finishes.
+	loadErr error
 
 	// Indexing runs in background goroutines the caller does not wait on —
 	// the local inference engine indexes a turn after answering it. Destroying
@@ -75,6 +106,18 @@ type lazyKnowledge struct {
 	mu       sync.RWMutex
 	closed   bool
 	inFlight sync.WaitGroup
+}
+
+// resolveResources looks for the native assets in the packaged bundle first,
+// then in the per-user download directory. Both are tried because they answer
+// different questions: the bundle is what a full installer shipped, the
+// download dir is what this machine fetched or the user supplied.
+func (l *lazyKnowledge) resolveResources() (knowledge.Resources, error) {
+	res, err := knowledge.ResolveResourcesIn(l.deps.ResourcesDir)
+	if err == nil {
+		return res, nil
+	}
+	return knowledge.ResolveResourcesIn(knowledgeDownloadDir(l.deps.DataDir))
 }
 
 // begin registers an in-flight call, or reports that the environment is being
@@ -96,27 +139,71 @@ func (l *lazyKnowledge) end() { l.inFlight.Done() }
 // the background indexing of it is being skipped.
 var errKnowledgeClosed = errors.New("knowledge: shutting down")
 
-// load runs at most once. A failure is remembered rather than retried: the
-// causes are missing or corrupt assets, which will not fix themselves between
-// two calls, and retrying would mean re-paying the load cost on every message.
+// load builds the embedder once the assets exist.
+//
+// An embedder failure is remembered rather than retried: its causes are a
+// corrupt or incompatible model, which will not fix themselves between two
+// calls, and retrying would mean re-paying the load cost on every message. An
+// *asset* failure is not remembered, because "not downloaded yet" is exactly
+// the condition that stops being true on its own.
 func (l *lazyKnowledge) load() error {
-	l.once.Do(func() {
-		embedder, err := knowledge.NewEmbedder(l.res)
-		if err != nil {
-			l.initErr = fmt.Errorf("embedder init: %w", err)
-			return
+	l.loadMu.Lock()
+	defer l.loadMu.Unlock()
+	if l.indexer != nil {
+		return nil
+	}
+	if l.loadErr != nil {
+		return l.loadErr
+	}
+	if err := l.assets.ensure(); err != nil {
+		return err
+	}
+
+	res, err := l.resolveResources()
+	if err != nil {
+		// The assets passed the presence check a moment ago and are gone now.
+		// Not cached: this is a disk-level accident, not a broken model.
+		return fmt.Errorf("knowledge: embedding assets vanished after being verified: %w", err)
+	}
+	embedder, err := knowledge.NewEmbedder(res)
+	if err != nil {
+		l.loadErr = fmt.Errorf("embedder init: %w", err)
+		return l.loadErr
+	}
+	l.embedder = embedder
+	l.indexer = knowledge.NewIndexer(l.deps.Files, embedder, l.store)
+	log.Printf("knowledge: local RAG loaded on demand (%d-dim embeddings)", embedder.Dim())
+
+	// A schema rebuild dropped every chunk. Now that a model exists, put the
+	// files back — in the background, because the call that triggered this load
+	// is a user's turn and must not wait on re-embedding their whole library.
+	go l.backfill()
+	return nil
+}
+
+// backfill re-embeds the files a schema rebuild dropped. Best-effort by
+// design: it is repairing derived data, so a failure means the repair is tried
+// again next launch, not that anything the user did was lost.
+func (l *lazyKnowledge) backfill() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("knowledge: reindex after schema rebuild panicked: %v", r)
 		}
-		store, err := knowledge.NewStore(l.deps.DB)
-		if err != nil {
-			_ = embedder.Close()
-			l.initErr = fmt.Errorf("vector store init: %w", err)
-			return
-		}
-		l.embedder = embedder
-		l.indexer = knowledge.NewIndexer(l.deps.Files, embedder, store)
-		log.Printf("knowledge: local RAG loaded on demand (%d-dim embeddings)", embedder.Dim())
-	})
-	return l.initErr
+	}()
+	if !l.begin() {
+		return
+	}
+	defer l.end()
+	ctx, cancel := context.WithTimeout(context.Background(), knowledgeBackfillTimeout)
+	defer cancel()
+	n, err := l.indexer.ReindexPendingFiles(ctx)
+	if err != nil {
+		log.Printf("knowledge: reindex after schema rebuild: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("knowledge: re-indexed %d files after the vector schema rebuild", n)
+	}
 }
 
 func (l *lazyKnowledge) IndexFile(ctx context.Context, uid uint64, fileID int64) error {
@@ -130,35 +217,27 @@ func (l *lazyKnowledge) IndexFile(ctx context.Context, uid uint64, fileID int64)
 	return l.indexer.IndexFile(ctx, uid, fileID)
 }
 
-// RemoveFile deletes rows the indexer wrote. It still has to load, because the
-// vector store is what owns those rows — but a delete on an index that was
-// never built is a no-op, not an error, so a load failure here is swallowed
-// rather than failing the caller's delete.
+// RemoveFile deletes rows the indexer wrote. It goes straight to the store: the
+// vector table is open from boot, so a delete neither needs nor triggers the
+// embedding model.
 func (l *lazyKnowledge) RemoveFile(ctx context.Context, fileID int64) (int, error) {
 	if !l.begin() {
 		return 0, nil
 	}
 	defer l.end()
-	if err := l.load(); err != nil {
-		return 0, nil
-	}
-	return l.indexer.RemoveFile(ctx, fileID)
+	return l.deleter.RemoveFile(ctx, fileID)
 }
 
-// RemoveTurn mirrors RemoveFile's shape for conversation chunks: a delete
-// against an index that never built is a no-op, not an error.
+// RemoveTurn mirrors RemoveFile's shape for conversation chunks.
 func (l *lazyKnowledge) RemoveTurn(ctx context.Context, turnUUID string) (int, error) {
 	if !l.begin() {
 		return 0, nil
 	}
 	defer l.end()
-	if err := l.load(); err != nil {
-		return 0, nil
-	}
-	return l.indexer.RemoveTurn(ctx, turnUUID)
+	return l.deleter.RemoveTurn(ctx, turnUUID)
 }
 
-func (l *lazyKnowledge) IndexTurn(ctx context.Context, turnUUID, userText, assistantText string) error {
+func (l *lazyKnowledge) IndexTurn(ctx context.Context, uid uint64, turnUUID, userText, assistantText string) error {
 	if !l.begin() {
 		return errKnowledgeClosed
 	}
@@ -166,7 +245,7 @@ func (l *lazyKnowledge) IndexTurn(ctx context.Context, turnUUID, userText, assis
 	if err := l.load(); err != nil {
 		return err
 	}
-	return l.indexer.IndexTurn(ctx, turnUUID, userText, assistantText)
+	return l.indexer.IndexTurn(ctx, uid, turnUUID, userText, assistantText)
 }
 
 // Retrieve is also the translation point between the two packages' retrieval
@@ -240,3 +319,8 @@ func (l *lazyKnowledge) Close() error {
 // Embedding one turn is sub-second; this is generous enough that hitting it
 // means something is wedged, not merely slow.
 const knowledgeDrainTimeout = 5 * time.Second
+
+// knowledgeBackfillTimeout bounds a post-rebuild re-index. Re-embedding a large
+// library legitimately takes minutes; past this the run is abandoned and picked
+// up next launch, since the marker is only cleared on a clean pass.
+const knowledgeBackfillTimeout = 15 * time.Minute

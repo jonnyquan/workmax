@@ -340,7 +340,7 @@ type recordingHooks struct {
 	indexed  int
 }
 
-func (r *recordingHooks) IndexTurn(context.Context, string, string, string) error {
+func (r *recordingHooks) IndexTurn(context.Context, uint64, string, string, string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.indexed++

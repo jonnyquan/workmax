@@ -105,13 +105,14 @@ type recordingIndexer struct {
 }
 
 type indexTurnCall struct {
+	uid                               uint64
 	turnUUID, userText, assistantText string
 }
 
-func (r *recordingIndexer) IndexTurn(_ context.Context, turnUUID, userText, assistantText string) error {
+func (r *recordingIndexer) IndexTurn(_ context.Context, uid uint64, turnUUID, userText, assistantText string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.calls = append(r.calls, indexTurnCall{turnUUID, userText, assistantText})
+	r.calls = append(r.calls, indexTurnCall{uid, turnUUID, userText, assistantText})
 	return nil
 }
 
@@ -183,6 +184,11 @@ func TestEngine_IndexesTurnOnSuccess(t *testing.T) {
 	c := calls[0]
 	if c.turnUUID != engineTestTurnUUID || c.userText != "hi" || c.assistantText != "Hello" {
 		t.Errorf("IndexTurn args = %+v, want {%s hi Hello}", c, engineTestTurnUUID)
+	}
+	// uid is what partitions the vector index. A turn indexed under the wrong
+	// identity is either invisible to its owner or visible to someone else.
+	if c.uid != engineTestUID {
+		t.Errorf("IndexTurn uid = %d, want the turn's uid %d", c.uid, engineTestUID)
 	}
 }
 

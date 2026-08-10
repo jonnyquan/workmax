@@ -55,7 +55,7 @@ func (i *Indexer) IndexFile(ctx context.Context, uid uint64, fileID int64) error
 	att := atts[0]
 	if att.Kind != attachmentKindText || strings.TrimSpace(att.Text) == "" {
 		// Non-text (image) or empty: clear any stale chunks, nothing to embed.
-		if _, err := i.store.ReplaceSource(ctx, SourceTypeFile, sourceID, nil); err != nil {
+		if _, err := i.store.ReplaceSource(ctx, uid, SourceTypeFile, sourceID, nil); err != nil {
 			return fmt.Errorf("knowledge: clear file %d: %w", fileID, err)
 		}
 		return nil
@@ -63,7 +63,7 @@ func (i *Indexer) IndexFile(ctx context.Context, uid uint64, fileID int64) error
 
 	pieces := ChunkText(att.Text, DefaultChunkChars)
 	if len(pieces) == 0 {
-		if _, err := i.store.ReplaceSource(ctx, SourceTypeFile, sourceID, nil); err != nil {
+		if _, err := i.store.ReplaceSource(ctx, uid, SourceTypeFile, sourceID, nil); err != nil {
 			return fmt.Errorf("knowledge: clear file %d: %w", fileID, err)
 		}
 		return nil
@@ -80,6 +80,7 @@ func (i *Indexer) IndexFile(ctx context.Context, uid uint64, fileID int64) error
 	chunks := make([]Chunk, len(pieces))
 	for idx, text := range pieces {
 		chunks[idx] = Chunk{
+			UID:        uid,
 			ChunkUID:   fmt.Sprintf("file:%d:%d", fileID, idx),
 			SourceType: SourceTypeFile,
 			SourceID:   sourceID,
@@ -87,10 +88,56 @@ func (i *Indexer) IndexFile(ctx context.Context, uid uint64, fileID int64) error
 			Embedding:  vecs[idx],
 		}
 	}
-	if _, err := i.store.ReplaceSource(ctx, SourceTypeFile, sourceID, chunks); err != nil {
+	if _, err := i.store.ReplaceSource(ctx, uid, SourceTypeFile, sourceID, chunks); err != nil {
 		return fmt.Errorf("knowledge: store file %d: %w", fileID, err)
 	}
 	return nil
+}
+
+// ReindexPendingFiles re-embeds every locally stored file when the vector
+// table was rebuilt from scratch (a vecSchemaVersion bump drops it, because
+// vec0 tables cannot be migrated in place), and clears the rebuild marker when
+// it finishes. It is a no-op when no rebuild is outstanding.
+//
+// Files only. Conversation turns are re-indexed the next time they happen, and
+// re-embedding an entire message history at once would cost far more than the
+// memory it restores; a file the user deliberately uploaded is the part they
+// would notice going missing.
+//
+// Returns the number of files re-indexed. Individual failures are counted and
+// reported, not fatal: one unreadable file must not strand the rest, and the
+// marker stays set so the next run tries again.
+func (i *Indexer) ReindexPendingFiles(ctx context.Context) (int, error) {
+	if _, pending := i.store.ReindexPending(ctx); !pending {
+		return 0, nil
+	}
+	if i.files == nil {
+		return 0, nil
+	}
+	refs, err := i.files.AllFiles()
+	if err != nil {
+		return 0, fmt.Errorf("knowledge: reindex: list files: %w", err)
+	}
+	done := 0
+	var failed []string
+	for _, ref := range refs {
+		if err := ctx.Err(); err != nil {
+			return done, err
+		}
+		if err := i.IndexFile(ctx, ref.UID, ref.FileID); err != nil {
+			failed = append(failed, fmt.Sprintf("%d (%v)", ref.FileID, err))
+			continue
+		}
+		done++
+	}
+	if len(failed) > 0 {
+		return done, fmt.Errorf("knowledge: reindex: %d of %d files failed: %s",
+			len(failed), len(refs), strings.Join(failed, "; "))
+	}
+	if err := i.store.ClearReindexPending(ctx); err != nil {
+		return done, fmt.Errorf("knowledge: reindex: clear marker: %w", err)
+	}
+	return done, nil
 }
 
 // RemoveFile drops all chunks for a file (e.g. when the file or its thread is
@@ -103,8 +150,11 @@ func (i *Indexer) RemoveFile(ctx context.Context, fileID int64) (int, error) {
 // answer) for cross-thread long-term memory (L3c-4). The combined text is
 // chunked, embedded, and stored under source_type=message keyed by turnUUID,
 // so re-indexing the same turn replaces its chunks. Empty turns clear any
-// stale chunks. Satisfies local_inference.ConversationIndexer.
-func (i *Indexer) IndexTurn(ctx context.Context, turnUUID, userText, assistantText string) error {
+// stale chunks. Satisfies local_inference.KnowledgeHooks.
+//
+// uid is the identity that had the conversation, and it is what keeps the turn
+// out of another local account's retrieval.
+func (i *Indexer) IndexTurn(ctx context.Context, uid uint64, turnUUID, userText, assistantText string) error {
 	var combined string
 	if u := strings.TrimSpace(userText); u != "" {
 		combined = u + "\n\n"
@@ -114,7 +164,7 @@ func (i *Indexer) IndexTurn(ctx context.Context, turnUUID, userText, assistantTe
 
 	sourceID := turnSourceID(turnUUID)
 	if combined == "" {
-		if _, err := i.store.ReplaceSource(ctx, SourceTypeMessage, sourceID, nil); err != nil {
+		if _, err := i.store.ReplaceSource(ctx, uid, SourceTypeMessage, sourceID, nil); err != nil {
 			return fmt.Errorf("knowledge: clear turn %s: %w", turnUUID, err)
 		}
 		return nil
@@ -122,7 +172,7 @@ func (i *Indexer) IndexTurn(ctx context.Context, turnUUID, userText, assistantTe
 
 	pieces := ChunkText(combined, DefaultChunkChars)
 	if len(pieces) == 0 {
-		if _, err := i.store.ReplaceSource(ctx, SourceTypeMessage, sourceID, nil); err != nil {
+		if _, err := i.store.ReplaceSource(ctx, uid, SourceTypeMessage, sourceID, nil); err != nil {
 			return fmt.Errorf("knowledge: clear turn %s: %w", turnUUID, err)
 		}
 		return nil
@@ -139,6 +189,7 @@ func (i *Indexer) IndexTurn(ctx context.Context, turnUUID, userText, assistantTe
 	chunks := make([]Chunk, len(pieces))
 	for idx, text := range pieces {
 		chunks[idx] = Chunk{
+			UID:        uid,
 			ChunkUID:   fmt.Sprintf("msg:%s:%d", turnUUID, idx),
 			SourceType: SourceTypeMessage,
 			SourceID:   sourceID,
@@ -146,7 +197,7 @@ func (i *Indexer) IndexTurn(ctx context.Context, turnUUID, userText, assistantTe
 			Embedding:  vecs[idx],
 		}
 	}
-	if _, err := i.store.ReplaceSource(ctx, SourceTypeMessage, sourceID, chunks); err != nil {
+	if _, err := i.store.ReplaceSource(ctx, uid, SourceTypeMessage, sourceID, chunks); err != nil {
 		return fmt.Errorf("knowledge: store turn %s: %w", turnUUID, err)
 	}
 	return nil
@@ -172,13 +223,16 @@ type Retrieved struct {
 // injecting as context into the next turn (L3c-5). Empty query or topK<=0
 // returns nil.
 //
-// uid scopes only the file-name lookup, not the search. The chunk store has no
-// uid column: it is one index for one machine's single local user. A machine
-// that was used signed-out and then signed in holds chunks under both
-// localSingleUserUID and the cloud uid — the same person's own data either
-// way, which is why they are searched together. It does mean a file whose row
-// belongs to the other identity resolves to no name, so it is labelled
-// generically rather than shown under a name that could be wrong.
+// uid scopes the search itself, not just the file-name lookup: the vec0 table
+// is partitioned by owner, so this returns only what uid indexed. That is the
+// whole reason two local accounts can share one machine without one of them
+// reading the other's documents.
+//
+// A consequence worth naming: chunks written while signed out live under the
+// local single-user uid and stop being retrievable once the same person signs
+// in under their cloud uid. That is not a special case — threads and files
+// behave the same way, because every local table is keyed by the identity that
+// wrote it. Re-uploading a file re-indexes it under the current identity.
 func (i *Indexer) Retrieve(ctx context.Context, uid uint64, query string, topK int) ([]Retrieved, error) {
 	if strings.TrimSpace(query) == "" || topK <= 0 {
 		return nil, nil
@@ -190,7 +244,7 @@ func (i *Indexer) Retrieve(ctx context.Context, uid uint64, query string, topK i
 	if len(qvecs) != 1 {
 		return nil, fmt.Errorf("knowledge: query embed returned %d vectors", len(qvecs))
 	}
-	hits, err := i.store.Search(ctx, qvecs[0], topK)
+	hits, err := i.store.Search(ctx, uid, qvecs[0], topK)
 	if err != nil {
 		return nil, fmt.Errorf("knowledge: retrieve search: %w", err)
 	}

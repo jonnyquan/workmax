@@ -139,8 +139,12 @@ type Boot struct {
 	ModelSettings  *LocalModelSettingsStore
 	LocalFiles     *localrender.Store
 
-	// RAGEnabled reports whether the local knowledge index came up. False
-	// on a non-cgo build, or when the native resources are unresolvable.
+	// RAGEnabled reports whether the local knowledge stack is wired in: the
+	// vector store opened and passed its self-check. False on a non-cgo build
+	// or when sqlite-vec is unusable. True does not promise a query will
+	// return anything today — the embedding model is acquired and loaded on
+	// first use, and may still be downloading. That distinction is why the
+	// boot log reports the asset state separately.
 	RAGEnabled bool
 
 	ctx           context.Context
@@ -344,6 +348,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 		DB:           dbRes.DB,
 		Files:        localFiles,
 		ResourcesDir: resourcesDir,
+		DataDir:      dbRes.DataDir,
 	})
 	if knowledge.Close != nil {
 		unwind = append(unwind, func() { _ = knowledge.Close() })

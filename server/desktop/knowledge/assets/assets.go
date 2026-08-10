@@ -15,6 +15,33 @@
 // that does not hash to the pinned value is discarded, so a compromised or
 // merely stale mirror cannot place executable code on a user's disk. The
 // hashes are the security boundary here, not the URLs.
+//
+// # Where the pinning comes from
+//
+// Three sources, most specific first:
+//
+//  1. $WORKMAX_KNOWLEDGE_MANIFEST — a path to a manifest file. This is how a
+//     build or an internal deployment supplies hosting locations without those
+//     locations being baked into the open-source tree.
+//  2. <resources dir>/manifest.json — a manifest the user dropped next to
+//     their own copy of the assets.
+//  3. The embedded manifest.json in this package.
+//
+// # Release process TODO (not a code TODO)
+//
+// The embedded manifest ships with an EMPTY platforms map, because the
+// embedding model WorkMax was validated against is a local SentenceTransformer
+// export with no public URL to pin. Empty is a deliberate, explicit state: it
+// means "no assets are pinned for this platform", PlanFor returns
+// ErrUnsupportedPlatform, and the caller disables RAG with a log line that says
+// so. It is not a bug to be worked around by inventing a URL — an unpinned
+// download is exactly the thing the hash pinning exists to prevent.
+//
+// Shipping RAG on by default therefore requires a release-process step, not a
+// code change: host the three assets, record their sizes and SHA-256 digests,
+// and fill in manifest.json's platforms map (or point builds at a manifest that
+// does). Until then, RAG works for anyone who supplies their own assets or
+// their own manifest, and is cleanly off for everyone else.
 package assets
 
 import (
@@ -83,7 +110,99 @@ type Progress struct {
 // is simply unavailable there; it is not a failure the caller should retry.
 var ErrUnsupportedPlatform = errors.New("knowledge assets: unsupported platform")
 
-// For returns the pinned asset list for the given platform key ("darwin/arm64").
+// ErrTooLarge means the manifest asks for more bytes than a first-run download
+// is allowed to pull. A manifest is trusted to name files, not to be unbounded:
+// the cap is what stops a mistaken or hostile manifest from filling a disk
+// before a single digest gets checked.
+var ErrTooLarge = errors.New("knowledge assets: manifest exceeds the download size cap")
+
+// ManifestPathEnv names an override manifest file. Set by builds and internal
+// deployments that host the assets somewhere this repository does not name.
+const ManifestPathEnv = "WORKMAX_KNOWLEDGE_MANIFEST"
+
+// ManifestFileName is the manifest a user can drop beside their own assets.
+const ManifestFileName = "manifest.json"
+
+// MaxTotalBytes caps one download run. The real payload is ~120MB (ONNX
+// Runtime + MiniLM + tokenizer); 1GiB leaves room for a larger model without
+// leaving room for a runaway.
+const MaxTotalBytes int64 = 1 << 30
+
+// Plan is the resolved answer to "what has to be downloaded for this machine,
+// and who said so".
+type Plan struct {
+	// Origin is "embedded" or the path of the manifest file that won.
+	// Reported in logs so a support transcript shows which pinning was used.
+	Origin string
+
+	// Platform is the "os/arch" key the assets were selected under.
+	Platform string
+
+	// Assets is the full pinned set, present or not.
+	Assets []Asset
+
+	// TotalBytes is their combined expected size.
+	TotalBytes int64
+}
+
+// PlanFor resolves the manifest (env override, then dir/manifest.json, then
+// embedded) and returns the pinned assets for the running platform.
+//
+// ErrUnsupportedPlatform means the winning manifest pins nothing here. That is
+// a terminal, actionable state — not a transient failure to retry — and the
+// caller is expected to say so out loud rather than degrade silently.
+func PlanFor(dir string) (Plan, error) {
+	platform := runtime.GOOS + "/" + runtime.GOARCH
+	raw, origin, err := loadManifest(dir)
+	if err != nil {
+		return Plan{Origin: origin, Platform: platform}, err
+	}
+	var m manifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return Plan{Origin: origin, Platform: platform}, fmt.Errorf("knowledge assets: parse manifest %s: %w", origin, err)
+	}
+	list, ok := m.Platforms[platform]
+	if !ok || len(list) == 0 {
+		return Plan{Origin: origin, Platform: platform}, fmt.Errorf("%w: %s (manifest: %s)", ErrUnsupportedPlatform, platform, origin)
+	}
+	p := Plan{Origin: origin, Platform: platform, Assets: list}
+	for _, a := range list {
+		if a.Path == "" || a.URL == "" || a.SHA256 == "" || a.Size <= 0 {
+			return p, fmt.Errorf("knowledge assets: manifest %s pins %q without a path, url, sha256 and size", origin, a.Name)
+		}
+		p.TotalBytes += a.Size
+	}
+	if p.TotalBytes > MaxTotalBytes {
+		return p, fmt.Errorf("%w: %d bytes (cap %d, manifest: %s)", ErrTooLarge, p.TotalBytes, MaxTotalBytes, origin)
+	}
+	return p, nil
+}
+
+// loadManifest returns the manifest bytes and a label for where they came from.
+func loadManifest(dir string) ([]byte, string, error) {
+	if p := os.Getenv(ManifestPathEnv); p != "" {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil, p, fmt.Errorf("knowledge assets: read %s=%s: %w", ManifestPathEnv, p, err)
+		}
+		return b, p, nil
+	}
+	if dir != "" {
+		p := filepath.Join(dir, ManifestFileName)
+		b, err := os.ReadFile(p)
+		if err == nil {
+			return b, p, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, p, fmt.Errorf("knowledge assets: read %s: %w", p, err)
+		}
+	}
+	return manifestJSON, "embedded", nil
+}
+
+// For returns the embedded manifest's asset list for a platform key
+// ("darwin/arm64"), ignoring any override. Only the embedded pinning is
+// consulted, which is what makes it useful for asserting what ships.
 func For(platform string) ([]Asset, error) {
 	var m manifest
 	if err := json.Unmarshal(manifestJSON, &m); err != nil {
@@ -96,7 +215,7 @@ func For(platform string) ([]Asset, error) {
 	return list, nil
 }
 
-// Current returns the pinned asset list for the running platform.
+// Current returns the embedded manifest's asset list for the running platform.
 func Current() ([]Asset, error) {
 	return For(runtime.GOOS + "/" + runtime.GOARCH)
 }
@@ -109,11 +228,11 @@ func Current() ([]Asset, error) {
 // already on disk. Callers that only need a cheap "probably installed" signal
 // should stat the paths themselves.
 func Missing(dir string) ([]Asset, error) {
-	all, err := Current()
+	p, err := PlanFor(dir)
 	if err != nil {
 		return nil, err
 	}
-	return MissingIn(dir, all)
+	return MissingIn(dir, p.Assets)
 }
 
 // MissingIn is Missing against an explicit asset list.
@@ -131,19 +250,30 @@ func MissingIn(dir string, all []Asset) ([]Asset, error) {
 	return missing, nil
 }
 
-// Ensure downloads whatever is missing into dir. It is safe to call when
-// everything is already present (it becomes a hash check and returns nil).
+// DownloadTimeout bounds one Ensure run end to end. Generous, because ~120MB
+// over a bad hotel connection is legitimately slow; bounded, because a stalled
+// transfer must eventually free the retry path rather than hang forever.
+const DownloadTimeout = 30 * time.Minute
+
+// EnsurePlan downloads whatever of a resolved Plan is missing into dir.
+func EnsurePlan(ctx context.Context, dir string, p Plan, onProgress func(Progress)) error {
+	return EnsureIn(ctx, dir, p.Assets, onProgress)
+}
+
+// Ensure downloads whatever is missing into dir, using the manifest that dir
+// (and the environment) resolve to. It is safe to call when everything is
+// already present (it becomes a hash check and returns nil).
 //
 // Downloads land in a .part file next to the destination and are renamed only
 // after the digest matches, so an interrupted run never leaves a plausible-
 // looking but corrupt asset behind — and a later run resumes the .part via a
 // Range request instead of starting over.
 func Ensure(ctx context.Context, dir string, onProgress func(Progress)) error {
-	all, err := Current()
+	p, err := PlanFor(dir)
 	if err != nil {
 		return err
 	}
-	return EnsureIn(ctx, dir, all, onProgress)
+	return EnsurePlan(ctx, dir, p, onProgress)
 }
 
 // EnsureIn is Ensure against an explicit asset list.
@@ -263,6 +393,11 @@ func fetch(ctx context.Context, client *http.Client, dir string, a Asset, index,
 	return nil
 }
 
+// copyWithProgress streams the body to dst, reporting progress and refusing to
+// write past the pinned size. The clamp is not redundant with the digest check
+// that follows it: a digest can only reject bytes already on disk, so without a
+// ceiling a server answering with an endless stream would fill the disk before
+// anything got verified.
 func copyWithProgress(dst io.Writer, src io.Reader, already int64, a Asset, index, total int, onProgress func(Progress)) (int64, error) {
 	buf := make([]byte, 512*1024)
 	written := already
@@ -270,6 +405,9 @@ func copyWithProgress(dst io.Writer, src io.Reader, already int64, a Asset, inde
 	for {
 		n, readErr := src.Read(buf)
 		if n > 0 {
+			if written+int64(n) > a.Size {
+				return written, fmt.Errorf("%s: response exceeds the pinned size of %d bytes", a.Name, a.Size)
+			}
 			if _, werr := dst.Write(buf[:n]); werr != nil {
 				return written, werr
 			}

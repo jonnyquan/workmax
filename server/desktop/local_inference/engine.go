@@ -49,8 +49,12 @@ type ProfileReader interface {
 // Defined here as an interface so this package does not depend on the cgo
 // knowledge package; the adapter that satisfies it lives at the wiring site.
 // Nil on the Engine → no RAG (turns are not indexed, no context is injected).
+//
+// Both halves carry uid because the local knowledge index is partitioned by
+// it: a turn is indexed as the identity that had it, and retrieval only ever
+// sees that identity's chunks.
 type KnowledgeHooks interface {
-	IndexTurn(ctx context.Context, turnUUID, userText, assistantText string) error
+	IndexTurn(ctx context.Context, uid uint64, turnUUID, userText, assistantText string) error
 	Retrieve(ctx context.Context, uid uint64, query string, topK int) ([]RetrievedSource, error)
 }
 
@@ -300,7 +304,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 		err = fmt.Errorf("local inference: %w: %v", cloudproxy.ErrSSEUpstreamIdle, err)
 	}
 	if err == nil && e.hooks != nil {
-		go e.indexCompletedTurn(req.TurnUUID, req.UserText, assistantText.String())
+		go e.indexCompletedTurn(req.UID, req.TurnUUID, req.UserText, assistantText.String())
 	}
 	return
 }
@@ -311,7 +315,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 // The recover matters because this runs in a bare goroutine: a panic below it
 // (native tokenizer/ORT edge cases) would otherwise kill the whole sidecar to
 // avoid indexing one turn.
-func (e *Engine) indexCompletedTurn(turnUUID, userText, assistantText string) {
+func (e *Engine) indexCompletedTurn(uid uint64, turnUUID, userText, assistantText string) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("knowledge: index turn %s panicked: %v", turnUUID, r)
@@ -319,7 +323,7 @@ func (e *Engine) indexCompletedTurn(turnUUID, userText, assistantText string) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := e.hooks.IndexTurn(ctx, turnUUID, userText, assistantText); err != nil {
+	if err := e.hooks.IndexTurn(ctx, uid, turnUUID, userText, assistantText); err != nil {
 		log.Printf("knowledge: index turn %s: %v", turnUUID, err)
 	}
 }

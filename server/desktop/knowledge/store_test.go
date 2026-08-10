@@ -31,14 +31,20 @@ func newTestStore(t *testing.T) *Store {
 	return store
 }
 
+// storeTestUID is the identity these tests write and read as. A real local
+// uid (2^62 + n) rather than a small number, because the partition key is an
+// int64 column and a uid near the top of the unsigned range is exactly where a
+// sloppy conversion would go wrong unnoticed.
+const storeTestUID uint64 = 1<<62 + 3
+
 func TestStoreUpsertSearchDelete(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
 	chunks := []Chunk{
-		{ChunkUID: "c1", SourceType: SourceTypeFile, SourceID: "f1", Text: "cats sit on mats", Embedding: basis(0)},
-		{ChunkUID: "c2", SourceType: SourceTypeFile, SourceID: "f1", Text: "dogs run in parks", Embedding: basis(1)},
-		{ChunkUID: "c3", SourceType: SourceTypeFile, SourceID: "f2", Text: "kittens nap on rugs", Embedding: nearBasis(0)},
+		{UID: storeTestUID, ChunkUID: "c1", SourceType: SourceTypeFile, SourceID: "f1", Text: "cats sit on mats", Embedding: basis(0)},
+		{UID: storeTestUID, ChunkUID: "c2", SourceType: SourceTypeFile, SourceID: "f1", Text: "dogs run in parks", Embedding: basis(1)},
+		{UID: storeTestUID, ChunkUID: "c3", SourceType: SourceTypeFile, SourceID: "f2", Text: "kittens nap on rugs", Embedding: nearBasis(0)},
 	}
 	if n, err := store.UpsertChunks(ctx, chunks); err != nil {
 		t.Fatalf("UpsertChunks: %v", err)
@@ -47,7 +53,7 @@ func TestStoreUpsertSearchDelete(t *testing.T) {
 	}
 
 	// KNN from basis(0): c1 (self), then c3 (near basis 0), then c2 (orthogonal).
-	hits, err := store.Search(ctx, basis(0), 3)
+	hits, err := store.Search(ctx, storeTestUID, basis(0), 3)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -77,7 +83,7 @@ func TestStoreUpsertSearchDelete(t *testing.T) {
 	} else if n != 3 {
 		t.Fatalf("re-UpsertChunks wrote %d, want 3", n)
 	}
-	hits, _ = store.Search(ctx, basis(0), 1)
+	hits, _ = store.Search(ctx, storeTestUID, basis(0), 1)
 	if len(hits) != 1 || hits[0].ChunkUID != "c1" || hits[0].Text != "cats love mats (updated)" {
 		t.Fatalf("re-index did not replace c1: %+v", hits)
 	}
@@ -88,13 +94,13 @@ func TestStoreUpsertSearchDelete(t *testing.T) {
 	} else if n != 2 {
 		t.Fatalf("deleted %d, want 2", n)
 	}
-	hits, _ = store.Search(ctx, basis(0), 5)
+	hits, _ = store.Search(ctx, storeTestUID, basis(0), 5)
 	if len(hits) != 1 || hits[0].ChunkUID != "c3" {
 		t.Fatalf("expected only c3 after delete, got %+v", hits)
 	}
 
 	// topK cap respected.
-	hits, _ = store.Search(ctx, basis(0), 0)
+	hits, _ = store.Search(ctx, storeTestUID, basis(0), 0)
 	if hits != nil {
 		t.Errorf("topK=0 should error/empty, got %+v", hits)
 	}
@@ -106,18 +112,18 @@ func TestStoreValidation(t *testing.T) {
 
 	// Wrong embedding dimension.
 	if _, err := store.UpsertChunks(ctx, []Chunk{
-		{ChunkUID: "x", SourceType: SourceTypeFile, SourceID: "f", Text: "t", Embedding: []float32{1, 2, 3}},
+		{UID: storeTestUID, ChunkUID: "x", SourceType: SourceTypeFile, SourceID: "f", Text: "t", Embedding: []float32{1, 2, 3}},
 	}); err == nil {
 		t.Fatal("expected error for wrong dim")
 	}
 	// Empty ChunkUID.
 	if _, err := store.UpsertChunks(ctx, []Chunk{
-		{ChunkUID: " ", SourceType: SourceTypeFile, SourceID: "f", Text: "t", Embedding: basis(0)},
+		{UID: storeTestUID, ChunkUID: " ", SourceType: SourceTypeFile, SourceID: "f", Text: "t", Embedding: basis(0)},
 	}); err == nil {
 		t.Fatal("expected error for empty ChunkUID")
 	}
 	// Wrong query dim.
-	if _, err := store.Search(ctx, []float32{1, 2, 3}, 1); err == nil {
+	if _, err := store.Search(ctx, storeTestUID, []float32{1, 2, 3}, 1); err == nil {
 		t.Fatal("expected error for wrong query dim")
 	}
 }

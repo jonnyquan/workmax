@@ -2,11 +2,22 @@
   "schemaVersion": 1,
   "_comment": [
     "Every asset is pinned by sha256; a download that does not match is discarded.",
-    "onnxruntime is the official Microsoft release and needs no mirror.",
-    "The embedding model and tokenizer are NOT yet pinned: the file L3c was",
-    "validated against is a local SentenceTransformer export (pytorch 2.0.1,",
-    "'sentence_embedding' output) with no matching public URL. See",
-    "ProjectDocs/wails-migration-evaluation-2026-08.md - RAG asset hosting."
+    "platforms is EMPTY on purpose, and that is a supported state, not an oversight:",
+    "the embedding model L3c was validated against is a local SentenceTransformer",
+    "export (pytorch 2.0.1, 'sentence_embedding' output) with no public URL to pin,",
+    "and inventing one would defeat the hash pinning this file exists for. With an",
+    "empty map, PlanFor returns ErrUnsupportedPlatform and the sidecar disables RAG",
+    "with a log line naming both ways to turn it back on.",
+    "",
+    "Two ways to supply assets without editing this file:",
+    "  WORKMAX_KNOWLEDGE_MANIFEST=/path/to/manifest.json  (builds, internal deploys)",
+    "  <data dir>/knowledge_resources/manifest.json       (a user's own copy)",
+    "",
+    "RELEASE PROCESS TODO: to ship RAG on by default, host libonnxruntime, model.onnx",
+    "and tokenizer.json, then fill platforms with {name, path, url, sha256, size} per",
+    "os/arch key ('darwin/arm64', ...). Paths are relative to the resources dir and",
+    "must match knowledge.ResolveResourcesIn's layout: libonnxruntime.<ext> at the",
+    "root, knowledge/model.onnx and knowledge/tokenizer.json below it."
   ],
   "platforms": {}
 }

@@ -375,6 +375,42 @@ func (s *Store) ListThreadFiles(uid uint64, threadID uint64) ([]ThreadFile, erro
 	return out, nil
 }
 
+// FileRef is one stored attachment and the identity that owns it — the pair
+// every re-indexing caller needs, since a file can only be loaded as its owner.
+type FileRef struct {
+	FileID int64
+	UID    uint64
+}
+
+// AllFiles lists every attachment this machine still has on disk, oldest
+// first. Unlike every other read here it is deliberately not uid-scoped: its
+// one caller rebuilds a derived index across all local identities, and each
+// file is then loaded and re-indexed under the uid returned with it.
+func (s *Store) AllFiles() ([]FileRef, error) {
+	rows, err := s.db.Raw(
+		`SELECT id, uid FROM w_workagent_thread_file
+		  WHERE exists_on_disk = 1
+		  ORDER BY id ASC`,
+	).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("list all files: %w", err)
+	}
+	defer rows.Close()
+
+	out := []FileRef{}
+	for rows.Next() {
+		var f FileRef
+		if err := rows.Scan(&f.FileID, &f.UID); err != nil {
+			return nil, fmt.Errorf("scan file ref: %w", err)
+		}
+		out = append(out, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate file refs: %w", err)
+	}
+	return out, nil
+}
+
 // DeleteThreadFiles removes a thread's attachments: the bytes on disk and the
 // rows that name them. It returns the ids of every row it deleted, so the
 // caller can clear whatever else was derived from those files (the knowledge
