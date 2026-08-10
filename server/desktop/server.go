@@ -158,6 +158,9 @@ type Server struct {
 	authClosing     atomic.Bool
 	authContext     context.Context
 	authCancel      context.CancelFunc
+	// modelCatalog caches the cloud's official model list per identity for a
+	// short TTL, so opening Settings is not a cloud round trip every time.
+	modelCatalog *modelCatalogCache
 }
 
 // NewServer binds to 127.0.0.1:0 (OS-assigned port), registers the desktop
@@ -186,11 +189,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
 	authContext, authCancel := context.WithCancel(context.Background())
 	s := &Server{
-		cfg:         cfg,
-		listener:    listener,
-		startedAt:   time.Now().UTC(),
-		authContext: authContext,
-		authCancel:  authCancel,
+		cfg:          cfg,
+		listener:     listener,
+		startedAt:    time.Now().UTC(),
+		authContext:  authContext,
+		authCancel:   authCancel,
+		modelCatalog: newModelCatalogCache(),
 	}
 
 	gin.SetMode(gin.ReleaseMode)

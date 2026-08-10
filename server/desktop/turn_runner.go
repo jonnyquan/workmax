@@ -30,7 +30,7 @@ type TurnRunner interface {
 // rather than failing.
 func (s *Server) localTurnRunner() TurnRunner {
 	if s.cfg.ModelSettings != nil {
-		if dto, err := s.cfg.ModelSettings.Get(); err == nil {
+		if dto, err := s.cfg.ModelSettings.Get(s.resolveIdentity().UID); err == nil {
 			switch dto.Local.Protocol {
 			case LocalProtocolAnthropicCompatible:
 				if s.cfg.LocalAgent != nil {
@@ -54,7 +54,7 @@ func (s *Server) localToolLoopActive() bool {
 	if !s.shouldUseLocalRoute() {
 		return false
 	}
-	dto, err := s.cfg.ModelSettings.Get()
+	dto, err := s.cfg.ModelSettings.Get(s.resolveIdentity().UID)
 	if err != nil {
 		return false
 	}
@@ -78,7 +78,7 @@ func (s *Server) shouldUseLocalRoute() bool {
 	if s.cfg.LocalInference == nil || s.cfg.ModelSettings == nil {
 		return false
 	}
-	dto, err := s.cfg.ModelSettings.Get()
+	dto, err := s.cfg.ModelSettings.Get(s.resolveIdentity().UID)
 	if err != nil {
 		return false
 	}
@@ -88,18 +88,27 @@ func (s *Server) shouldUseLocalRoute() bool {
 // LocalModelProfileReader 把 LocalModelSettingsStore 适配成
 // local_inference.ProfileReader。依赖倒置：local_inference 不 import desktop
 // （否则循环），由本包提供实现。
+// UID answers "whose key" at the moment the engine asks, not at wiring time:
+// the local route can be driven by any identity on this machine, and reading
+// the key of whoever happened to be signed in when the sidecar booted is the
+// cross-identity leak this partition exists to close.
 type LocalModelProfileReader struct {
 	Store *LocalModelSettingsStore
+	UID   func() uint64
 }
 
 // LocalInferenceProfile 实现 local_inference.ProfileReader：合并 SQLite 里的
 // 非密钥字段与 Keychain 里的 API key。
 func (r *LocalModelProfileReader) LocalInferenceProfile() (protocol, baseURL, modelID, apiKey string, err error) {
-	dto, err := r.Store.Get()
+	uid := localSingleUserUID
+	if r.UID != nil {
+		uid = r.UID()
+	}
+	dto, err := r.Store.Get(uid)
 	if err != nil {
 		return "", "", "", "", err
 	}
-	key, err := r.Store.LoadAPIKey()
+	key, err := r.Store.LoadAPIKey(uid)
 	if err != nil {
 		return "", "", "", "", err
 	}
@@ -108,3 +117,20 @@ func (r *LocalModelProfileReader) LocalInferenceProfile() (protocol, baseURL, mo
 
 // 编译期断言：*LocalModelProfileReader 实现 local_inference.ProfileReader。
 var _ localinference.ProfileReader = (*LocalModelProfileReader)(nil)
+
+// officialModelIDFor is the model this identity picked for official turns, or
+// "" when it never picked one (or settings are unreadable — an unanswerable
+// preference must not stop a turn that would otherwise run on the account
+// default). It reads the frozen turn identity rather than the current request
+// so a login committing mid-turn cannot change which model the in-flight turn
+// asked for.
+func (s *Server) officialModelIDFor(uid uint64) string {
+	if s.cfg.ModelSettings == nil {
+		return ""
+	}
+	dto, err := s.cfg.ModelSettings.Get(uid)
+	if err != nil {
+		return ""
+	}
+	return dto.OfficialModelID
+}

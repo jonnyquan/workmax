@@ -496,6 +496,7 @@ export function parseModelRouteSettings(value) {
   }
   return {
     preferred_route: route,
+    official_model_id: optionalString(value.official_model_id) || "",
     local: {
       protocol: optionalString(local.protocol) || "",
       base_url: optionalString(local.base_url) || "",

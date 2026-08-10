@@ -212,6 +212,7 @@ func (s *Server) streamLegacyAgentTurn(c *gin.Context, input legacyAgentTurnStre
 			strconv.FormatUint(cloudThreadID, 10),
 			input.Intent.ChatMode,
 			input.Intent.UserText,
+			s.officialModelIDFor(input.Intent.UID),
 		)
 		if err != nil {
 			if stateErr := s.interruptLegacyAgentTurnBeforeSSE(input, "intent_invalid"); stateErr != nil {

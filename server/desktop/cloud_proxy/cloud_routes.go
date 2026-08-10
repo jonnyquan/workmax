@@ -35,6 +35,10 @@ const (
 	CloudRouteSyncThreads  = "/api/desktop/sync/threads"
 	CloudRouteSyncMessages = "/api/desktop/sync/messages"
 
+	// CloudRouteModelsList is the official model catalog: metadata only, no
+	// keys and no endpoints. Same Desktop OAuth Bearer as /api/desktop/sync/*.
+	CloudRouteModelsList = "/api/desktop/models"
+
 	CloudRouteSkillsList  = "/api/work-agent/skills"
 	CloudRouteChatAgent   = "/api/work-agent/chat/agent"
 	CloudRouteAgentThread = "/api/desktop/agent/threads/:uuid"
@@ -63,6 +67,7 @@ var currentCloudRouteSpecs = []CloudRouteSpec{
 	newCloudRouteSpec("desktop.oauth.userinfo", http.MethodGet, CloudRouteOAuthUserInfo),
 	newCloudRouteSpec("desktop.sync.threads", http.MethodGet, CloudRouteSyncThreads),
 	newCloudRouteSpec("desktop.sync.messages", http.MethodGet, CloudRouteSyncMessages),
+	newCloudRouteSpec("desktop.models", http.MethodGet, CloudRouteModelsList),
 	newCloudRouteSpec("agent.skills", http.MethodGet, CloudRouteSkillsList),
 	newCloudRouteSpec("agent.chat", http.MethodPost, CloudRouteChatAgent),
 	newCloudRouteSpec("desktop.agent.thread-put", http.MethodPut, CloudRouteAgentThread),

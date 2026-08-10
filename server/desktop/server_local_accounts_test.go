@@ -172,7 +172,7 @@ func TestLocalAccountSwitchScopesThreadCreation(t *testing.T) {
 	modelSettings := ensureLocalModelSettingsDB(t, db)
 	// Signed-out creation requires the local model route to be active — the
 	// same precondition the app itself needs before local-only work.
-	if _, err := modelSettings.Put(LocalModelSettingsPut{
+	if _, err := modelSettings.Put(localSingleUserUID, LocalModelSettingsPut{
 		PreferredRoute: ModelRouteLocal,
 		Local: &LocalModelProfilePut{
 			Protocol: LocalProtocolOpenAICompatible,

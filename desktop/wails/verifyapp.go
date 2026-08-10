@@ -57,6 +57,8 @@ var appBootExpectations = struct {
 			"session-gated, and goes through the typed bridge rather than the legacy fetch"},
 		{"model route", "GET", "/settings/model-route",
 			"typed settings namespace; only read when the settings panel is opened"},
+		{"model catalog", "GET", "/settings/model-catalog",
+			"read alongside the model route when the settings panel opens; answers an empty catalog rather than an error without an account"},
 	},
 }
 

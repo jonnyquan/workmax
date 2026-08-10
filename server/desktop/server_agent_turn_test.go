@@ -621,14 +621,21 @@ func TestStreamLegacyAgentTurn_LocalRoute(t *testing.T) {
 	// openServerTestDB 用内联建表，不含 w_desktop_model_settings（0004 migration）；补建。
 	if err := db.Exec(`CREATE TABLE IF NOT EXISTS w_desktop_model_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    preferred_route TEXT NOT NULL DEFAULT 'official',
     local_protocol TEXT NOT NULL DEFAULT '',
     local_base_url TEXT NOT NULL DEFAULT '',
     local_model_id TEXT NOT NULL DEFAULT '',
-    local_api_key_present INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`).Error; err != nil {
 		t.Fatalf("create model settings table: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS w_desktop_model_preference (
+    uid INTEGER PRIMARY KEY,
+    preferred_route TEXT NOT NULL DEFAULT 'official',
+    official_model_id TEXT NOT NULL DEFAULT '',
+    local_api_key_present INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`).Error; err != nil {
+		t.Fatalf("create model preference table: %v", err)
 	}
 	store := cloudproxy.NewTokenStore(newMemKeychain())
 	if err := store.Save(cloudproxy.TokenPair{
@@ -640,7 +647,10 @@ func TestStreamLegacyAgentTurn_LocalRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	modelSettings := NewLocalModelSettingsStore(db, newMemKeychain())
-	if _, err := modelSettings.Put(LocalModelSettingsPut{
+	// uid 42 is the subject of the access token above: model settings are
+	// per-identity now, so the route preference has to be stored under the
+	// identity the server will resolve for this request.
+	if _, err := modelSettings.Put(42, LocalModelSettingsPut{
 		PreferredRoute: ModelRouteLocal,
 		Local: &LocalModelProfilePut{
 			Protocol: LocalProtocolOpenAICompatible,
@@ -700,31 +710,47 @@ func TestStreamLegacyAgentTurn_LocalRoute(t *testing.T) {
 }
 
 // ensureLocalModelSettingsDB patches openServerTestDB (which lacks the 0004
-// migration) with w_desktop_model_settings and configures preferred_route=local.
-// Reused by the L3d unauthenticated-local tests.
-func ensureLocalModelSettingsDB(t *testing.T, db *gorm.DB) *LocalModelSettingsStore {
+// and 0009 migrations) with the model settings tables and turns the local
+// route on. Reused by the L3d unauthenticated-local tests.
+//
+// The route preference is per-identity (migration 0009), and these fixtures
+// boot servers that resolve to different identities: uid 0 for a trimmed boot
+// with no TokenStore, the reserved single-user uid for a signed-out machine,
+// and a cloud subject when a token is present. Seeding all of them keeps
+// "the local route is on" the fixture's meaning rather than a statement about
+// one particular caller. Extra uids are for tests that mint their own subject.
+func ensureLocalModelSettingsDB(t *testing.T, db *gorm.DB, extraUIDs ...uint64) *LocalModelSettingsStore {
 	t.Helper()
 	if err := db.Exec(`CREATE TABLE IF NOT EXISTS w_desktop_model_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    preferred_route TEXT NOT NULL DEFAULT 'official',
     local_protocol TEXT NOT NULL DEFAULT '',
     local_base_url TEXT NOT NULL DEFAULT '',
     local_model_id TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`).Error; err != nil {
+		t.Fatalf("create model settings table: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS w_desktop_model_preference (
+    uid INTEGER PRIMARY KEY,
+    preferred_route TEXT NOT NULL DEFAULT 'official',
+    official_model_id TEXT NOT NULL DEFAULT '',
     local_api_key_present INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`).Error; err != nil {
-		t.Fatalf("create model_settings table: %v", err)
+		t.Fatalf("create model preference table: %v", err)
 	}
 	store := NewLocalModelSettingsStore(db, newMemKeychain())
-	if _, err := store.Put(LocalModelSettingsPut{
-		PreferredRoute: ModelRouteLocal,
-		Local: &LocalModelProfilePut{
-			Protocol: LocalProtocolOpenAICompatible,
-			BaseURL:  "http://127.0.0.1:11434/v1",
-			ModelID:  "llama3.2",
-		},
-	}); err != nil {
-		t.Fatalf("put local settings: %v", err)
+	for _, uid := range append([]uint64{0, localSingleUserUID}, extraUIDs...) {
+		if _, err := store.Put(uid, LocalModelSettingsPut{
+			PreferredRoute: ModelRouteLocal,
+			Local: &LocalModelProfilePut{
+				Protocol: LocalProtocolOpenAICompatible,
+				BaseURL:  "http://127.0.0.1:11434/v1",
+				ModelID:  "llama3.2",
+			},
+		}); err != nil {
+			t.Fatalf("put local settings for uid %d: %v", uid, err)
+		}
 	}
 	return store
 }
@@ -763,7 +789,8 @@ func TestLocalTurnRunner_DispatchesByProtocol(t *testing.T) {
 	// ensureLocalModelSettingsDB creates the table and seeds openai; overwrite
 	// with the anthropic profile for the dispatch-to-L2 case.
 	anthropic := ensureLocalModelSettingsDB(t, db)
-	if _, err := anthropic.Put(LocalModelSettingsPut{
+	// No TokenStore on the server below, so it resolves the unscoped identity.
+	if _, err := anthropic.Put(0, LocalModelSettingsPut{
 		PreferredRoute: ModelRouteLocal,
 		Local: &LocalModelProfilePut{
 			Protocol: LocalProtocolAnthropicCompatible,

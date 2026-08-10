@@ -110,7 +110,9 @@ func configureLocalRoute(boot *desktop.Boot, baseURL string) error {
 	if boot.ModelSettings == nil {
 		return fmt.Errorf("kill check: model settings unavailable")
 	}
-	_, err := boot.ModelSettings.Put(desktop.LocalModelSettingsPut{
+	// Model settings are per-identity, so the harness has to write under the
+	// same identity the sidecar will resolve when the replay hits /agent/chat.
+	_, err := boot.ModelSettings.Put(boot.IdentityUID(), desktop.LocalModelSettingsPut{
 		PreferredRoute: "local",
 		Local: &desktop.LocalModelProfilePut{
 			Protocol: desktop.LocalProtocolOpenAICompatible,

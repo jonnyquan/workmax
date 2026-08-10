@@ -26,7 +26,10 @@
       "explicit-idempotent-turn-recovery",
       "session-changed-recovery",
       "local-official-model-route-settings-api",
-      "typed-model-route-settings-bridge"
+      "typed-model-route-settings-bridge",
+      "per-identity-model-settings",
+      "official-model-catalog-selection",
+      "per-thread-cloud-sync-switch"
     ],
     "legacyHostedFallback": false,
     "runtimePolicy": "packaged-bundled-only-development-explicit",
@@ -177,6 +180,14 @@
       {
         "bridgeMethod": "settings.putModelRoute",
         "routeId": "settings.model-route.put"
+      },
+      {
+        "bridgeMethod": "agent.setThreadCloudSync",
+        "routeId": "agent.thread-cloud-sync"
+      },
+      {
+        "bridgeMethod": "settings.getModelCatalog",
+        "routeId": "settings.model-catalog.get"
       }
     ],
     "localMethods": [
@@ -808,6 +819,33 @@
         "maxBodyBytes": 8192,
         "bodyTooLargeError": "model settings body too large"
       }
+    },
+    {
+      "id": "agent.thread-cloud-sync",
+      "method": "PUT",
+      "path": "/agent/threads/:uuid/cloud-sync",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 512,
+        "bodyTooLargeError": "cloud sync request body too large"
+      }
+    },
+    {
+      "id": "settings.model-catalog.get",
+      "method": "GET",
+      "path": "/settings/model-catalog",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
     }
   ],
   "cloudRoutes": [
@@ -851,6 +889,14 @@
       "method": "GET",
       "path": "/api/desktop/sync/messages",
       "surface": "desktop-resource",
+      "inventorySource": "sidecar-cloud-proxy"
+    },
+    {
+      "id": "desktop.models",
+      "method": "GET",
+      "path": "/api/desktop/models",
+      "surface": "desktop-resource",
+      "status": "current",
       "inventorySource": "sidecar-cloud-proxy"
     },
     {

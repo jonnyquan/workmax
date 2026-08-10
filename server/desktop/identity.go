@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	cloudproxy "server/desktop/cloud_proxy"
 )
@@ -112,23 +113,32 @@ func (i requestIdentity) SessionConflict() error {
 // the cached TokenStore snapshot and one SQLite read — so it is safe on the
 // offline, signed-out path that runs on every history poll.
 func (s *Server) resolveIdentity() requestIdentity {
-	if s.cfg.TokenStore == nil {
+	return resolveIdentityFrom(s.cfg.TokenStore, s.cfg.DB)
+}
+
+// resolveIdentityFrom is resolveIdentity without a Server. It exists because
+// the local inference engines are constructed before the Server is — they need
+// to know whose API key to read at the moment a turn runs, and the answer must
+// be the same one every HTTP handler gets. Two implementations of "who is
+// this" is exactly the duplication this file was written to end.
+func resolveIdentityFrom(tokenStore *cloudproxy.TokenStore, db *gorm.DB) requestIdentity {
+	if tokenStore == nil {
 		return requestIdentity{
 			Kind:     identityUnscoped,
 			UID:      0,
 			cloudErr: cloudproxy.ErrNoSession,
 		}
 	}
-	snapshot, err := s.cfg.TokenStore.GetSnapshot()
+	snapshot, err := tokenStore.GetSnapshot()
 	if err != nil {
 		// ErrNoSession (signed out), ErrSessionChanged (a login or logout is
 		// committing), a corrupt entry, a locked Keychain — none of them mean
 		// "nobody is using this computer". They mean there is no cloud account
 		// to run as right now.
-		return s.localIdentity(err)
+		return localIdentityFor(db, err)
 	}
 	if snapshot.Pair.AccessToken == "" || snapshot.Pair.IsRefreshExpired(time.Now().UTC()) {
-		return s.localIdentity(cloudproxy.ErrNoSession)
+		return localIdentityFor(db, cloudproxy.ErrNoSession)
 	}
 	uid, err := cloudproxy.ExtractUIDFromAccessToken(snapshot.Pair.AccessToken)
 	if err != nil || uid == 0 {
@@ -174,9 +184,13 @@ func (s *Server) requestOwner(c *gin.Context) (requestIdentity, bool) {
 // reserved single-user uid if account bookkeeping is unavailable. Never fails
 // — an accounts problem must not lock anyone out of their own data.
 func (s *Server) localIdentity(cause error) requestIdentity {
+	return localIdentityFor(s.cfg.DB, cause)
+}
+
+func localIdentityFor(db *gorm.DB, cause error) requestIdentity {
 	return requestIdentity{
 		Kind:     identityLocal,
-		UID:      activeLocalAccountUID(s.cfg.DB),
+		UID:      activeLocalAccountUID(db),
 		cloudErr: cause,
 	}
 }

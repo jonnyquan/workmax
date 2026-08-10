@@ -171,6 +171,8 @@ export type LocalModelProtocol =
 /** Renderer-safe model route DTO. Never includes api_key. */
 export interface ModelRouteSettings {
   preferred_route: ModelPreferredRoute;
+  /** Chosen official catalog modelId; "" means "use the account default". */
+  official_model_id: string;
   local: {
     protocol: string;
     base_url: string;
@@ -182,6 +184,8 @@ export interface ModelRouteSettings {
 
 export interface ModelRouteSettingsPut {
   preferred_route: ModelPreferredRoute;
+  /** Omit to leave the stored choice alone; "" clears it. */
+  official_model_id?: string;
   local?: {
     protocol: LocalModelProtocol;
     base_url: string;
@@ -190,6 +194,46 @@ export interface ModelRouteSettingsPut {
     api_key?: string;
     clear_api_key?: boolean;
   };
+}
+
+/**
+ * One official model as the cloud describes it. Metadata only — no key, no
+ * endpoint. An empty `permissions` means visible but not usable at this tier.
+ */
+export interface OfficialModel {
+  modelId: string;
+  displayName: string;
+  description: string;
+  requiredTier: string;
+  permissions: string[];
+  default: boolean;
+}
+
+export type ModelCatalogState = "unbound" | "ready" | "unavailable";
+
+export type ModelSelectionState =
+  | "unset"
+  | "ok"
+  | "not_allowed"
+  | "unknown"
+  | "unverified";
+
+export interface ModelCatalog {
+  state: ModelCatalogState;
+  items: OfficialModel[];
+  count: number;
+  tier: string;
+  tier_expires_at: string;
+  selected_model_id: string;
+  selection_state: ModelSelectionState;
+}
+
+/** local: never left this machine. paused: cloud copy exists, sync stopped. */
+export type ThreadCloudSyncState = "local" | "paused" | "synced";
+
+export interface ThreadCloudSyncResult {
+  thread_uuid: string;
+  cloud_sync_state: ThreadCloudSyncState;
 }
 
 export interface AgentSkillArtifacts {
@@ -566,6 +610,10 @@ export interface DesktopBridge {
     unpinThread: (
       threadUUID: string
     ) => Promise<DesktopBridgeResult<{ pinned: boolean }>>;
+    setThreadCloudSync: (
+      threadUUID: string,
+      state: "paused" | "synced"
+    ) => Promise<DesktopBridgeResult<ThreadCloudSyncResult>>;
     listRecoverableTurns: () => Promise<
       DesktopBridgeResult<AgentRecoverableTurnList>
     >;
@@ -608,6 +656,7 @@ export interface DesktopBridge {
     putModelRoute: (
       input: ModelRouteSettingsPut
     ) => Promise<DesktopBridgeResult<ModelRouteSettings>>;
+    getModelCatalog: () => Promise<DesktopBridgeResult<ModelCatalog>>;
   };
 }
 
@@ -903,6 +952,22 @@ const ROUTES = {
     "json",
     "application/json"
   ),
+  agentSetThreadCloudSync: defineTypedRoute(
+    "agent.setThreadCloudSync",
+    "agent.thread-cloud-sync",
+    "PUT",
+    "/agent/threads/:uuid/cloud-sync",
+    "json",
+    "application/json"
+  ),
+  settingsGetModelCatalog: defineTypedRoute(
+    "settings.getModelCatalog",
+    "settings.model-catalog.get",
+    "GET",
+    "/settings/model-catalog",
+    "none",
+    null
+  ),
   settingsGetModelRoute: defineTypedRoute(
     "settings.getModelRoute",
     "settings.model-route.get",
@@ -943,6 +1008,7 @@ const JSON_BODY_LIMITS = {
   "agent.startTurn": 1 << 20,
   "system.writeLog": 65_536,
   "settings.putModelRoute": 8 << 10,
+  "agent.setThreadCloudSync": 512,
 } as const;
 
 export function createDesktopBridge(
@@ -1041,6 +1107,27 @@ export function createDesktopBridge(
         const uuid = validateCanonicalV4UUID(threadUUID, "unpinThread threadUUID");
         const path = ROUTES.agentUnpinThread.path.replace(":uuid", encodeURIComponent(uuid));
         return execute<{ pinned: boolean }>(deps, ROUTES.agentUnpinThread, path);
+      },
+      setThreadCloudSync: async (threadUUID, state) => {
+        const uuid = validateCanonicalV4UUID(
+          threadUUID,
+          "setThreadCloudSync threadUUID"
+        );
+        if (state !== "paused" && state !== "synced") {
+          throw new TypeError(
+            'setThreadCloudSync state must be "paused" or "synced"'
+          );
+        }
+        const path = ROUTES.agentSetThreadCloudSync.path.replace(
+          ":uuid",
+          encodeURIComponent(uuid)
+        );
+        return execute<ThreadCloudSyncResult>(
+          deps,
+          ROUTES.agentSetThreadCloudSync,
+          path,
+          { state }
+        );
       },
       renameThread: async (threadUUID, name) => {
         const uuid = validateCanonicalV4UUID(threadUUID, "renameThread threadUUID");
@@ -1201,6 +1288,13 @@ export function createDesktopBridge(
         );
         return validateModelRouteSettingsResult(result);
       },
+      getModelCatalog: async () => {
+        const result = await execute<unknown>(
+          deps,
+          ROUTES.settingsGetModelCatalog
+        );
+        return validateModelCatalogResult(result);
+      },
     },
   };
 }
@@ -1266,7 +1360,7 @@ function buildCapabilities(): DesktopBridgeCapabilities {
       },
       settings: {
         supported: true,
-        methods: ["getModelRoute", "putModelRoute"],
+        methods: ["getModelRoute", "putModelRoute", "getModelCatalog"],
       },
       artifact: {
         supported: false,
@@ -1281,7 +1375,7 @@ function buildModelRouteSettingsPut(input: ModelRouteSettingsPut): Record<string
   assertPlainObject(input, "settings.putModelRoute input");
   assertAllowedKeys(
     input,
-    ["preferred_route", "local"],
+    ["preferred_route", "official_model_id", "local"],
     "settings.putModelRoute input"
   );
   const route = input.preferred_route;
@@ -1291,6 +1385,20 @@ function buildModelRouteSettingsPut(input: ModelRouteSettingsPut): Record<string
     );
   }
   const body: Record<string, unknown> = { preferred_route: route };
+  if (input.official_model_id !== undefined) {
+    const officialModelID = input.official_model_id;
+    if (
+      typeof officialModelID !== "string" ||
+      officialModelID.trim() !== officialModelID ||
+      officialModelID.length > 128 ||
+      (officialModelID !== "" && !/^[A-Za-z0-9._\-:/]+$/u.test(officialModelID))
+    ) {
+      throw new TypeError(
+        "settings.putModelRoute official_model_id is malformed"
+      );
+    }
+    body.official_model_id = officialModelID;
+  }
   if (input.local === undefined) {
     return body;
   }
@@ -1399,9 +1507,12 @@ function validateModelRouteSettingsResult(
   }
   assertExactKeys(
     record,
-    ["preferred_route", "local", "updated_at"],
+    ["preferred_route", "official_model_id", "local", "updated_at"],
     "settings model-route response"
   );
+  if (typeof record.official_model_id !== "string") {
+    throw new TypeError("settings model-route official_model_id is malformed");
+  }
   const route = record.preferred_route;
   if (route !== "local" && route !== "official") {
     throw new TypeError("settings model-route preferred_route is malformed");
@@ -1440,6 +1551,7 @@ function validateModelRouteSettingsResult(
     ...result,
     data: {
       preferred_route: route,
+      official_model_id: record.official_model_id as string,
       local: {
         protocol: localRecord.protocol as string,
         base_url: localRecord.base_url as string,
@@ -1447,6 +1559,119 @@ function validateModelRouteSettingsResult(
         api_key_configured: localRecord.api_key_configured as boolean,
       },
       updated_at: record.updated_at as string,
+    },
+  };
+}
+
+// The catalog decides what the user is offered and whether their existing
+// choice still stands, so a half-understood payload is an error rather than a
+// permissive default — the same rule every other bridge parser follows.
+function validateModelCatalogResult(
+  result: DesktopBridgeResult<unknown>
+): DesktopBridgeResult<ModelCatalog> {
+  if (!result.ok) {
+    return result;
+  }
+  const data = result.data;
+  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+    throw new TypeError("settings model-catalog response is malformed");
+  }
+  const record = data as Record<string, unknown>;
+  assertExactKeys(
+    record,
+    [
+      "state",
+      "items",
+      "count",
+      "tier",
+      "tier_expires_at",
+      "selected_model_id",
+      "selection_state",
+    ],
+    "settings model-catalog response"
+  );
+  const state = record.state;
+  if (state !== "unbound" && state !== "ready" && state !== "unavailable") {
+    throw new TypeError("settings model-catalog state is malformed");
+  }
+  const selectionState = record.selection_state;
+  if (
+    selectionState !== "unset" &&
+    selectionState !== "ok" &&
+    selectionState !== "not_allowed" &&
+    selectionState !== "unknown" &&
+    selectionState !== "unverified"
+  ) {
+    throw new TypeError("settings model-catalog selection_state is malformed");
+  }
+  for (const key of ["tier", "tier_expires_at", "selected_model_id"] as const) {
+    if (typeof record[key] !== "string") {
+      throw new TypeError(`settings model-catalog ${key} is malformed`);
+    }
+  }
+  if (!Array.isArray(record.items) || typeof record.count !== "number") {
+    throw new TypeError("settings model-catalog items are malformed");
+  }
+  const items: OfficialModel[] = record.items.map((entry) => {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new TypeError("settings model-catalog item is malformed");
+    }
+    const item = entry as Record<string, unknown>;
+    assertExactKeys(
+      item,
+      [
+        "modelId",
+        "displayName",
+        "description",
+        "requiredTier",
+        "permissions",
+        "default",
+      ],
+      "settings model-catalog item"
+    );
+    for (const key of [
+      "modelId",
+      "displayName",
+      "description",
+      "requiredTier",
+    ] as const) {
+      if (typeof item[key] !== "string") {
+        throw new TypeError(`settings model-catalog item.${key} is malformed`);
+      }
+    }
+    if (item.modelId === "") {
+      throw new TypeError("settings model-catalog item.modelId must not be empty");
+    }
+    if (typeof item.default !== "boolean" || !Array.isArray(item.permissions)) {
+      throw new TypeError("settings model-catalog item.permissions is malformed");
+    }
+    const permissions = item.permissions.map((permission) => {
+      if (typeof permission !== "string") {
+        throw new TypeError(
+          "settings model-catalog item.permissions is malformed"
+        );
+      }
+      return permission;
+    });
+    return {
+      modelId: item.modelId as string,
+      displayName: item.displayName as string,
+      description: item.description as string,
+      requiredTier: item.requiredTier as string,
+      permissions,
+      default: item.default as boolean,
+    };
+  });
+  return {
+    ...result,
+    data: {
+      state,
+      items,
+      count: record.count as number,
+      tier: record.tier as string,
+      tier_expires_at: record.tier_expires_at as string,
+      selected_model_id: record.selected_model_id as string,
+      selection_state: selectionState,
     },
   };
 }

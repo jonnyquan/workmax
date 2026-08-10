@@ -17,7 +17,11 @@ func (s *Server) handleGetModelRoute(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "model settings unavailable"})
 		return
 	}
-	dto, err := s.cfg.ModelSettings.Get()
+	identity, ok := s.requestOwner(c)
+	if !ok {
+		return
+	}
+	dto, err := s.cfg.ModelSettings.Get(identity.UID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "model settings read failed"})
 		return
@@ -30,6 +34,10 @@ func (s *Server) handleGetModelRoute(c *gin.Context) {
 func (s *Server) handlePutModelRoute(c *gin.Context) {
 	if s.cfg.ModelSettings == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "model settings unavailable"})
+		return
+	}
+	identity, ok := s.requestOwner(c)
+	if !ok {
 		return
 	}
 	raw, err := io.ReadAll(io.LimitReader(c.Request.Body, maxModelSettingsBodyBytes+1))
@@ -46,7 +54,7 @@ func (s *Server) handlePutModelRoute(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model settings json"})
 		return
 	}
-	dto, err := s.cfg.ModelSettings.Put(in)
+	dto, err := s.cfg.ModelSettings.Put(identity.UID, in)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

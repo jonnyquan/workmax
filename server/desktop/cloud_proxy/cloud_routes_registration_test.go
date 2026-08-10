@@ -50,13 +50,17 @@ func TestAllCloudRoutes_RegisteredOnCloudSide(t *testing.T) {
 	}
 }
 
-// scanRegisteredRoutes walks the known router source files and
-// returns the set of full Method+Path identities registered with Gin. Each
-// group path is combined with each verb-call path to form the final identity.
+// scanRegisteredRoutes walks the cloud-side router sources and returns the set
+// of full Method+Path identities registered with Gin. Each group path is
+// combined with each verb-call path to form the final identity.
 //
-// We intentionally hardcode the file list (not glob) so a new
-// router file doesn't silently slip past the scan — adding a new
-// /api/desktop/* path file means updating this list too.
+// The whole router/desktop directory is read rather than a hand-listed set of
+// files. The list used to be hardcoded so that a new router file could not
+// silently slip past the scan; a directory sweep serves that intent strictly
+// better — a new /api/desktop/* router is picked up the moment it exists,
+// instead of being invisible until somebody remembers to name it here. The one
+// file outside that directory stays explicit, because it is the legacy
+// work-agent router and nothing in it should be discovered by accident.
 func scanRegisteredRoutes(t *testing.T) map[string]bool {
 	t.Helper()
 	_, here, _, _ := runtime.Caller(0)
@@ -64,13 +68,18 @@ func scanRegisteredRoutes(t *testing.T) map[string]bool {
 	// up 2 = .../server/
 	serverRoot := filepath.Join(filepath.Dir(here), "..", "..")
 
-	files := []string{
-		"router/desktop/desktop_agent_router.go",
-		"router/desktop/desktop_sync_router.go",
-		"router/desktop/desktop_oauth_router.go",
-		"router/desktop/desktop_login_router.go",
-		"router/desktop/desktop_version_router.go",
-		"router/pro/tools/workagent/aichat_router.go",
+	files := []string{"router/pro/tools/workagent/aichat_router.go"}
+	desktopRouterDir := filepath.Join(serverRoot, "router", "desktop")
+	entries, err := os.ReadDir(desktopRouterDir)
+	if err != nil {
+		t.Fatalf("read desktop router dir: %v", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		files = append(files, filepath.Join("router", "desktop", name))
 	}
 
 	routes := map[string]bool{}

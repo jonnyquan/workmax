@@ -119,6 +119,50 @@ async function toggleThreadPin(thread) {
   await loadThreads();
 }
 
+// The sync switch: "does this conversation leave my machine?"
+//
+// Offered only for threads the cloud already knows about. A thread that has
+// never been uploaded (cloud_sync_state === "local") has nothing to pause, and
+// a switch that claimed to stop a sync that was never happening would tell the
+// user their data had just been protected by an action that did nothing.
+function threadSyncSwitchable(thread) {
+  return (
+    (thread.cloud_sync_state === "synced" || thread.cloud_sync_state === "paused") &&
+    typeof window.desktopBridge?.agent?.setThreadCloudSync === "function"
+  );
+}
+
+async function toggleThreadCloudSync(thread) {
+  const agent = window.desktopBridge?.agent;
+  if (!agent || typeof agent.setThreadCloudSync !== "function") return;
+  const next = thread.cloud_sync_state === "paused" ? "synced" : "paused";
+  try {
+    const result = parseDesktopBridgeResult(
+      await agent.setThreadCloudSync(thread.uuid, next),
+      "thread cloud sync result"
+    );
+    if (!result.ok) {
+      const raw = isRecord(result.error) ? result.error.error : result.error;
+      throw new Error(
+        raw === "thread_not_synced"
+          ? "That conversation has never left this machine."
+          : sanitizeErrorMessage(raw) || "Could not change the sync setting"
+      );
+    }
+  } catch (error) {
+    setStatus(String(error.message || error), "error");
+    return;
+  }
+  setStatus(
+    next === "paused"
+      ? "Kept on this machine. Existing cloud copies are untouched."
+      : "Syncing to WorkMax again."
+  );
+  // Reload rather than patch: the sidecar owns cloud_sync_state, and the
+  // sidebar should show what it would answer.
+  await loadThreads();
+}
+
 // Deleting is offered only where the sidecar would allow it: threads that
 // exist solely on this machine. A synced thread has a cloud copy and a sync
 // worker that would pull it straight back, so showing a delete that undoes
@@ -204,6 +248,24 @@ function renderThreadButton(thread) {
     void toggleThreadPin(thread);
   });
   item.appendChild(pin);
+  if (threadSyncSwitchable(thread)) {
+    const paused = thread.cloud_sync_state === "paused";
+    const sync = document.createElement("button");
+    sync.type = "button";
+    sync.className = "thread-sync";
+    sync.classList.toggle("paused", paused);
+    sync.textContent = paused ? "Local only" : "Syncing";
+    sync.setAttribute(
+      "aria-label",
+      (paused ? "Resume syncing " : "Stop syncing ") +
+        (thread.name || "Untitled thread")
+    );
+    sync.addEventListener("click", () => {
+      sync.disabled = true;
+      void toggleThreadCloudSync(thread);
+    });
+    item.appendChild(sync);
+  }
   if (threadIsDeletable(thread)) {
     // Two clicks, one control: the first arms it, the second deletes. A modal
     // would be heavier machinery for the same guarantee — that no single

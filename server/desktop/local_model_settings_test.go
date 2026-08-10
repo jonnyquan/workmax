@@ -35,7 +35,7 @@ func TestLocalModelSettingsStore_DefaultOfficialNoKeyLeak(t *testing.T) {
 	kc := newMemKeychain()
 	store := NewLocalModelSettingsStore(db, kc)
 
-	dto, err := store.Get()
+	dto, err := store.Get(localSingleUserUID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestLocalModelSettingsStore_PutLocalLoopbackWithKey(t *testing.T) {
 	store := NewLocalModelSettingsStore(db, kc)
 
 	key := "sk-test-local-secret"
-	dto, err := store.Put(LocalModelSettingsPut{
+	dto, err := store.Put(localSingleUserUID, LocalModelSettingsPut{
 		PreferredRoute: ModelRouteLocal,
 		Local: &LocalModelProfilePut{
 			Protocol: LocalProtocolOpenAICompatible,
@@ -75,13 +75,13 @@ func TestLocalModelSettingsStore_PutLocalLoopbackWithKey(t *testing.T) {
 	if dto.PreferredRoute != ModelRouteLocal || !dto.Local.APIKeyConfigured {
 		t.Fatalf("unexpected dto: %+v", dto)
 	}
-	got, err := store.LoadAPIKey()
+	got, err := store.LoadAPIKey(localSingleUserUID)
 	if err != nil || got != key {
 		t.Fatalf("LoadAPIKey = %q, %v", got, err)
 	}
 	// SQLite must not store the secret.
 	var blob string
-	if err := db.Raw(`SELECT local_base_url || local_model_id || preferred_route FROM w_desktop_model_settings WHERE id = 1`).Scan(&blob).Error; err != nil {
+	if err := db.Raw(`SELECT local_base_url || local_model_id FROM w_desktop_model_settings WHERE id = 1`).Scan(&blob).Error; err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 	if strings.Contains(blob, key) {
@@ -92,7 +92,7 @@ func TestLocalModelSettingsStore_PutLocalLoopbackWithKey(t *testing.T) {
 func TestLocalModelSettingsStore_RejectsRemoteHTTP(t *testing.T) {
 	db := openModelSettingsDB(t)
 	store := NewLocalModelSettingsStore(db, newMemKeychain())
-	_, err := store.Put(LocalModelSettingsPut{
+	_, err := store.Put(localSingleUserUID, LocalModelSettingsPut{
 		PreferredRoute: ModelRouteLocal,
 		Local: &LocalModelProfilePut{
 			Protocol: LocalProtocolOpenAICompatible,

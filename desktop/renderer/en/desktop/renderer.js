@@ -48,6 +48,9 @@ import {
   modelID,
   modelKeyStatus,
   modelLocalFields,
+  modelOfficialFields,
+  modelOfficialID,
+  modelOfficialNote,
   modelPreferredRoute,
   modelProtocol,
   modelSettingsCancelButton,
@@ -454,7 +457,144 @@ function updateModelLocalFieldsVisibility() {
   if (!modelPreferredRoute || !modelLocalFields) return;
   const local = modelPreferredRoute.value === "local";
   modelLocalFields.hidden = !local;
+  if (modelOfficialFields) modelOfficialFields.hidden = local;
   updateModelProtocolHint();
+}
+
+// --- Official model catalog -------------------------------------------------
+//
+// The official route used to offer no choice at all. It offers one now, and
+// the whole difficulty is that the choice belongs to the cloud: a membership
+// can lapse between opening this form and opening it again, so a model that
+// was selectable yesterday may be listed-but-locked today.
+//
+// Two rules follow, and both are the sidecar's verdict rather than a local
+// guess (it answers selection_state alongside the list):
+//
+//  1. A model the account cannot use is SHOWN, disabled, labelled with the
+//     tier it needs. Hiding it would answer "what does upgrading buy me?"
+//     with silence.
+//  2. A stored choice that stopped being allowed is never quietly swapped for
+//     one that works. The form says so and asks for a new choice. Answering
+//     on a different model than the user picked is the same betrayal as
+//     falling back across routes, one level down.
+const modelCatalogState = { state: "unbound", items: [], tier: "", selectionState: "unset" };
+
+function modelCatalogBridgeAvailable() {
+  return typeof window.desktopBridge?.settings?.getModelCatalog === "function";
+}
+
+function officialModelOptionLabel(item) {
+  const name = item.displayName || item.modelId;
+  if (item.permissions.includes("use")) {
+    return item.default ? `${name} (default)` : name;
+  }
+  return item.requiredTier ? `${name} — needs ${item.requiredTier}` : `${name} — unavailable`;
+}
+
+function renderOfficialModelOptions(selectedModelID) {
+  if (!modelOfficialID) return;
+  modelOfficialID.textContent = "";
+  const accountDefault = document.createElement("option");
+  accountDefault.value = "";
+  accountDefault.textContent = "Account default";
+  modelOfficialID.appendChild(accountDefault);
+  for (const item of modelCatalogState.items) {
+    const option = document.createElement("option");
+    option.value = item.modelId;
+    option.textContent = officialModelOptionLabel(item);
+    // Visible but not choosable: the upgrade is legible, the mistake is not
+    // available to make.
+    option.disabled = !item.permissions.includes("use");
+    modelOfficialID.appendChild(option);
+  }
+  // A stored choice the catalog no longer lists still has to be representable,
+  // or the select would silently snap to "Account default" and the next save
+  // would write that silence back as the user's decision.
+  if (
+    selectedModelID &&
+    !modelCatalogState.items.some((item) => item.modelId === selectedModelID)
+  ) {
+    const orphan = document.createElement("option");
+    orphan.value = selectedModelID;
+    orphan.textContent = `${selectedModelID} — no longer offered`;
+    orphan.disabled = true;
+    modelOfficialID.appendChild(orphan);
+  }
+  modelOfficialID.value = selectedModelID || "";
+}
+
+function officialModelNote() {
+  if (!modelCatalogBridgeAvailable()) {
+    return "Model choice needs a newer desktop shell.";
+  }
+  switch (modelCatalogState.state) {
+    case "unbound":
+      return "Connect an account to choose a model.";
+    case "unavailable":
+      return "Could not reach WorkMax; the model list may be out of date.";
+    default:
+      break;
+  }
+  switch (modelCatalogState.selectionState) {
+    case "not_allowed":
+      return "Your plan no longer includes the model you picked. Choose another one to continue on the official route.";
+    case "unknown":
+      return "The model you picked is no longer offered. Choose another one.";
+    default:
+      return modelCatalogState.tier
+        ? `Plan: ${modelCatalogState.tier}.`
+        : "";
+  }
+}
+
+function officialSelectionNeedsAttention() {
+  return (
+    modelCatalogState.state === "ready" &&
+    (modelCatalogState.selectionState === "not_allowed" ||
+      modelCatalogState.selectionState === "unknown")
+  );
+}
+
+function renderOfficialModelSection(selectedModelID) {
+  if (modelOfficialID) {
+    renderOfficialModelOptions(selectedModelID);
+    modelOfficialID.disabled = modelCatalogState.state !== "ready";
+  }
+  if (modelOfficialNote) {
+    modelOfficialNote.textContent = officialModelNote();
+    modelOfficialNote.classList.toggle("is-error", officialSelectionNeedsAttention());
+  }
+}
+
+async function loadModelCatalog(selectedModelID) {
+  modelCatalogState.items = [];
+  modelCatalogState.tier = "";
+  if (!modelCatalogBridgeAvailable()) {
+    modelCatalogState.state = "unbound";
+    modelCatalogState.selectionState = selectedModelID ? "unverified" : "unset";
+    renderOfficialModelSection(selectedModelID);
+    return;
+  }
+  try {
+    const result = parseDesktopBridgeResult(
+      await window.desktopBridge.settings.getModelCatalog(),
+      "settings.getModelCatalog"
+    );
+    if (!result.ok) {
+      throw new Error("catalog unavailable");
+    }
+    modelCatalogState.state = result.data.state;
+    modelCatalogState.items = result.data.items;
+    modelCatalogState.tier = result.data.tier;
+    modelCatalogState.selectionState = result.data.selection_state;
+  } catch {
+    // A catalog we could not read is "unavailable", never "you have nothing":
+    // the difference decides whether the user thinks their plan lapsed.
+    modelCatalogState.state = "unavailable";
+    modelCatalogState.selectionState = selectedModelID ? "unverified" : "unset";
+  }
+  renderOfficialModelSection(selectedModelID);
 }
 
 function clearModelAPIKeyField() {
@@ -472,6 +612,7 @@ function fillModelSettingsForm(settings) {
   modelBaseURL.value = settings.local.base_url;
   modelID.value = settings.local.model_id;
   clearModelAPIKeyField();
+  renderOfficialModelSection(settings.official_model_id);
   if (modelKeyStatus) {
     modelKeyStatus.textContent = settings.local.api_key_configured
       ? "API key: stored in Keychain"
@@ -499,7 +640,12 @@ export async function openModelSettings() {
     if (!result.ok) {
       throw new Error(sanitizeErrorMessage(result.error) || "Could not load model settings");
     }
-    fillModelSettingsForm(parseModelRouteSettings(result.data));
+    const loaded = parseModelRouteSettings(result.data);
+    await loadModelCatalog(loaded.official_model_id);
+    fillModelSettingsForm(loaded);
+    if (officialSelectionNeedsAttention()) {
+      setModelSettingsError(officialModelNote());
+    }
   } catch (error) {
     setModelSettingsError(String(error.message || error));
   } finally {
@@ -524,8 +670,20 @@ async function submitModelSettings(event) {
   if (modelSettingsSubmitButton) modelSettingsSubmitButton.disabled = true;
   setModelSettingsError("");
   const preferred = modelPreferredRoute.value;
-  /** @type {{ preferred_route: string, local?: Record<string, unknown> }} */
+  /** @type {{ preferred_route: string, official_model_id?: string, local?: Record<string, unknown> }} */
   const body = { preferred_route: preferred };
+  if (preferred === "official" && modelOfficialID && !modelOfficialID.disabled) {
+    const chosen = modelOfficialID.value;
+    const item = modelCatalogState.items.find((entry) => entry.modelId === chosen);
+    if (chosen !== "" && !(item && item.permissions.includes("use"))) {
+      // Saving it would store a choice the account cannot run, and the next
+      // turn would fail somewhere far from here.
+      setModelSettingsError("That model is not available on your plan. Pick one that is.");
+      if (modelSettingsSubmitButton) modelSettingsSubmitButton.disabled = false;
+      return;
+    }
+    body.official_model_id = chosen;
+  }
   if (preferred === "local") {
     body.local = {
       protocol: modelProtocol ? modelProtocol.value : "openai_compatible",
@@ -547,7 +705,9 @@ async function submitModelSettings(event) {
     if (!result.ok) {
       throw new Error(sanitizeErrorMessage(result.error) || "Could not save model settings");
     }
-    fillModelSettingsForm(parseModelRouteSettings(result.data));
+    const saved = parseModelRouteSettings(result.data);
+    await loadModelCatalog(saved.official_model_id);
+    fillModelSettingsForm(saved);
     // Switching the route changes whether a signed-out user may run a turn at
     // all, so the gate is re-read here rather than left until the next
     // refresh — otherwise saving "local" appears to do nothing.
@@ -606,7 +766,10 @@ async function loadAuthStatus(expectedSessionGeneration = fences.session.snapsho
 }
 
 export async function loadThreads(expectedSessionGeneration = fences.session.snapshot()) {
-  const res = await sidecarFetch("/agent/threads?include_paused=false");
+  // include_paused=true because pausing sync is now a user action: a thread
+  // that vanished from the sidebar the moment you switched it to "local only"
+  // would read as deletion, which is the opposite of what the switch does.
+  const res = await sidecarFetch("/agent/threads?include_paused=true");
   const threads = parseThreads(await readSidecarJSON(res, "/agent/threads"));
   if (!fences.session.isCurrent(expectedSessionGeneration)) {
     return false;

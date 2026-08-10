@@ -755,7 +755,7 @@ async function testAuthenticatedCacheRead() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", tier: "pro", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({
           items: [
             {
@@ -787,7 +787,7 @@ async function testAuthenticatedCacheRead() {
   };
 
   const { document, ns } = await runRenderer(bridge);
-  assert.deepEqual(calls, ["/auth/status", "/agent/threads?include_paused=false"]);
+  assert.deepEqual(calls, ["/auth/status", "/agent/threads?include_paused=true"]);
   assert.match(document.byId.get("runtime-label").textContent, /sidecar sidecar-test · app app-test/);
   assert.equal(document.byId.get("login-button").hidden, true);
   assert.match(document.byId.get("thread-list").textContent, /Storyboard draft/);
@@ -837,7 +837,7 @@ async function testUnauthenticatedLogin() {
           updated_at: "2026-05-21T00:00:00Z",
         });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [] });
       }
       throw new Error(`unexpected fetch path ${pathname}`);
@@ -904,7 +904,7 @@ async function testUnauthenticatedLogin() {
   );
   assert.equal(document.byId.get("login-form").hidden, true);
   assert.equal(calls.some(([pathname]) => pathname.startsWith("/auth/login-transaction")), false);
-  assert.deepEqual(calls.at(-1), ["/agent/threads?include_paused=false", "GET"]);
+  assert.deepEqual(calls.at(-1), ["/agent/threads?include_paused=true", "GET"]);
   assert.match(document.byId.get("status-card").textContent, /Authenticated/);
 }
 
@@ -1009,7 +1009,7 @@ async function testCancelFencesLatePasswordCompletion() {
       }
       // Boot reads local history with or without an account: identity always
       // resolves, so the workbench is not gated on signing in.
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [] });
       }
       throw new Error(`unexpected fetch path ${pathname}`);
@@ -1048,7 +1048,7 @@ async function testCancelFencesLatePasswordCompletion() {
   assert.match(document.byId.get("status-card").textContent, /Sign-in was canceled/);
   // The boot pair and nothing else: a canceled sign-in must not re-read the
   // session or replay anything.
-  assert.deepEqual(calls, ["/auth/status", "/agent/threads?include_paused=false"]);
+  assert.deepEqual(calls, ["/auth/status", "/agent/threads?include_paused=true"]);
 }
 
 async function testAmbiguousPasswordResponseReconcilesSessionWithoutReplay() {
@@ -1065,7 +1065,7 @@ async function testAmbiguousPasswordResponseReconcilesSessionWithoutReplay() {
           updated_at: "2026-05-21T00:00:00Z",
         });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [] });
       }
       throw new Error(`unexpected fetch path ${pathname}`);
@@ -1111,9 +1111,9 @@ async function testAmbiguousPasswordResponseReconcilesSessionWithoutReplay() {
   // session is read exactly twice.
   assert.deepEqual(calls, [
     "/auth/status",
-    "/agent/threads?include_paused=false",
+    "/agent/threads?include_paused=true",
     "/auth/status",
-    "/agent/threads?include_paused=false",
+    "/agent/threads?include_paused=true",
   ]);
 }
 
@@ -1145,7 +1145,7 @@ async function testRejectsMalformedThreadList() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", tier: "pro", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({
           items: [
             {
@@ -1189,7 +1189,7 @@ async function testRejectsMalformedThreadCountAndTimestamp() {
         if (pathname === "/auth/status") {
           return response({ state: "authenticated", tier: "pro", updated_at: "2026-05-21T00:00:00Z" });
         }
-        if (pathname === "/agent/threads?include_paused=false") {
+        if (pathname === "/agent/threads?include_paused=true") {
           return response({ items: [item] });
         }
         throw new Error(`unexpected fetch path ${pathname}`);
@@ -1210,7 +1210,7 @@ async function testRejectsMalformedMessages() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", tier: "pro", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({
           items: [
             {
@@ -1264,7 +1264,7 @@ async function testRejectsMalformedMessageTimestamps() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", tier: "pro", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({
           items: [
             {
@@ -1328,7 +1328,7 @@ async function testRejectsMalformedLoginTransactionResult() {
         if (pathname === "/auth/status") {
           return response({ state: "unauthenticated", updated_at: "2026-05-21T00:00:00Z" });
         }
-        if (pathname === "/agent/threads?include_paused=false") {
+        if (pathname === "/agent/threads?include_paused=true") {
           return response({ items: [] });
         }
         throw new Error(`unexpected fetch path ${pathname}`);
@@ -1363,7 +1363,7 @@ async function testRejectsMalformedLoginTransactionResult() {
     assert.equal(document.byId.get("status-card").classList.contains("error"), true);
     // The boot pair only: a malformed begin result must not send the app
     // looking for a session it does not have.
-    assert.deepEqual(calls, ["/auth/status", "/agent/threads?include_paused=false"]);
+    assert.deepEqual(calls, ["/auth/status", "/agent/threads?include_paused=true"]);
   }
 }
 
@@ -1405,7 +1405,7 @@ async function testCachedStreamingStatesRenderPartialAndRejectUnknown() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("partial-thread", "Recovered responses", 2)] });
       }
       if (pathname === "/agent/threads/partial-thread/messages") {
@@ -1439,7 +1439,7 @@ async function testCachedStreamingStatesRenderPartialAndRejectUnknown() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("invalid-state-thread", "Invalid state")] });
       }
       if (pathname === "/agent/threads/invalid-state-thread/messages") {
@@ -1589,7 +1589,7 @@ async function testThreadGroupingAndSearch() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-08-08T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         // Built through the shared helper so the fixture satisfies the same
         // strict parser the renderer applies; only the timestamp is varied.
         // The malformed row is deliberately NOT served here: parseThread
@@ -1682,7 +1682,7 @@ async function testThreadSearchIsHiddenWithNothingToFilter() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-08-08T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") return response({ items: [] });
+      if (pathname === "/agent/threads?include_paused=true") return response({ items: [] });
       throw new Error(`unexpected fetch path ${pathname}`);
     },
   };
@@ -1815,7 +1815,7 @@ async function testThreadDeleteIsTwoStepAndLocalOnly() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({
           items: [
             { ...thread("00000000-0000-4000-8000-00000000d001", "Local scratch"), cloud_sync_state: "local" },
@@ -1889,7 +1889,7 @@ async function testDropAndPasteAttachFiles() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("drop-thread", "Droppable")] });
       }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
@@ -1937,7 +1937,7 @@ async function testMultiFileUploadCompletesEveryFile() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("multi-thread", "Multi")] });
       }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
@@ -2017,7 +2017,7 @@ async function testRejectedUploadFailsTheChipWithoutUnhandledRejection() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("fail-thread", "Failing")] });
       }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
@@ -2097,7 +2097,7 @@ async function testComposerDraftSurvivesThreadSwitch() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({
           items: [thread("draft-a", "Draft A"), thread("draft-b", "Draft B")],
         });
@@ -2153,7 +2153,7 @@ async function testRegenerateRunsTheLastPromptAgain() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("regen-thread", "Regen")] });
       }
       if (pathname === "/agent/threads/regen-thread/messages") {
@@ -2201,7 +2201,7 @@ async function testQuickSwitcherJumpsBetweenThreads() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({
           items: [
             thread("00000000-0000-4000-8000-0000000ck001", "Quarterly deck"),
@@ -2269,7 +2269,7 @@ async function testEscapeStopsAStreamingTurn() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("esc-thread", "Escapable")] });
       }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
@@ -2320,7 +2320,7 @@ async function testComposerCapacityNote() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("cap-thread", "Capacity")] });
       }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
@@ -2373,7 +2373,7 @@ async function testStreamingDoesNotYankAScrolledUpReader() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("scroll-thread", "Long chat")] });
       }
       if (pathname === "/agent/threads/scroll-thread/messages") {
@@ -2469,7 +2469,7 @@ async function testStreamingDeltaCostsStayConstant() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("perf-thread", "Fire hose")] });
       }
       if (pathname === "/agent/threads/perf-thread/messages") {
@@ -2572,7 +2572,7 @@ async function testNonDeltaEventsDrainBufferedText() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("order-thread", "Causal order")] });
       }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
@@ -2650,7 +2650,7 @@ async function testCompletedTurnReconcilesInPlace() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("inplace-thread", "Stable rows")] });
       }
       if (pathname === "/agent/threads/inplace-thread/messages") {
@@ -2780,7 +2780,7 @@ async function testStreamingMarkdownCommitsMatchTheFinalParse() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("mdstream-thread", "Streamed markdown")] });
       }
       if (pathname === "/agent/threads/mdstream-thread/messages") {
@@ -2904,7 +2904,7 @@ async function testTurnStatePillCarriesItsTone() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("tone-thread", "Tones")] });
       }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
@@ -2952,7 +2952,7 @@ async function testFailedTurnStateAndDuration() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("fail-thread", "Doomed run")] });
       }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
@@ -3033,7 +3033,7 @@ async function testToolLoopActivityAndDeliverables() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("00000000-0000-4000-8000-0000000d2c01", "Tool loop")] });
       }
       if (pathname === "/agent/threads/00000000-0000-4000-8000-0000000d2c01/messages") {
@@ -3244,7 +3244,7 @@ async function testToolApprovalCardsAndReasoningCaption() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-08-09T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("approval-thread", "Approvals")] });
       }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
@@ -3356,7 +3356,7 @@ async function testStarterPromptLandsInTheComposer() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") return response({ items: [] });
+      if (pathname === "/agent/threads?include_paused=true") return response({ items: [] });
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
       throw new Error(`unexpected fetch path ${pathname}`);
     },
@@ -3430,7 +3430,7 @@ async function testCancelledStarterDropsItsPrompt() {
         if (pathname === "/auth/status") {
           return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
         }
-        if (pathname === "/agent/threads?include_paused=false") return response({ items: [] });
+        if (pathname === "/agent/threads?include_paused=true") return response({ items: [] });
         if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
         throw new Error(`unexpected fetch path ${pathname}`);
       },
@@ -3485,7 +3485,7 @@ async function testSelectedSourcesRideTheNextTurn() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("src-thread", "Sourced"), thread("other-thread", "Other")] });
       }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
@@ -3590,7 +3590,7 @@ async function testThreadRenameFlow() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({
           items: [
             { ...thread("00000000-0000-4000-8000-00000000e001", "Untitled presentation"), cloud_sync_state: "local" },
@@ -3683,7 +3683,7 @@ async function testMessageActionsCopyAndReuse() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("copy-thread", "Copyable")] });
       }
       if (pathname === "/agent/threads/copy-thread/messages") {
@@ -3778,7 +3778,7 @@ async function testMessageActionsAbsentWithoutAClipboard() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("no-clip", "No clipboard")] });
       }
       if (pathname === "/agent/threads/no-clip/messages") {
@@ -3841,7 +3841,7 @@ async function testStreamedAnswerGainsActionsWhenReconcileFails() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("stream-thread", "Streamed")] });
       }
       if (pathname === "/agent/threads/stream-thread/messages") {
@@ -3903,7 +3903,7 @@ function localModeBridge({ localRoute, accounts, binding }) {
       if (pathname === "/auth/status") {
         return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("local-thread", "Offline notes")] });
       }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
@@ -4006,7 +4006,7 @@ async function testLocalAccountSwitcherSwitchesAndReloads() {
   assert.match(items[0].textContent, /active/, "the active account is marked");
 
   const threadFetchesBefore = calls.filter(
-    (pathname) => pathname === "/agent/threads?include_paused=false",
+    (pathname) => pathname === "/agent/threads?include_paused=true",
   ).length;
   const ming = items.find((item) => item.dataset.accountId === "2");
   ming.click();
@@ -4016,7 +4016,7 @@ async function testLocalAccountSwitcherSwitchesAndReloads() {
 
   assert.deepEqual(accountCalls.selected, [2], "switching selects exactly the clicked account");
   const threadFetchesAfter = calls.filter(
-    (pathname) => pathname === "/agent/threads?include_paused=false",
+    (pathname) => pathname === "/agent/threads?include_paused=true",
   ).length;
   assert.ok(
     threadFetchesAfter > threadFetchesBefore,
@@ -4357,7 +4357,7 @@ async function testSignedOutLocalCanCreateThread() {
       if (pathname === "/auth/status") {
         return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [] });
       }
       if (pathname === `/agent/threads/${newUUID}/messages`) {
@@ -4415,7 +4415,7 @@ async function testSidebarContentSearch() {
       if (pathname === "/auth/status") {
         return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("local-thread", "Offline notes"), thread("other-thread", "Other work")] });
       }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
@@ -4509,7 +4509,7 @@ async function testPaletteRunsCommands() {
       if (pathname === "/auth/status") {
         return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({
           // Zero messages ON PURPOSE: the Export guard below is only a real
           // test if the export bridge exists AND the count is what blocks it.
@@ -4575,7 +4575,7 @@ async function testPaletteOpensWithoutThreads() {
     if (pathname === "/auth/status") {
       return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
     }
-    if (pathname === "/agent/threads?include_paused=false") return response({ items: [] });
+    if (pathname === "/agent/threads?include_paused=true") return response({ items: [] });
     if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
     throw new Error(`unexpected fetch path ${pathname}`);
   };
@@ -4603,7 +4603,7 @@ async function testPinnedThreadsLeadTheSidebar() {
       if (pathname === "/auth/status") {
         return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         const rows = [
           { ...thread("fresh-thread", "Fresh work"), updated_at: new Date().toISOString() },
           { ...thread("old-thread", "Old favourite"), updated_at: "2026-07-01T00:00:00Z", pinned },
@@ -4801,7 +4801,7 @@ async function testConnectedAccountIsShownAsABindingOnTheLocalIdentity() {
         updated_at: "2026-08-08T00:00:00Z",
       });
     }
-    if (pathname === "/agent/threads?include_paused=false") return response({ items: [] });
+    if (pathname === "/agent/threads?include_paused=true") return response({ items: [] });
     if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
     throw new Error(`unexpected fetch path ${pathname}`);
   };
@@ -5005,7 +5005,7 @@ async function testAssistantMarkdownIsRenderedAsElements() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("md-thread", "Markdown")] });
       }
       if (pathname === "/agent/threads/md-thread/messages") {
@@ -5146,7 +5146,7 @@ async function testRetrievedContextIsShownAndResetPerTurn() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("rag-thread", "Grounded answers")] });
       }
       if (pathname === "/agent/threads/rag-thread/messages") return response({ items: [] });
@@ -5468,7 +5468,7 @@ async function testStagedAttachmentsAreSentWithTheTurn() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("attach-thread", "Attachments")] });
       }
       if (pathname === "/agent/threads/attach-thread/messages") {
@@ -5538,7 +5538,7 @@ async function testSynchronousTurnCallbacksAreBufferedUntilOpenResult() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("sync-callback-thread", "Synchronous callback")] });
       }
       if (pathname === "/agent/threads/sync-callback-thread/messages") {
@@ -5610,7 +5610,7 @@ async function testAgentTurnStreamsAndReconciles() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", tier: "pro", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         threadReads += 1;
         return response({
           items: [thread("thread-agent", "Deck draft", threadReads === 1 ? 1 : 2)],
@@ -5761,7 +5761,7 @@ async function testLateThreadHistoryCannotContaminateSelection() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({
           items: [thread("thread-a", "Thread A"), thread("thread-b", "Thread B")],
         });
@@ -5803,7 +5803,7 @@ async function testThreadSwitchCancelsAndFencesOldTurn() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({
           items: [thread("turn-thread-a", "Turn A"), thread("turn-thread-b", "Turn B")],
         });
@@ -5875,7 +5875,7 @@ async function testStopTurnIsSingleShot() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("stop-thread", "Stop thread")] });
       }
       if (pathname === "/agent/threads/stop-thread/messages") {
@@ -5937,7 +5937,7 @@ async function testInitialTurnBusyRefreshesRecoveryWithoutReplay() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("initial-busy-thread", "Initial busy")] });
       }
       if (pathname === "/agent/threads/initial-busy-thread/messages") {
@@ -6024,7 +6024,7 @@ async function testCancelAckFailureShowsLocalStopAndRefreshesRecovery() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("cancel-ack-thread", "Cancel acknowledgment")] });
       }
       if (pathname === "/agent/threads/cancel-ack-thread/messages") {
@@ -6101,7 +6101,7 @@ async function testSSESessionChangedClearsPromptWithoutReplay() {
         authReads += 1;
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         threadReads += 1;
         return response({
           items:
@@ -6187,7 +6187,7 @@ async function testCatalog409UsesSessionChangedRecovery() {
         authCalls += 1;
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         threadCalls += 1;
         return response({
           items: [thread(`catalog-thread-${threadCalls}`, `Catalog account ${threadCalls}`)],
@@ -6236,7 +6236,7 @@ async function testRejectsMalformedAgentContractsWithoutLeakingPayload() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("strict-thread", "Strict contracts")] });
       }
       if (pathname === "/agent/threads/strict-thread/messages") {
@@ -6336,7 +6336,7 @@ async function testRejectsLegacyOpenAgentEventShapes() {
         if (pathname === "/auth/status") {
           return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
         }
-        if (pathname === "/agent/threads?include_paused=false") {
+        if (pathname === "/agent/threads?include_paused=true") {
           return response({ items: [thread("strict-open-thread", "Strict closed events")] });
         }
         if (pathname === "/agent/threads/strict-open-thread/messages") {
@@ -6387,7 +6387,7 @@ async function testRejectsMalformedCatalogResult() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("catalog-malformed", "Malformed catalog")] });
       }
       throw new Error(`unexpected fetch path ${pathname}`);
@@ -6430,7 +6430,7 @@ async function testRecoverableTurnRequiresExplicitResumeAndHandlesBusy() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("thread-agent", "Quarterly deck")] });
       }
       if (pathname === "/agent/threads/thread-agent/messages") {
@@ -6567,7 +6567,7 @@ async function testRecoverableTurnDismissIsExplicitAndIdempotent() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("thread-agent", "Quarterly deck")] });
       }
       if (pathname === "/agent/threads/thread-agent/messages") {
@@ -6623,7 +6623,7 @@ async function testRecoverableErrorResultIsSanitized() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("thread-agent", "Quarterly deck")] });
       }
       if (pathname === "/agent/threads/thread-agent/messages") {
@@ -6684,7 +6684,7 @@ async function testMalformedRecoverableTurnDoesNotLeakOrRender() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("thread-agent", "Quarterly deck")] });
       }
       throw new Error(`unexpected fetch path ${pathname}`);
@@ -6733,7 +6733,7 @@ async function testCreatesThreadOnceAndFocusesComposer() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [] });
       }
       if (pathname === `/agent/threads/${newUUID}/messages`) {
@@ -6824,7 +6824,7 @@ async function testCreateRetriesKeepUUIDAndAcceptCurrentReplayRow() {
         authReads += 1;
         return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         threadReads += 1;
         return response({ items: [thread(existingUUID, "Existing thread")] });
       }
@@ -6979,7 +6979,7 @@ async function testPermanentCreateFailuresDoNotOfferSameIdentityRetry() {
           authReads += 1;
           return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
         }
-        if (pathname === "/agent/threads?include_paused=false") {
+        if (pathname === "/agent/threads?include_paused=true") {
           threadReads += 1;
           return response({ items: [] });
         }
@@ -7052,7 +7052,7 @@ async function testPausedCreateReplayRequiresExplicitCancel() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [] });
       }
       throw new Error(`unexpected fetch path ${pathname}`);
@@ -7120,7 +7120,7 @@ async function testCreateEscapeFencesLateCompletion() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [] });
       }
       throw new Error(`unexpected fetch path ${pathname}`);
@@ -7184,7 +7184,7 @@ async function testCreateSessionChangedUsesUnifiedRecovery() {
         authReads += 1;
         return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         threadReads += 1;
         return response({ items: [] });
       }
@@ -7244,7 +7244,7 @@ async function testCreateRejectsForeignUUIDAndMode() {
         if (pathname === "/auth/status") {
           return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
         }
-        if (pathname === "/agent/threads?include_paused=false") {
+        if (pathname === "/agent/threads?include_paused=true") {
           return response({ items: [] });
         }
         throw new Error(`unexpected fetch path ${pathname}`);
@@ -7542,7 +7542,7 @@ function longThreadBridge(count, threadUUID = "long-thread") {
         if (pathname === "/auth/status") {
           return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
         }
-        if (pathname === "/agent/threads?include_paused=false") {
+        if (pathname === "/agent/threads?include_paused=true") {
           return response({ items: [thread(threadUUID, "Long thread")] });
         }
         if (pathname === `/agent/threads/${threadUUID}/messages`) {
@@ -7696,7 +7696,7 @@ async function testCompletedTurnReconcilesInPlaceInsideTheWindow() {
       if (pathname === "/auth/status") {
         return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
       }
-      if (pathname === "/agent/threads?include_paused=false") {
+      if (pathname === "/agent/threads?include_paused=true") {
         return response({ items: [thread("thread-long", "Long thread", history.length)] });
       }
       if (pathname === "/agent/threads/thread-long/messages") {
@@ -7778,6 +7778,246 @@ async function testCompletedTurnReconcilesInPlaceInsideTheWindow() {
   );
 }
 
+
+// --- Official model selection ------------------------------------------------
+//
+// The official route used to offer no choice. Now it does, and the whole
+// difficulty is that the choice is the cloud's to grant: a plan can lapse
+// between two openings of this form. Three properties are tested here, and
+// they are the three ways this feature could quietly betray somebody.
+
+function modelSettingsBridge({ catalog, settings, onPut }) {
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-08-10T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") return response({ items: [] });
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const stored = {
+    preferred_route: "official",
+    official_model_id: "",
+    local: { protocol: "", base_url: "", model_id: "", api_key_configured: false },
+    updated_at: "2026-08-10T00:00:00Z",
+    ...settings,
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      async listRecoverableTurns() { return typedSuccess({ items: [], count: 0 }); },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+    settings: {
+      async getModelRoute() { return typedSuccess(stored); },
+      async putModelRoute(body) {
+        if (onPut) onPut(body);
+        Object.assign(stored, body);
+        return typedSuccess(stored);
+      },
+      async getModelCatalog() { return typedSuccess(catalog); },
+    },
+  };
+  return { bridge, desktopBridge, stored };
+}
+
+function catalogPayload(overrides = {}) {
+  return {
+    state: "ready",
+    items: [
+      {
+        modelId: "work-pro", displayName: "WorkMax Pro", description: "Everyday",
+        requiredTier: "free", permissions: ["use"], default: true,
+      },
+      {
+        modelId: "work-plus", displayName: "WorkMax Plus", description: "Deeper",
+        requiredTier: "pro", permissions: [], default: false,
+      },
+    ],
+    count: 2,
+    tier: "free",
+    tier_expires_at: "",
+    selected_model_id: "",
+    selection_state: "unset",
+    ...overrides,
+  };
+}
+
+// A model the plan does not include is SHOWN and disabled, labelled with the
+// tier that unlocks it. Hiding it would answer "what does upgrading buy me?"
+// with silence.
+async function testOfficialModelPickerShowsLockedModelsWithTheirTier() {
+  const { bridge, desktopBridge } = modelSettingsBridge({ catalog: catalogPayload() });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  document.byId.get("models-button").click();
+  await settle();
+
+  const select = document.byId.get("model-official-id");
+  const options = select.children;
+  assert.equal(options[0].value, "", "the first option is the account default");
+  assert.equal(options[1].value, "work-pro");
+  assert.equal(options[1].disabled, false, "an included model is choosable");
+  assert.match(options[1].textContent, /default/, "the account default is marked as such");
+  assert.equal(options[2].value, "work-plus");
+  assert.equal(options[2].disabled, true, "a model the plan excludes must not be choosable");
+  assert.match(
+    options[2].textContent,
+    /needs pro/i,
+    "and it must say which plan unlocks it — a greyed row with no reason teaches nothing",
+  );
+  assert.equal(
+    document.byId.get("model-official-fields").hidden,
+    false,
+    "the official route shows its model picker",
+  );
+}
+
+// The OSS-4 rule, one level down: a stored choice that stopped being allowed
+// is a question for the user, never a silent swap for something that works.
+async function testDowngradedModelSelectionIsSurfacedNotSubstituted() {
+  const puts = [];
+  const { bridge, desktopBridge } = modelSettingsBridge({
+    settings: { official_model_id: "work-plus" },
+    catalog: catalogPayload({ selected_model_id: "work-plus", selection_state: "not_allowed" }),
+    onPut: (body) => puts.push(body),
+  });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  document.byId.get("models-button").click();
+  await settle();
+
+  assert.equal(document.byId.get("model-settings-error").hidden, false);
+  assert.match(
+    document.byId.get("model-settings-error").textContent,
+    /no longer includes|choose another/i,
+    "an unusable stored choice must be stated, not quietly replaced",
+  );
+  assert.equal(
+    document.byId.get("model-official-id").value,
+    "work-plus",
+    "the user's own choice stays on screen — swapping it would hide what happened",
+  );
+
+  // Saving without picking a new one is refused, so the disallowed choice
+  // cannot be re-committed and fail later at send time.
+  document.byId.get("model-settings-form").submit();
+  await settle();
+  assert.equal(puts.length, 0, "the disallowed selection must not be saved");
+  assert.match(
+    document.byId.get("model-settings-error").textContent,
+    /not available on your plan/i,
+  );
+
+  // Picking an allowed one saves, and carries the model id to the sidecar.
+  document.byId.get("model-official-id").value = "work-pro";
+  document.byId.get("model-settings-form").submit();
+  await settle();
+  assert.equal(puts.length, 1);
+  assert.equal(puts[0].official_model_id, "work-pro");
+}
+
+// Nothing to choose from is a state with a reason, not an empty dropdown.
+async function testOfficialModelPickerExplainsItselfWithoutAnAccount() {
+  const { bridge, desktopBridge } = modelSettingsBridge({
+    catalog: catalogPayload({ state: "unbound", items: [], count: 0, tier: "" }),
+  });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  document.byId.get("models-button").click();
+  await settle();
+
+  assert.match(
+    document.byId.get("model-official-note").textContent,
+    /connect an account/i,
+    "an unbound desktop must say what would make models available",
+  );
+  assert.equal(
+    document.byId.get("model-official-id").disabled,
+    true,
+    "and must not offer a choice it cannot honour",
+  );
+}
+
+// --- Per-thread sync switch --------------------------------------------------
+//
+// "paused" was honoured by the sync writer and the history reader long before
+// anything could write it. This is the write end, from the sidebar.
+async function testThreadSyncSwitchPausesAndStaysVisible() {
+  const calls = [];
+  let state = "synced";
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-08-10T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        return response({
+          items: [
+            { ...thread("00000000-0000-4000-8000-0000000f1001", "Cloud deck"), cloud_sync_state: state },
+            { ...thread("00000000-0000-4000-8000-0000000f1002", "Scratch"), cloud_sync_state: "local" },
+          ],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      async listRecoverableTurns() { return typedSuccess({ items: [], count: 0 }); },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+      async setThreadCloudSync(uuid, next) {
+        calls.push([uuid, next]);
+        state = next;
+        return typedSuccess({ thread_uuid: uuid, cloud_sync_state: next });
+      },
+    },
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  const syncButtons = () =>
+    walk(document.byId.get("thread-list"), (node) =>
+      node.classList?.contains("thread-sync")
+    );
+
+  const buttons = syncButtons();
+  assert.equal(
+    buttons.length,
+    1,
+    "only a thread the cloud already knows about gets the switch — a local-only thread has no sync to pause",
+  );
+  assert.equal(buttons[0].textContent, "Syncing");
+
+  buttons[0].dispatch("click");
+  await settle();
+  assert.deepEqual(calls, [["00000000-0000-4000-8000-0000000f1001", "paused"]]);
+
+  // Still in the sidebar, now labelled: pausing sync is not deleting.
+  assert.match(
+    document.byId.get("thread-list").textContent,
+    /Cloud deck/,
+    "a paused conversation must stay in the list — disappearing would read as deletion",
+  );
+  const afterButtons = syncButtons();
+  assert.equal(afterButtons[0].textContent, "Local only");
+  assert.equal(afterButtons[0].classList.contains("paused"), true);
+
+  // And back again.
+  afterButtons[0].dispatch("click");
+  await settle();
+  assert.deepEqual(calls.at(-1), ["00000000-0000-4000-8000-0000000f1001", "synced"]);
+}
+
 await testMissingBridge();
 await testLongTranscriptMountsAWindowNotTheWholeHistory();
 await testShortTranscriptHasNoWindowControl();
@@ -7837,6 +8077,10 @@ await testLocalAccountDeleteIsArmedAndScoped();
 await testComposerChipsNameRuntimeAndIdentity();
 await testComposerAccountChipSkipsTheDefaultIdentity();
 await testExportThreadWritesAndReveals();
+await testOfficialModelPickerShowsLockedModelsWithTheirTier();
+await testDowngradedModelSelectionIsSurfacedNotSubstituted();
+await testOfficialModelPickerExplainsItselfWithoutAnAccount();
+await testThreadSyncSwitchPausesAndStaysVisible();
 await testOnboardingPathsLeadSomewhere();
 await testOnboardingHiddenOnceUsable();
 await testBridgeLibAcceptsLocalCreateContract();

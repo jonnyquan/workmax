@@ -125,6 +125,8 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	newCurrentSidecarRoutePolicy("agent.search", http.MethodGet, "/agent/search", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-pin", http.MethodPost, "/agent/threads/:uuid/pin", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-unpin", http.MethodDelete, "/agent/threads/:uuid/pin", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("agent.thread-cloud-sync", http.MethodPut, "/agent/threads/:uuid/cloud-sync", SidecarBodyRequired, maxThreadCloudSyncBodyBytes, "application/json"),
+	newCurrentSidecarRoutePolicy("settings.model-catalog.get", http.MethodGet, "/settings/model-catalog", SidecarBodyForbidden, 0),
 }
 
 func newCurrentSidecarRoutePolicy(
@@ -148,6 +150,8 @@ func newCurrentSidecarRoutePolicy(
 		bodyTooLargeError = "renderer log body too large"
 	case "settings.model-route.put":
 		bodyTooLargeError = "model settings body too large"
+	case "agent.thread-cloud-sync":
+		bodyTooLargeError = "cloud sync request body too large"
 	}
 	return SidecarRoutePolicy{
 		ID:         id,
@@ -320,6 +324,10 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handlePinThread, true
 	case "agent.thread-unpin":
 		return s.handleUnpinThread, true
+	case "agent.thread-cloud-sync":
+		return s.handleSetThreadCloudSync, true
+	case "settings.model-catalog.get":
+		return s.handleModelCatalog, true
 	case "agent.thread-file-upload":
 		return s.handleUploadThreadFile, true
 	case "agent.skills.catalog":

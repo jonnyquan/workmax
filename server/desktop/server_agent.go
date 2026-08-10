@@ -280,6 +280,7 @@ func payloadWithDesktopChatContract(
 	cloudConversationID string,
 	agentMode string,
 	userText string,
+	officialModelID string,
 ) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		raw = json.RawMessage(`{}`)
@@ -326,6 +327,19 @@ func payloadWithDesktopChatContract(
 	metadata["threadId"] = conversationJSON
 	delete(metadata, "agent_mode")
 	delete(metadata, "thread_id")
+	// The official model the user picked, expressed in the field the cloud
+	// chat contract already has for it (metadata.modelTier — "work-pro",
+	// "work-plus"). No new parameter and no new meaning: the catalog's
+	// modelId IS that identifier. An empty choice omits the field entirely so
+	// the cloud applies its own default, which is exactly what happened
+	// before anybody could choose.
+	if officialModelID != "" {
+		modelTierJSON, err := json.Marshal(officialModelID)
+		if err != nil {
+			return nil, fmt.Errorf("payload metadata.modelTier encode: %w", err)
+		}
+		metadata["modelTier"] = modelTierJSON
+	}
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
 		return nil, fmt.Errorf("payload metadata encode: %w", err)

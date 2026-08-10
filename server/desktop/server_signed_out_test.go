@@ -186,7 +186,7 @@ func TestSignedOutWithoutALocalModelCannotSendATurn(t *testing.T) {
 func TestSignedOutWithALocalModelCanSendATurn(t *testing.T) {
 	db := openMigratedTestDB(t)
 	settings := NewLocalModelSettingsStore(db, newMemKeychain())
-	if _, err := settings.Put(LocalModelSettingsPut{
+	if _, err := settings.Put(localSingleUserUID, LocalModelSettingsPut{
 		PreferredRoute: ModelRouteLocal,
 		Local: &LocalModelProfilePut{
 			Protocol: LocalProtocolOpenAICompatible,

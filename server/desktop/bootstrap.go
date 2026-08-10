@@ -327,6 +327,15 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 	// API key in the same Keychain backend as OAuth tokens (separate account).
 	modelSettings := NewLocalModelSettingsStore(dbRes.DB, keychain)
 
+	// Whose settings? The same answer every HTTP handler gets, resolved at the
+	// moment an engine asks rather than frozen at boot — a machine can change
+	// hands (local account switch, connect/disconnect an account) without the
+	// sidecar restarting.
+	turnIdentityUID := func() uint64 { return resolveIdentityFrom(tokenStore, dbRes.DB).UID }
+	modelProfileReader := func() *LocalModelProfileReader {
+		return &LocalModelProfileReader{Store: modelSettings, UID: turnIdentityUID}
+	}
+
 	// Local file attachment store (L3b): persists uploads under
 	// <DataDir>/thread_files and writes w_workagent_thread_file metadata. It
 	// also implements AttachmentLoader, so the Engine can resolve file_ids
@@ -359,7 +368,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 	// sidecar DB so CacheWriter persists local turns into the same
 	// w_workagent_message rows (idempotency key = desktop-turn:<uuid>).
 	localInference := localinference.NewEngine(
-		&LocalModelProfileReader{Store: modelSettings},
+		modelProfileReader(),
 		dbRes.DB,
 		localFiles,
 		knowledge.Hooks,
@@ -384,7 +393,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 			log.Printf("local agent: WORKMAX_CLAUDE_CLI_PATH=%q is not a usable binary (%v); tool loop disabled", cliPath, statErr)
 		} else {
 			engine := localagent.NewEngine(
-				&LocalModelProfileReader{Store: modelSettings},
+				modelProfileReader(),
 				dbRes.DB,
 				localFiles,
 				knowledge.Hooks,
@@ -410,7 +419,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 			log.Printf("pi agent: WORKMAX_PI_PATH=%q is not a usable binary (%v); pi tool loop disabled", piPath, statErr)
 		} else {
 			piEngine := localagent.NewEngineWithRuntime(
-				&LocalModelProfileReader{Store: modelSettings},
+				modelProfileReader(),
 				dbRes.DB,
 				localFiles,
 				knowledge.Hooks,
@@ -490,6 +499,15 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 
 // Port is the OS-assigned loopback port the server bound to.
 func (b *Boot) Port() int { return b.Server.Port() }
+
+// IdentityUID is who this sidecar is currently running as: the connected
+// cloud account when there is one, otherwise this machine's active local
+// account. Exported for out-of-process harnesses (the shell's kill check)
+// that write settings directly into the store and must key them the same way
+// an HTTP request would — writing under the wrong identity configures nobody.
+func (b *Boot) IdentityUID() uint64 {
+	return resolveIdentityFrom(b.TokenStore, b.DB).UID
+}
 
 // Context is the sidecar lifetime context. It is cancelled by Cancel or
 // Shutdown; background workers started outside Boot should honor it.

@@ -134,17 +134,25 @@ func TestHandlePutAgentThread_LocalRoute(t *testing.T) {
 	db := openSidecarPutThreadTestDB(t)
 	if err := db.Exec(`CREATE TABLE IF NOT EXISTS w_desktop_model_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    preferred_route TEXT NOT NULL DEFAULT 'official',
     local_protocol TEXT NOT NULL DEFAULT '',
     local_base_url TEXT NOT NULL DEFAULT '',
     local_model_id TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`).Error; err != nil {
+		t.Fatalf("create model settings table: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS w_desktop_model_preference (
+    uid INTEGER PRIMARY KEY,
+    preferred_route TEXT NOT NULL DEFAULT 'official',
+    official_model_id TEXT NOT NULL DEFAULT '',
     local_api_key_present INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`).Error; err != nil {
-		t.Fatalf("create model_settings table: %v", err)
+		t.Fatalf("create model preference table: %v", err)
 	}
 	modelSettings := NewLocalModelSettingsStore(db, newMemKeychain())
-	if _, err := modelSettings.Put(LocalModelSettingsPut{
+	// uid 42 is the subject of the session this fixture seeds below.
+	if _, err := modelSettings.Put(42, LocalModelSettingsPut{
 		PreferredRoute: ModelRouteLocal,
 		Local: &LocalModelProfilePut{
 			Protocol: LocalProtocolOpenAICompatible,

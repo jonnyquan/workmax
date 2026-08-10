@@ -956,6 +956,53 @@ textarea:focus-visible {
   color: hsl(var(--foreground));
 }
 
+/* The sync switch sits in the corner of threads the cloud already knows
+   about; the pin steps aside for it. Unlike pin and delete it does NOT hide
+   at rest once paused — "this one stays on my machine" is a standing fact
+   about the conversation, and a fact you can only see by hovering is a fact
+   the user does not have. */
+.thread-sync {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  height: auto;
+  padding: 2px 7px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--card));
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.4;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.thread-item:has(.thread-sync) .thread-pin {
+  right: 78px;
+}
+
+.thread-item:hover .thread-sync,
+.thread-sync:focus-visible,
+.thread-sync.paused {
+  opacity: 1;
+}
+
+.thread-sync.paused {
+  border-color: hsl(var(--primary) / 0.4);
+  color: hsl(var(--foreground));
+}
+
+.thread-sync:hover {
+  color: hsl(var(--foreground));
+}
+
+/* The model note turns into a demand when the stored choice stopped being
+   allowed: same line, different weight, so the answer appears where the
+   question was asked. */
+.model-key-status.is-error {
+  color: hsl(var(--destructive));
+}
+
 .thread-button {
   display: block;
   width: 100%;
