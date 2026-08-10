@@ -395,9 +395,19 @@
     <!-- Wails shell only: the typed bridge library and the shim that installs
          window.workmaxLocal / window.desktopBridge from same-origin requests.
          Under Electron the preload has already installed both and shim.js
-         stands down, so the order below is safe in either shell. -->
+         stands down, so the order below is safe in either shell.
+
+         The two bridge scripts stay classic and renderer.js is a module, which
+         is what makes the ordering above a guarantee rather than a hope: a
+         module script is deferred past every classic one, so both globals are
+         installed before the first line of the renderer runs — the same
+         property the old three-classic-scripts order relied on document order
+         for. The UI origin's CSP allows this under script-src 'self' with no
+         inline exemption; that was verified inside a real WKWebView against
+         the production header (static and dynamic imports, subdirectories and
+         module-relative fetch all work) rather than assumed from the spec. -->
     <script src="./lib/desktop-bridge.js"></script>
     <script src="./shim.js"></script>
-    <script src="./renderer.js"></script>
+    <script type="module" src="./renderer.js"></script>
   </body>
 </html>

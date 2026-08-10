@@ -7,21 +7,105 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
 
-// The five files the app is allowed to serve. Named here as well as in
-// embed.go so that "what ships" is asserted from the outside: embed.go could
-// name a file it does not have, and a glob would silently start shipping
-// whatever landed in the directory.
+// The files the app is allowed to serve. Named here as well as in embed.go so
+// that "what ships" is asserted from the outside: embed.go could name a file
+// it does not have, and a glob would silently start shipping whatever landed
+// in the directory.
+//
+// renderer.js is an ES module that imports the eight after it. That changes
+// what a missing entry costs: a module the graph imports and the binary does
+// not carry is a 404 at link time, which is a blank window rather than one
+// broken feature — see TestEmbeddedRendererCarriesEveryImportedModule.
 var shippedRendererFiles = []string{
 	"index.html",
 	"styles.css",
 	"renderer.js",
+	"dom.js",
+	"fence.js",
+	"protocol.js",
+	"events.js",
+	"markdown.js",
+	"transcript.js",
+	"composer.js",
+	"threads.js",
+	"context-panel.js",
 	"shim.js",
 	"lib/desktop-bridge.js",
+}
+
+// moduleImportPattern matches the specifier of a static import in the shipped
+// renderer. The renderer only ever imports relative paths — there is no
+// bundler, no import map and no network — so anything else is a mistake this
+// test should not be quietly tolerant of.
+var moduleImportPattern = regexp.MustCompile(`(?m)^\s*(?:import|export)[^"']*from\s+["']([^"']+)["']`)
+
+// Every module the graph reaches has to be in the binary, and has to be served
+// as JavaScript.
+//
+// The list above is hand-maintained in four other places besides this one, and
+// the shell scripts check those against each other. What none of them can see
+// is the import graph itself: adding `import { x } from "./newthing.js"` to a
+// module is an ordinary-looking edit that makes a tenth file load-bearing, and
+// the first symptom of forgetting to ship it is a window that renders nothing
+// at all, because a failed link aborts the whole graph rather than the one
+// import. WebKit is equally strict about the response: a module served with a
+// non-JavaScript MIME type is refused even same-origin, so the Content-Type
+// the file server derives from the extension is checked here too.
+func TestEmbeddedRendererCarriesEveryImportedModule(t *testing.T) {
+	t.Setenv(RendererDirEnv, "")
+	rendererFS, _, err := resolveRendererFS()
+	if err != nil {
+		t.Fatalf("resolveRendererFS: %v", err)
+	}
+	handler := UIHandler(rendererFS, "cap", 1, "tok")
+
+	imported := map[string]string{}
+	for _, name := range shippedRendererFiles {
+		if !strings.HasSuffix(name, ".js") {
+			continue
+		}
+		source, err := fs.ReadFile(rendererFS, name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for _, match := range moduleImportPattern.FindAllStringSubmatch(string(source), -1) {
+			specifier := match[1]
+			if !strings.HasPrefix(specifier, "./") {
+				t.Errorf("%s imports %q; the renderer may only import relative paths", name, specifier)
+				continue
+			}
+			imported[path.Join(path.Dir(name), specifier)] = name
+		}
+	}
+	if len(imported) == 0 {
+		t.Fatal("no imports found at all; this test is no longer reading the renderer it thinks it is")
+	}
+
+	for target, importer := range imported {
+		if _, err := fs.ReadFile(rendererFS, target); err != nil {
+			t.Errorf("%s imports %s, which is not in the binary: %v", importer, target, err)
+			continue
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/cap/"+target, nil))
+		if recorder.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", target, recorder.Code)
+			continue
+		}
+		// text/javascript and application/javascript are both accepted by
+		// WebKit; anything else (text/plain from an unknown extension, say) is
+		// a refused module.
+		if contentType := recorder.Header().Get("Content-Type"); !strings.Contains(contentType, "javascript") {
+			t.Errorf("%s is served as %q, which no browser will execute as a module", target, contentType)
+		}
+	}
 }
 
 // The default is the copy compiled into this binary, not a directory beside it.

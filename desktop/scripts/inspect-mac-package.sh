@@ -121,7 +121,7 @@ if [ "$require_renderer" -eq 1 ]; then
   renderer="$resources/renderer/en/desktop"
   [ -d "$renderer" ] || fail "missing bundled renderer at Contents/Resources/renderer/en/desktop"
 
-  for required in index.html styles.css renderer.js shim.js lib/desktop-bridge.js; do
+  for required in index.html styles.css renderer.js dom.js fence.js protocol.js events.js markdown.js transcript.js composer.js threads.js context-panel.js shim.js lib/desktop-bridge.js; do
     [ -s "$renderer/$required" ] || fail "bundled renderer is missing or has an empty $required"
   done
 
@@ -131,7 +131,7 @@ if [ "$require_renderer" -eq 1 ]; then
   while IFS= read -r file; do
     rel="${file#"$renderer/"}"
     case "$rel" in
-      index.html|styles.css|renderer.js|shim.js|lib/desktop-bridge.js) ;;
+      index.html|styles.css|renderer.js|dom.js|fence.js|protocol.js|events.js|markdown.js|transcript.js|composer.js|threads.js|context-panel.js|shim.js|lib/desktop-bridge.js) ;;
       *) fail "unexpected file in bundled renderer: $rel" ;;
     esac
   done < <(find "$renderer" -type f)

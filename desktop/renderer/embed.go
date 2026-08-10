@@ -12,15 +12,22 @@
 //
 // The file list below is an allowlist, deliberately spelled out rather than
 // globbed, and it must agree with the three other places that name the same
-// five files:
+// files:
 //
 //	desktop/scripts/check-bundled-renderer.sh   (source allowlist)
 //	desktop/scripts/build-mac.sh                (RENDERER_FILES)
 //	desktop/scripts/inspect-mac-package.sh      (bundle allowlist)
 //
-// check-bundled-renderer.sh reads this list back and fails if it and the source
-// allowlist have drifted, so adding a file here without adding it there — or
-// the reverse — is a build failure rather than a shipped surprise.
+// check-bundled-renderer.sh reads all four lists back and fails if any of them
+// has drifted, so adding a file here without adding it there — or the reverse
+// — is a build failure rather than a shipped surprise. That cross-check used
+// to cover two of the four; the renderer becoming nine module files instead of
+// one script is what made covering all four worth the twenty lines.
+//
+// The renderer is loaded as an ES module graph, so the list is no longer "the
+// entry point plus its assets": every file below renderer.js imports is
+// reachable code, and one missing from this list is a blank window rather than
+// a degraded feature.
 package renderer
 
 import (
@@ -31,6 +38,15 @@ import (
 //go:embed en/desktop/index.html
 //go:embed en/desktop/styles.css
 //go:embed en/desktop/renderer.js
+//go:embed en/desktop/dom.js
+//go:embed en/desktop/fence.js
+//go:embed en/desktop/protocol.js
+//go:embed en/desktop/events.js
+//go:embed en/desktop/markdown.js
+//go:embed en/desktop/transcript.js
+//go:embed en/desktop/composer.js
+//go:embed en/desktop/threads.js
+//go:embed en/desktop/context-panel.js
 //go:embed en/desktop/shim.js
 //go:embed en/desktop/lib/desktop-bridge.js
 var bundled embed.FS

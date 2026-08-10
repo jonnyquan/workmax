@@ -1,17 +1,73 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
+
+// The renderer ships as ES modules, so this file loads it the way the webview
+// does: a real module graph, linked and evaluated. vm.SourceTextModule is the
+// only API that can do that inside a synthetic global, and it is behind a
+// flag — so re-exec ourselves with it rather than making every caller
+// (check-bundled-renderer.sh, the Makefile, a developer) remember.
+//
+// The alternative was to concatenate the modules and run them as one script.
+// That would have passed while proving less: a missing import is a link-time
+// error here and an invisible no-op there, and "the files work together" is
+// exactly the property the split put at risk.
+if (typeof vm.SourceTextModule !== "function") {
+  const result = spawnSync(
+    process.execPath,
+    ["--experimental-vm-modules", "--no-warnings", new URL(import.meta.url).pathname, ...process.argv.slice(2)],
+    { stdio: "inherit" },
+  );
+  process.exit(result.status === null ? 1 : result.status);
+}
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..");
 const rendererDir = process.env.WORKMAX_BUNDLED_RENDERER_DIR
   ? path.resolve(process.env.WORKMAX_BUNDLED_RENDERER_DIR)
   : path.join(repoRoot, "desktop/renderer/en/desktop");
 const rendererPath = path.join(rendererDir, "renderer.js");
-const rendererSource = fs.readFileSync(rendererPath, "utf8");
+// The entry module and every module it pulls in. The discipline checks below
+// (no innerHTML, no console, one localStorage key) run over the concatenation
+// of all of them, because "the renderer does not do X" has to keep meaning the
+// whole renderer after the split, not just the file that used to be all of it.
+const RENDERER_MODULES = [
+  "renderer.js",
+  "dom.js",
+  "protocol.js",
+  "events.js",
+  "markdown.js",
+  "transcript.js",
+  "composer.js",
+  "threads.js",
+  "context-panel.js",
+  "fence.js",
+];
+const moduleSources = new Map(
+  RENDERER_MODULES.map((name) => [name, fs.readFileSync(path.join(rendererDir, name), "utf8")]),
+);
+const rendererSource = [...moduleSources.values()].join("\n");
 const rendererHTML = fs.readFileSync(path.join(rendererDir, "index.html"), "utf8");
 const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8");
+
+// Every module the renderer ships must be on the list above, and every module
+// on the list must exist. Otherwise a new file could join the graph — and be
+// served to the webview — while the discipline checks quietly stopped covering
+// the code that moved into it.
+{
+  const onDisk = fs
+    .readdirSync(rendererDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".js") && entry.name !== "shim.js")
+    .map((entry) => entry.name)
+    .sort();
+  assert.deepEqual(
+    onDisk,
+    [...RENDERER_MODULES].sort(),
+    "the renderer module list and the files on disk disagree",
+  );
+}
 
 // --- Appearance cascade ------------------------------------------------------
 //
@@ -268,6 +324,21 @@ class FakeElement {
     this.parentNode = null;
   }
 
+  replaceChild(next, previous) {
+    const at = this.children.indexOf(previous);
+    if (at < 0) return previous;
+    next.parentNode = this;
+    this.children[at] = next;
+    previous.parentNode = null;
+    return previous;
+  }
+
+  get nextSibling() {
+    const siblings = this.parentNode?.children ?? [];
+    const at = siblings.indexOf(this);
+    return at >= 0 && at + 1 < siblings.length ? siblings[at + 1] : null;
+  }
+
   addEventListener(type, handler) {
     this.listeners.set(type, handler);
   }
@@ -303,7 +374,12 @@ class FakeElement {
   }
 
   get scrollHeight() {
-    return this.children.length * 100;
+    // Each row is 100 tall. scrollContent exists because the element that
+    // scrolls is not always the element with the rows in it: #message-viewport
+    // scrolls #message-list, a relationship the flat element map cannot
+    // express, and without it the viewport's height never changes and the
+    // transcript's scroll anchoring cannot be observed at all.
+    return (this.scrollContent ?? this).children.length * 100;
   }
 
   // A stable viewport height so the sticky-scroll math is deterministic in
@@ -400,6 +476,9 @@ class FakeDocument {
       element.hidden = spec.hidden;
       this.byId.set(id, element);
     }
+    const viewport = this.byId.get("message-viewport");
+    const list = this.byId.get("message-list");
+    if (viewport && list) viewport.scrollContent = list;
   }
 
   // Document-level listeners, for global keyboard shortcuts. dispatchKey is
@@ -612,13 +691,53 @@ async function runRenderer(mockBridge, mockDesktopBridge, options = {}) {
   // the renderer's globalThis.localStorage resolves exactly as it would in a
   // webview — including to undefined when no storage was installed.
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+
+  // One module graph per run, instantiated fresh in this context. Module
+  // instances are per-context, so each test gets its own copies of `state` and
+  // every other module-level binding — the isolation the old
+  // one-script-per-context shape gave for free.
+  const graph = new Map();
+  const instantiate = (file) => {
+    const resolved = path.resolve(file);
+    const existing = graph.get(resolved);
+    if (existing) return existing;
+    const created = new vm.SourceTextModule(fs.readFileSync(resolved, "utf8"), {
+      context,
+      identifier: resolved,
+    });
+    graph.set(resolved, created);
+    return created;
+  };
+  const entry = instantiate(rendererPath);
+  await entry.link((specifier, referencing) =>
+    instantiate(path.resolve(path.dirname(referencing.identifier), specifier)),
+  );
+  await entry.evaluate();
+
+  // The modules were one file until recently and every name in them was a
+  // global, so a flat view of the graph is the faithful successor to reaching
+  // into that global scope — and the collision check keeps it honest, because
+  // two modules declaring the same name is now a real possibility that a flat
+  // view would otherwise hide.
+  const ns = {};
+  for (const module of graph.values()) {
+    for (const name of Object.keys(module.namespace)) {
+      assert.ok(
+        !Object.prototype.hasOwnProperty.call(ns, name),
+        `two renderer modules both export ${name}`,
+      );
+      Object.defineProperty(ns, name, {
+        enumerable: true,
+        get: () => module.namespace[name],
+      });
+    }
+  }
   await settle();
-  return { context, document };
+  return { context, document, ns };
 }
 
 async function testMissingBridge() {
-  const { document } = await runRenderer(undefined);
+  const { document, ns } = await runRenderer(undefined);
   assert.match(
     document.byId.get("status-card").textContent,
     /must run inside WorkMax Desktop/
@@ -667,7 +786,7 @@ async function testAuthenticatedCacheRead() {
     },
   };
 
-  const { document } = await runRenderer(bridge);
+  const { document, ns } = await runRenderer(bridge);
   assert.deepEqual(calls, ["/auth/status", "/agent/threads?include_paused=false"]);
   assert.match(document.byId.get("runtime-label").textContent, /sidecar sidecar-test · app app-test/);
   assert.equal(document.byId.get("login-button").hidden, true);
@@ -750,7 +869,7 @@ async function testUnauthenticatedLogin() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   rendererDocument = document;
   assert.equal(document.byId.get("login-button").hidden, false);
   assert.equal(document.byId.get("login-form").hidden, true);
@@ -776,7 +895,7 @@ async function testUnauthenticatedLogin() {
   assert.equal(passwordCalls[0].password, "do-not-persist-this");
   assert.equal(document.byId.get("login-password").value, "");
   assert.doesNotMatch(
-    JSON.stringify(vm.runInContext("state", context)),
+    JSON.stringify(ns.state),
     /writer@example\.com|do-not-persist-this/u
   );
   assert.equal(document.byId.get("login-form").hidden, true);
@@ -815,7 +934,7 @@ async function testResumesAndCancelsPasswordLogin() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   rendererDocument = document;
   assert.equal(document.byId.get("login-form").hidden, false);
   document.byId.get("login-password").value = "must-be-cleared-on-cancel";
@@ -856,7 +975,7 @@ async function testInvalidCredentialsStayRetryableAndClearPassword() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   document.byId.get("login-button").click();
   await settle();
   document.byId.get("login-email").value = "writer@example.com";
@@ -904,7 +1023,7 @@ async function testCancelFencesLatePasswordCompletion() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   document.byId.get("login-button").click();
   await settle();
   document.byId.get("login-email").value = "writer@example.com";
@@ -962,7 +1081,7 @@ async function testAmbiguousPasswordResponseReconcilesSessionWithoutReplay() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   document.byId.get("login-button").click();
   await settle();
   document.byId.get("login-email").value = "writer@example.com";
@@ -998,7 +1117,7 @@ async function testRejectsMalformedAuthStatus() {
       },
     };
 
-    const { document } = await runRenderer(bridge);
+    const { document, ns } = await runRenderer(bridge);
     assert.match(document.byId.get("status-card").textContent, /Malformed \/auth\/status response/);
     assert.equal(document.byId.get("status-card").classList.contains("error"), true);
   }
@@ -1027,7 +1146,7 @@ async function testRejectsMalformedThreadList() {
     },
   };
 
-  const { document } = await runRenderer(bridge);
+  const { document, ns } = await runRenderer(bridge);
   assert.match(document.byId.get("status-card").textContent, /Malformed \/agent\/threads response/);
   assert.equal(document.byId.get("status-card").classList.contains("error"), true);
 }
@@ -1061,7 +1180,7 @@ async function testRejectsMalformedThreadCountAndTimestamp() {
       },
     };
 
-    const { document } = await runRenderer(bridge);
+    const { document, ns } = await runRenderer(bridge);
     assert.match(document.byId.get("status-card").textContent, /Malformed \/agent\/threads response/);
     assert.equal(document.byId.get("status-card").classList.contains("error"), true);
   }
@@ -1106,7 +1225,7 @@ async function testRejectsMalformedMessages() {
     },
   };
 
-  const { document } = await runRenderer(bridge);
+  const { document, ns } = await runRenderer(bridge);
   const threadButton = walk(
     document.byId.get("thread-list"),
     (node) => node.classList?.contains("thread-button")
@@ -1160,7 +1279,7 @@ async function testRejectsMalformedMessageTimestamps() {
     },
   };
 
-  const { document } = await runRenderer(bridge);
+  const { document, ns } = await runRenderer(bridge);
   const threadButton = walk(
     document.byId.get("thread-list"),
     (node) => node.classList?.contains("thread-button")
@@ -1213,7 +1332,7 @@ async function testRejectsMalformedLoginTransactionResult() {
       },
     };
 
-    const { document } = await runRenderer(bridge, desktopBridge);
+    const { document, ns } = await runRenderer(bridge, desktopBridge);
     document.byId.get("login-button").click();
     await settle();
 
@@ -1239,7 +1358,7 @@ async function testRedactsErrorStatusMessages() {
     },
   };
 
-  const { document } = await runRenderer(bridge);
+  const { document, ns } = await runRenderer(bridge);
   const status = document.byId.get("status-card").textContent;
   assert.match(status, /\[REDACTED\]/);
   assert.match(status, /Basic \[REDACTED\]/);
@@ -1280,7 +1399,7 @@ async function testCachedStreamingStatesRenderPartialAndRejectUnknown() {
     },
   };
 
-  const { document } = await runRenderer(validBridge);
+  const { document, ns } = await runRenderer(validBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
   const partialAssistants = walk(
@@ -1343,6 +1462,83 @@ async function testCachedStreamingStatesRenderPartialAndRejectUnknown() {
 // It sits after the bootstrap call in renderer.js, so an initial render is not
 // implicit — and a panel that never ran is indistinguishable from one that ran
 // and found nothing, because index.html ships plausible-looking static values.
+
+// Fences: the guard that decides whether a late answer may still be applied.
+//
+// There were eight of these as loose counters with the rules written in
+// comments, and the rule that mattered most — a session change invalidates
+// everything in flight — was enforced by every session-changing path
+// remembering to bump four other counters by hand. It is a cascade now, and
+// this is where the cascade is pinned: the property is not "session.bump()
+// increments something", it is "a token taken from ANY of the covered fences
+// before a session change is refused afterwards".
+async function testFencesInvalidateOnBumpAndCascadeFromSession() {
+  const { ns } = await runRenderer(undefined);
+
+  // The primitive first, on a fence nobody else can touch.
+  {
+    const fence = ns.createFence("probe");
+    const token = fence.snapshot();
+    assert.equal(fence.isCurrent(token), true, "a fresh snapshot is current");
+    fence.bump();
+    assert.equal(fence.isCurrent(token), false, "a bump invalidates what was outstanding");
+    const renewed = fence.snapshot();
+    assert.equal(fence.isCurrent(renewed), true);
+    assert.notEqual(renewed, token, "snapshots are monotonic, not reused");
+    // Bumping twice must not wrap back onto a live token — the failure mode of
+    // a boolean "is stale" flag, which this is deliberately not.
+    fence.bump();
+    assert.equal(fence.isCurrent(renewed), false);
+  }
+
+  // Dependents cascade; the parent is not affected by a child.
+  {
+    const child = ns.createFence("child");
+    const parent = ns.createFence("parent", [child]);
+    const parentToken = parent.snapshot();
+    const childToken = child.snapshot();
+    child.bump();
+    assert.equal(child.isCurrent(childToken), false, "a child bump invalidates the child");
+    assert.equal(parent.isCurrent(parentToken), true, "a child bump must NOT invalidate the parent");
+    parent.bump();
+    assert.equal(child.isCurrent(child.snapshot()), true);
+    assert.equal(parent.isCurrent(parentToken), false);
+  }
+
+  // And now the real ones the renderer runs on. Every fence a session change
+  // is documented to cover is listed, so adding a fence to the cascade without
+  // adding it here — or removing one from the cascade — fails.
+  {
+    const covered = ["selection", "turn", "create", "recovery", "loginOperation"];
+    const tokens = new Map(covered.map((name) => [name, ns.fences[name].snapshot()]));
+    const sessionToken = ns.fences.session.snapshot();
+
+    ns.fences.session.bump();
+
+    assert.equal(
+      ns.fences.session.isCurrent(sessionToken),
+      false,
+      "the session fence invalidates its own outstanding work",
+    );
+    for (const name of covered) {
+      assert.equal(
+        ns.fences[name].isCurrent(tokens.get(name)),
+        false,
+        `a session change must invalidate in-flight ${name} work`,
+      );
+    }
+    // contentSearch is deliberately NOT covered: a search is scoped to the
+    // thread list, which a session change rebuilds through its own path, and
+    // widening the cascade without a reason to would make this test say
+    // nothing about what the cascade is for.
+    assert.equal(
+      Object.keys(ns.fences).sort().join(","),
+      ["session", ...covered, "contentSearch"].sort().join(","),
+      "the fence roster changed; decide deliberately whether the new one is session-covered",
+    );
+  }
+}
+
 // Conversation grouping and search.
 //
 // Grouping is by local calendar day, not elapsed hours — the case that makes
@@ -1398,9 +1594,9 @@ async function testThreadGroupingAndSearch() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
 
-  const groups = context.groupThreads(
+  const groups = ns.groupThreads(
     threads.map((t) => ({ ...t, updated_at: t.updatedAt })),
     now,
   );
@@ -1474,7 +1670,7 @@ async function testThreadSearchIsHiddenWithNothingToFilter() {
       async listSkills() { return typedSuccess(pptCatalog()); },
     },
   };
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   assert.match(
     document.byId.get("thread-list").textContent,
     /No cached threads yet/,
@@ -1488,7 +1684,7 @@ async function testThreadSearchIsHiddenWithNothingToFilter() {
 }
 
 async function testTaskContextPanelRendersOnLoad() {
-  const { document } = await runRenderer(undefined);
+  const { document, ns } = await runRenderer(undefined);
   const steps = document.byId.get("run-overview-list");
   assert.ok(steps, "the run overview list must exist");
   assert.equal(
@@ -1623,7 +1819,7 @@ async function testThreadDeleteIsTwoStepAndLocalOnly() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   const deleteButtons = () =>
     walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-delete"));
 
@@ -1690,7 +1886,7 @@ async function testDropAndPasteAttachFiles() {
       async cancelTurn(turnID) { return { turnID, canceled: true }; },
     },
   };
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[0].click();
   await settle();
 
@@ -1747,7 +1943,7 @@ async function testMultiFileUploadCompletesEveryFile() {
       async cancelTurn(turnID) { return { turnID, canceled: true }; },
     },
   };
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[0].click();
   await settle();
 
@@ -1824,7 +2020,7 @@ async function testRejectedUploadFailsTheChipWithoutUnhandledRejection() {
   const trap = (reason) => unhandled.push(reason);
   process.on("unhandledRejection", trap);
   try {
-    const { document } = await runRenderer(bridge, desktopBridge);
+    const { document, ns } = await runRenderer(bridge, desktopBridge);
     walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[0].click();
     await settle();
 
@@ -1897,7 +2093,7 @@ async function testComposerDraftSurvivesThreadSwitch() {
       async cancelTurn(turnID) { return { turnID, canceled: true }; },
     },
   };
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   const threadButtons = () =>
     walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"));
   const input = document.byId.get("chat-input");
@@ -1962,7 +2158,7 @@ async function testRegenerateRunsTheLastPromptAgain() {
       async cancelTurn(turnID) { return { turnID, canceled: true }; },
     },
   };
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[0].click();
   await settle();
 
@@ -2006,7 +2202,7 @@ async function testQuickSwitcherJumpsBetweenThreads() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   assert.equal(document.byId.get("quick-switcher").hidden, true, "closed at rest");
 
   document.dispatchKey({ key: "k", metaKey: true });
@@ -2070,7 +2266,7 @@ async function testEscapeStopsAStreamingTurn() {
       },
     },
   };
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
 
@@ -2118,7 +2314,7 @@ async function testComposerCapacityNote() {
       async cancelTurn(turnID) { return { turnID, canceled: true }; },
     },
   };
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
 
@@ -2178,7 +2374,7 @@ async function testStreamingDoesNotYankAScrolledUpReader() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   // The stub's elements are not a connected tree, so the viewport's derived
   // scrollHeight is useless; pin explicit geometry on this one instance so
   // the sticky math has something real to chew on.
@@ -2282,7 +2478,7 @@ async function testStreamingDeltaCostsStayConstant() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
   const input = document.byId.get("chat-input");
@@ -2374,7 +2570,7 @@ async function testNonDeltaEventsDrainBufferedText() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
   const input = document.byId.get("chat-input");
@@ -2457,7 +2653,7 @@ async function testCompletedTurnReconcilesInPlace() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
   const list = document.byId.get("message-list");
@@ -2593,7 +2789,7 @@ async function testStreamingMarkdownCommitsMatchTheFinalParse() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
   const input = document.byId.get("chat-input");
@@ -2651,14 +2847,8 @@ async function testStreamingMarkdownCommitsMatchTheFinalParse() {
   // The consistency pin: the same input through the one-shot parser must
   // produce the same text and the same element shape as the streamed commits
   // plus the finish-line tail parse.
-  const reference = vm.runInContext(
-    `(() => {
-      const container = document.createElement("div");
-      renderMarkdownInto(container, ${JSON.stringify(answer)});
-      return container;
-    })()`,
-    context,
-  );
+  const reference = document.createElement("div");
+  ns.renderMarkdownInto(reference, answer);
   // Syntax highlighting is deferred to idle time, so the reference has only
   // just scheduled its own. Let it land: the pin is that the two agree once
   // both have finished, and comparing a highlighted bubble against a reference
@@ -2711,7 +2901,7 @@ async function testTurnStatePillCarriesItsTone() {
       async cancelTurn(turnID) { return { turnID, canceled: true }; },
     },
   };
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
 
@@ -2759,7 +2949,7 @@ async function testFailedTurnStateAndDuration() {
       async cancelTurn(turnID) { return { turnID, canceled: true }; },
     },
   };
-  const { document, context } = await runRenderer(bridge, desktopBridge);
+  const { document, context, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
 
@@ -2769,7 +2959,7 @@ async function testFailedTurnStateAndDuration() {
   document.byId.get("chat-form").submit();
   await settle();
 
-  vm.runInContext("state.activeTurn.startedAt -= 65000", context);
+  ns.state.activeTurn.startedAt -= 65000;
   emit({
     type: "proxy_error",
     error: { kind: "service_unavailable", message: "endpoint is down", retryable: true },
@@ -2791,7 +2981,7 @@ async function testFailedTurnStateAndDuration() {
 
 // The protocol picker answers its own question at the moment of choice.
 async function testModelProtocolHintFollowsTheChoice() {
-  const { document } = await runRenderer(undefined);
+  const { document, ns } = await runRenderer(undefined);
   const protocol = document.byId.get("model-protocol");
   const hint = document.byId.get("model-protocol-hint");
   const baseURL = document.byId.get("model-base-url");
@@ -2873,7 +3063,7 @@ async function testToolLoopActivityAndDeliverables() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
 
@@ -3059,7 +3249,7 @@ async function testToolApprovalCardsAndReasoningCaption() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
   const input = document.byId.get("chat-input");
@@ -3166,7 +3356,7 @@ async function testStarterPromptLandsInTheComposer() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   const cards = Array.from(document.byId.get("starter-prompts").children).filter(
     (n) => n.classList?.contains("starter-card"),
   );
@@ -3213,7 +3403,7 @@ async function testStarterPromptLandsInTheComposer() {
 
 // And a starter abandoned at the form must not haunt the next create.
 async function testCancelledStarterDropsItsPrompt() {
-  const { document } = await runRenderer(...(() => {
+  const { document, ns } = await runRenderer(...(() => {
     const bridge = {
       async fetch(pathname) {
         if (pathname === "/auth/status") {
@@ -3306,7 +3496,7 @@ async function testSelectedSourcesRideTheNextTurn() {
     },
   };
 
-  const { document, context } = await runRenderer(bridge, desktopBridge);
+  const { document, context, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
 
@@ -3326,7 +3516,7 @@ async function testSelectedSourcesRideTheNextTurn() {
   assert.match(document.byId.get("sources-selected").textContent, /1 selected for the next request/);
 
   // A fresh upload joins the selection: the turn carries the union, deduped.
-  context.uploadThreadFile({ name: "notes.txt", size: 12 });
+  ns.uploadThreadFile({ name: "notes.txt", size: 12 });
   await settle();
 
   const input = document.byId.get("chat-input");
@@ -3410,7 +3600,7 @@ async function testThreadRenameFlow() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   const buttons = walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"));
 
   // The synced thread first: reading its title must not offer a rename the
@@ -3500,7 +3690,7 @@ async function testMessageActionsCopyAndReuse() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge, { clipboard });
+  const { document, ns } = await runRenderer(bridge, desktopBridge, { clipboard });
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
 
@@ -3592,7 +3782,7 @@ async function testMessageActionsAbsentWithoutAClipboard() {
     },
   };
   // No clipboard option: the shipped shell has one, this run does not.
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
 
@@ -3655,7 +3845,7 @@ async function testStreamedAnswerGainsActionsWhenReconcileFails() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge, { clipboard });
+  const { document, ns } = await runRenderer(bridge, desktopBridge, { clipboard });
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
 
@@ -3764,7 +3954,7 @@ async function testLocalAccountSwitcherSwitchesAndReloads() {
     localRoute: true,
     accounts,
   });
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
 
   const row = document.byId.get("local-account-row");
@@ -3820,7 +4010,7 @@ async function testLocalAccountCreateDoesNotSwitch() {
     localRoute: true,
     accounts,
   });
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
 
   document.byId.get("local-account-row").click();
@@ -3862,7 +4052,7 @@ async function testLocalAccountRenameIsALabelChange() {
     localRoute: true,
     accounts,
   });
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
 
   document.byId.get("local-account-row").click();
@@ -3884,7 +4074,7 @@ async function testLocalAccountRenameIsALabelChange() {
   input.value = "  明  ";
   // The auth poll repaints the sidebar every second; a repaint mid-edit must
   // not eat the half-typed name. (Found live by the first rename E2E.)
-  vm.runInContext("updateComposerState()", context);
+  ns.updateComposerState();
   const inputAfterRepaint = walk(
     document.byId.get("local-account-list"),
     (node) => node.tagName === "INPUT",
@@ -3921,7 +4111,7 @@ async function testLocalAccountDeleteIsArmedAndScoped() {
     localRoute: true,
     accounts,
   });
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
 
   document.byId.get("local-account-row").click();
@@ -3975,7 +4165,7 @@ async function testComposerChipsNameRuntimeAndIdentity() {
     { id: 2, name: "Ming", active: true },
   ];
   const { bridge, desktopBridge } = localModeBridge({ localRoute: true, accounts });
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
 
   const threadButton = walk(
@@ -4046,7 +4236,7 @@ async function testOnboardingPathsLeadSomewhere() {
     async submitLoginPassword() { throw new Error("not exercised"); },
     async cancelLogin() { return { state: "idle" }; },
   };
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
 
   assert.equal(document.byId.get("onboarding-paths").hidden, false, "first run shows both paths");
@@ -4068,7 +4258,7 @@ async function testOnboardingPathsLeadSomewhere() {
 
 async function testOnboardingHiddenOnceUsable() {
   const { bridge, desktopBridge } = localModeBridge({ localRoute: true });
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
   assert.equal(
     document.byId.get("onboarding-paths").hidden,
@@ -4164,9 +4354,12 @@ async function testSignedOutLocalCanCreateThread() {
     );
   };
   const realRandomUUID = globalThis.crypto?.randomUUID;
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
-  vm.runInContext(`generateThreadUUID = () => "${newUUID}"`, context);
+  // generateThreadUUID reads globalThis.crypto.randomUUID, so pinning the
+  // fake crypto pins the identity — and exercises the real function rather
+  // than replacing it.
+  context.crypto.randomUUID = () => newUUID;
 
   document.byId.get("empty-new-thread-button").click();
   await settle();
@@ -4225,7 +4418,7 @@ async function testSidebarContentSearch() {
       count: 1,
     });
   };
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
 
   const input = document.byId.get("thread-search");
@@ -4309,7 +4502,7 @@ async function testPaletteRunsCommands() {
     pinned = true;
     return typedSuccess({ pinned: true });
   };
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
 
   // Select the thread so thread-scoped commands have a subject.
@@ -4359,7 +4552,7 @@ async function testPaletteOpensWithoutThreads() {
     if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
     throw new Error(`unexpected fetch path ${pathname}`);
   };
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
   document.dispatchKey({ key: "k", metaKey: true });
   assert.equal(
@@ -4407,7 +4600,7 @@ async function testPinnedThreadsLeadTheSidebar() {
     pinned = false;
     return typedSuccess({ pinned: false });
   };
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
 
   const groupLabels = () =>
@@ -4463,7 +4656,7 @@ async function testExportThreadWritesAndReveals() {
     revealCalls.push(uuid);
     return typedSuccess({ revealed: true });
   };
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
 
   const threadButton = walk(
@@ -4491,7 +4684,7 @@ async function testExportThreadWritesAndReveals() {
 async function testComposerAccountChipSkipsTheDefaultIdentity() {
   const accounts = [{ id: 1, name: "Local", active: true }];
   const { bridge, desktopBridge } = localModeBridge({ localRoute: true, accounts });
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
   const threadButton = walk(
     document.byId.get("thread-list"),
@@ -4510,7 +4703,7 @@ async function testModesParseFailureNamesTheSkew() {
   const { bridge, desktopBridge } = localModeBridge({ localRoute: true });
   desktopBridge.agent.listModes = async () =>
     typedSuccess({ allowed_modes: ["ppt"], totally_unexpected_shape: true });
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
   assert.match(
     document.byId.get("status-card").textContent,
@@ -4525,7 +4718,7 @@ async function testLocalAccountRowHiddenWithoutLocalRoute() {
     { id: 2, name: "Ming", active: false },
   ];
   const { bridge, desktopBridge } = localModeBridge({ localRoute: false, accounts });
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
   assert.equal(
     document.byId.get("local-account-row").hidden,
@@ -4536,7 +4729,7 @@ async function testLocalAccountRowHiddenWithoutLocalRoute() {
 
 async function testSignedOutLocalRouteCanDriveTheAgent() {
   const { bridge, desktopBridge } = localModeBridge({ localRoute: true });
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
 
   assert.match(
     document.byId.get("thread-list").textContent,
@@ -4578,7 +4771,7 @@ async function testSignedOutLocalRouteCanDriveTheAgent() {
 // path, and the renderer must not offer one it cannot fulfil.
 async function testSignedOutWithoutLocalRouteStaysGated() {
   const { bridge, desktopBridge } = localModeBridge({ localRoute: false });
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
 
   assert.match(
     document.byId.get("thread-list").textContent,
@@ -4666,7 +4859,7 @@ async function testAssistantMarkdownIsRenderedAsElements() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
 
@@ -4797,7 +4990,7 @@ async function testRetrievedContextIsShownAndResetPerTurn() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
 
@@ -5129,7 +5322,7 @@ async function testStagedAttachmentsAreSentWithTheTurn() {
     },
   };
 
-  const { document, context } = await runRenderer(bridge, desktopBridge);
+  const { document, context, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
 
@@ -5137,7 +5330,7 @@ async function testStagedAttachmentsAreSentWithTheTurn() {
   // uploadThreadFile is a top-level renderer function; the VM context exposes
   // it, and a plain object is enough because the renderer only reads name/size
   // before handing the file to the bridge.
-  context.uploadThreadFile({ name: "notes.txt", size: 12 });
+  ns.uploadThreadFile({ name: "notes.txt", size: 12 });
   await settle();
 
   const input = document.byId.get("chat-input");
@@ -5209,7 +5402,7 @@ async function testSynchronousTurnCallbacksAreBufferedUntilOpenResult() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
   const input = document.byId.get("chat-input");
@@ -5283,7 +5476,7 @@ async function testAgentTurnStreamsAndReconciles() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   assert.equal(skillReads, 1);
   assert.equal(
     document.byId.get("new-thread-button").disabled,
@@ -5343,10 +5536,10 @@ async function testAgentTurnStreamsAndReconciles() {
   });
   assert.doesNotMatch(document.byId.get("message-list").textContent, /unknown-event-secret/);
   assert.doesNotMatch(
-    vm.runInContext("state.activeTurn.assistantText", context),
+    ns.state.activeTurn.assistantText,
     /unknown-event-secret/
   );
-  assert.equal(vm.runInContext("state.activeTurn.pendingEvents.length", context), 0);
+  assert.equal(ns.state.activeTurn.pendingEvents.length, 0);
 
   streamCallback({ type: "text_delta", turnID: "turn-agent", delta: "Live " });
   assert.equal(
@@ -5404,7 +5597,7 @@ async function testLateThreadHistoryCannotContaminateSelection() {
     },
   };
 
-  const { document } = await runRenderer(bridge);
+  const { document, ns } = await runRenderer(bridge);
   const buttons = walk(
     document.byId.get("thread-list"),
     (node) => node.classList?.contains("thread-button")
@@ -5464,7 +5657,7 @@ async function testThreadSwitchCancelsAndFencesOldTurn() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   const buttons = walk(
     document.byId.get("thread-list"),
     (node) => node.classList?.contains("thread-button")
@@ -5530,7 +5723,7 @@ async function testStopTurnIsSingleShot() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
   const input = document.byId.get("chat-input");
@@ -5602,7 +5795,7 @@ async function testInitialTurnBusyRefreshesRecoveryWithoutReplay() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
   const input = document.byId.get("chat-input");
@@ -5625,9 +5818,9 @@ async function testInitialTurnBusyRefreshesRecoveryWithoutReplay() {
   assert.notEqual(document.byId.get("turn-state").textContent, "Done");
   assert.equal(document.byId.get("turn-recovery-card").hidden, false);
   assert.match(document.byId.get("status-card").textContent, /still busy.*Resume/i);
-  assert.equal(vm.runInContext("state.recoverableTurns.length", context), 1);
+  assert.equal(ns.state.recoverableTurns.length, 1);
   assert.equal(
-    vm.runInContext("state.recoverableTurns[0].turn_uuid", context),
+    ns.state.recoverableTurns[0].turn_uuid,
     turnID,
     "a stale recoverable list must not discard the immutable local intent"
   );
@@ -5689,7 +5882,7 @@ async function testCancelAckFailureShowsLocalStopAndRefreshesRecovery() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
   const input = document.byId.get("chat-input");
@@ -5710,7 +5903,7 @@ async function testCancelAckFailureShowsLocalStopAndRefreshesRecovery() {
   );
   assert.equal(document.byId.get("turn-recovery-card").hidden, false);
   assert.equal(
-    vm.runInContext("state.recoverableTurns[0].last_error_kind", context),
+    ns.state.recoverableTurns[0].last_error_kind,
     "cancel_unconfirmed"
   );
   await settle();
@@ -5764,7 +5957,7 @@ async function testSSESessionChangedClearsPromptWithoutReplay() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
   const prompt = "prompt-must-never-cross-account";
@@ -5793,7 +5986,7 @@ async function testSSESessionChangedClearsPromptWithoutReplay() {
   assert.match(document.byId.get("thread-list").textContent, /New account thread/);
   assert.doesNotMatch(document.byId.get("message-list").textContent, /partial old answer/);
   assert.doesNotMatch(document.byId.get("message-list").textContent, new RegExp(prompt));
-  assert.doesNotMatch(JSON.stringify(vm.runInContext("state", context)), new RegExp(prompt));
+  assert.doesNotMatch(JSON.stringify(ns.state), new RegExp(prompt));
   assert.match(document.byId.get("status-card").textContent, /account changed/i);
   assert.match(document.byId.get("status-card").textContent, /not resent/i);
 
@@ -5845,12 +6038,12 @@ async function testCatalog409UsesSessionChangedRecovery() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
   await settle();
   assert.equal(skillsCalls, 2);
   assert.equal(authCalls, 2);
-  assert.equal(vm.runInContext("state.selectedThreadUUID", context), null);
+  assert.equal(ns.state.selectedThreadUUID, null);
   assert.match(document.byId.get("thread-list").textContent, /Catalog account 2/);
   assert.match(document.byId.get("status-card").textContent, /account changed/i);
   assert.equal(document.byId.get("chat-input").disabled, true);
@@ -5892,7 +6085,7 @@ async function testRejectsMalformedAgentContractsWithoutLeakingPayload() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
   const input = document.byId.get("chat-input");
@@ -5992,7 +6185,7 @@ async function testRejectsLegacyOpenAgentEventShapes() {
       },
     };
 
-    const { document } = await runRenderer(bridge, desktopBridge);
+    const { document, ns } = await runRenderer(bridge, desktopBridge);
     walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
     await settle();
     const input = document.byId.get("chat-input");
@@ -6040,7 +6233,7 @@ async function testRejectsMalformedCatalogResult() {
     },
   };
 
-  const { document } = await runRenderer(bridge, desktopBridge);
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
   assert.match(document.byId.get("status-card").textContent, /Malformed agent skills catalog response/);
   assert.equal(document.byId.get("chat-input").disabled, true);
   assert.equal(document.byId.get("send-button").disabled, true);
@@ -6131,7 +6324,7 @@ async function testRecoverableTurnRequiresExplicitResumeAndHandlesBusy() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   assert.equal(resumeCalls, 0, "startup discovery must not replay automatically");
   assert.equal(startCalls, 0);
   assert.equal(document.byId.get("turn-recovery-card").hidden, true);
@@ -6149,7 +6342,7 @@ async function testRecoverableTurnRequiresExplicitResumeAndHandlesBusy() {
   await settle();
   assert.equal(resumeCalls, 1);
   assert.equal(startCalls, 0);
-  assert.equal(vm.runInContext("state.activeTurn", context), null);
+  assert.equal(ns.state.activeTurn, null);
   assert.equal(document.byId.get("turn-recovery-card").hidden, false);
   assert.equal(document.byId.get("turn-recovery-resume-button").disabled, false);
   assert.equal(document.byId.get("turn-recovery-resume-button").focused, true);
@@ -6162,7 +6355,7 @@ async function testRecoverableTurnRequiresExplicitResumeAndHandlesBusy() {
   document.byId.get("turn-recovery-resume-button").click();
   await settle();
   assert.equal(resumeCalls, 2);
-  assert.equal(vm.runInContext("state.activeTurn", context), null);
+  assert.equal(ns.state.activeTurn, null);
   assert.equal(document.byId.get("turn-recovery-card").hidden, false);
   assert.equal(document.byId.get("turn-recovery-resume-button").disabled, false);
   assert.equal(document.byId.get("turn-recovery-resume-button").focused, true);
@@ -6178,7 +6371,7 @@ async function testRecoverableTurnRequiresExplicitResumeAndHandlesBusy() {
   assert.equal(resumeCalls, 3);
   assert.equal(startCalls, 0);
   assert.equal(document.byId.get("turn-recovery-card").hidden, true);
-  assert.equal(vm.runInContext("state.recoverableTurns.length", context), 0);
+  assert.equal(ns.state.recoverableTurns.length, 0);
   assert.match(document.byId.get("turn-state").textContent, /^Done · \d+s$/);
   assert.match(document.byId.get("message-list").textContent, /Recovered final/);
   assert.doesNotMatch(document.byId.get("message-list").textContent, /must-not-render/);
@@ -6229,7 +6422,7 @@ async function testRecoverableTurnDismissIsExplicitAndIdempotent() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
   document.byId.get("turn-recovery-dismiss-button").click();
@@ -6238,7 +6431,7 @@ async function testRecoverableTurnDismissIsExplicitAndIdempotent() {
   assert.deepEqual(cancelCalls, [recoverable.turn_uuid]);
   assert.equal(resumeCalls, 0);
   assert.equal(document.byId.get("turn-recovery-card").hidden, true);
-  assert.equal(vm.runInContext("state.recoverableTurns.length", context), 0);
+  assert.equal(ns.state.recoverableTurns.length, 0);
   assert.equal(document.byId.get("chat-input").disabled, false);
   assert.equal(document.byId.get("chat-input").focused, true);
   assert.match(document.byId.get("status-card").textContent, /already dismissed/i);
@@ -6292,13 +6485,13 @@ async function testRecoverableErrorResultIsSanitized() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
   await settle();
   document.byId.get("turn-recovery-resume-button").click();
   await settle();
 
-  assert.equal(vm.runInContext("state.recoverableTurns.length", context), 0);
+  assert.equal(ns.state.recoverableTurns.length, 0);
   assert.equal(document.byId.get("turn-recovery-card").hidden, true);
   assert.match(document.byId.get("turn-state").textContent, /^Error( · \d+s)?$/);
   assert.match(document.byId.get("status-card").textContent, /PLUGIN_FAILED.*render/);
@@ -6344,8 +6537,8 @@ async function testMalformedRecoverableTurnDoesNotLeakOrRender() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
-  assert.equal(vm.runInContext("state.recoverableTurns.length", context), 0);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
+  assert.equal(ns.state.recoverableTurns.length, 0);
   assert.equal(document.byId.get("turn-recovery-card").hidden, true);
   assert.doesNotMatch(document.byId.get("thread-list").textContent, /Interrupted/);
   assert.doesNotMatch(document.byId.get("status-card").textContent, /private-recovery-uid/);
@@ -6403,7 +6596,7 @@ async function testCreatesThreadOnceAndFocusesComposer() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   assert.equal(document.byId.get("empty-title").textContent, "What should we make today?");
   assert.equal(document.byId.get("empty-new-thread-button").hidden, false);
   assert.equal(document.byId.get("empty-new-thread-button").disabled, false);
@@ -6435,8 +6628,8 @@ async function testCreatesThreadOnceAndFocusesComposer() {
   assert.equal(document.byId.get("thread-panel").hidden, false);
   assert.equal(document.byId.get("chat-input").focused, true);
   assert.equal(document.byId.get("chat-input").value, "");
-  assert.equal(vm.runInContext("state.selectedThreadUUID", context), newUUID);
-  assert.equal(vm.runInContext("state.createDraft", context), null);
+  assert.equal(ns.state.selectedThreadUUID, newUUID);
+  assert.equal(ns.state.createDraft, null);
 }
 
 async function testCreateRetriesKeepUUIDAndAcceptCurrentReplayRow() {
@@ -6513,7 +6706,7 @@ async function testCreateRetriesKeepUUIDAndAcceptCurrentReplayRow() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   document.byId.get("new-thread-button").click();
   document.byId.get("new-thread-name").value = "Original draft title";
   document.byId.get("new-thread-name").dispatch("input");
@@ -6523,13 +6716,13 @@ async function testCreateRetriesKeepUUIDAndAcceptCurrentReplayRow() {
   assert.equal(document.byId.get("new-thread-name").disabled, true);
   assert.match(document.byId.get("new-thread-error").textContent, /same identity/i);
   assert.doesNotMatch(document.byId.get("status-card").textContent, /create-private-secret/);
-  assert.equal(vm.runInContext("state.createDraft.threadUUID", context), newUUID);
+  assert.equal(ns.state.createDraft.threadUUID, newUUID);
   assert.equal(document.byId.get("refresh-button").disabled, true);
 
-  const firstDraft = vm.runInContext("({ ...state.createDraft })", context);
-  await vm.runInContext("refresh()", context);
+  const firstDraft = ({ ...ns.state.createDraft });
+  await ns.refresh();
   await settle();
-  assert.deepEqual(vm.runInContext("({ ...state.createDraft })", context), firstDraft);
+  assert.deepEqual(({ ...ns.state.createDraft }), firstDraft);
   assert.equal(document.byId.get("new-thread-form").hidden, false);
   assert.equal(authReads, 1);
   assert.equal(threadReads, 1);
@@ -6542,8 +6735,8 @@ async function testCreateRetriesKeepUUIDAndAcceptCurrentReplayRow() {
   );
   assert.ok(existingThreadButton);
   existingThreadButton.click();
-  assert.equal(vm.runInContext("state.selectedThreadUUID", context), null);
-  assert.deepEqual(vm.runInContext("({ ...state.createDraft })", context), firstDraft);
+  assert.equal(ns.state.selectedThreadUUID, null);
+  assert.deepEqual(({ ...ns.state.createDraft }), firstDraft);
   assert.equal(messageReads, 0);
   assert.match(document.byId.get("status-card").textContent, /retry or cancel.*before switching/i);
 
@@ -6551,13 +6744,13 @@ async function testCreateRetriesKeepUUIDAndAcceptCurrentReplayRow() {
   await settle();
   assert.equal(document.byId.get("new-thread-submit-button").textContent, "Retry sync");
   assert.match(document.byId.get("new-thread-error").textContent, /cloud thread is ready/i);
-  assert.equal(vm.runInContext("state.createDraft.threadUUID", context), newUUID);
+  assert.equal(ns.state.createDraft.threadUUID, newUUID);
   assert.equal(document.byId.get("refresh-button").disabled, true);
-  await vm.runInContext("refresh()", context);
+  await ns.refresh();
   await settle();
-  assert.equal(vm.runInContext("state.createDraft.threadUUID", context), newUUID);
-  assert.equal(vm.runInContext("state.createDraft.name", context), "Original draft title");
-  assert.equal(vm.runInContext("state.createDraft.agentMode", context), "ppt");
+  assert.equal(ns.state.createDraft.threadUUID, newUUID);
+  assert.equal(ns.state.createDraft.name, "Original draft title");
+  assert.equal(ns.state.createDraft.agentMode, "ppt");
   assert.equal(authReads, 1);
   assert.equal(threadReads, 1);
 
@@ -6574,7 +6767,7 @@ async function testCreateRetriesKeepUUIDAndAcceptCurrentReplayRow() {
   }
   assert.equal(document.byId.get("thread-title").textContent, "Current cloud title");
   assert.equal(document.byId.get("agent-mode").value, "ppt_revised");
-  assert.equal(vm.runInContext("state.selectedThreadUUID", context), newUUID);
+  assert.equal(ns.state.selectedThreadUUID, newUUID);
   assert.equal(messageReads, 1);
 }
 
@@ -6635,14 +6828,14 @@ async function testPermanentCreateFailuresDoNotOfferSameIdentityRetry() {
       },
     };
 
-    const { context, document } = await runRenderer(bridge, desktopBridge);
+    const { context, document, ns } = await runRenderer(bridge, desktopBridge);
     document.byId.get("new-thread-button").click();
     document.byId.get("new-thread-form").submit();
     await settle();
 
     assert.equal(createCalls, 1);
     assert.equal(document.byId.get("new-thread-form").hidden, false);
-    assert.equal(vm.runInContext("state.createDraft.retryable", context), false);
+    assert.equal(ns.state.createDraft.retryable, false);
     assert.match(document.byId.get("new-thread-error").textContent, testCase.feedback);
     assert.doesNotMatch(
       `${document.byId.get("new-thread-error").textContent} ${document.byId.get("status-card").textContent}`,
@@ -6656,18 +6849,18 @@ async function testPermanentCreateFailuresDoNotOfferSameIdentityRetry() {
     await settle();
     assert.equal(createCalls, 1);
 
-    await vm.runInContext("refresh()", context);
+    await ns.refresh();
     await settle();
     assert.equal(createCalls, 1);
     assert.equal(authReads, 1);
     assert.equal(threadReads, 1);
     assert.equal(document.byId.get("new-thread-form").hidden, false);
-    assert.equal(vm.runInContext("state.createDraft.retryable", context), false);
+    assert.equal(ns.state.createDraft.retryable, false);
     assert.match(document.byId.get("status-card").textContent, /cancel.*before refreshing/i);
 
     document.byId.get("new-thread-cancel-button").click();
     assert.equal(document.byId.get("new-thread-form").hidden, true);
-    assert.equal(vm.runInContext("state.createDraft", context), null);
+    assert.equal(ns.state.createDraft, null);
     assert.equal(document.byId.get("refresh-button").disabled, false);
   }
 }
@@ -6714,15 +6907,15 @@ async function testPausedCreateReplayRequiresExplicitCancel() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   document.byId.get("new-thread-button").click();
   document.byId.get("new-thread-form").submit();
   await settle();
 
   assert.equal(createCalls, 1);
-  assert.equal(vm.runInContext("state.selectedThreadUUID", context), null);
-  assert.equal(vm.runInContext("state.createDraft.threadUUID", context), newUUID);
-  assert.equal(vm.runInContext("state.createDraft.retryable", context), false);
+  assert.equal(ns.state.selectedThreadUUID, null);
+  assert.equal(ns.state.createDraft.threadUUID, newUUID);
+  assert.equal(ns.state.createDraft.retryable, false);
   assert.equal(document.byId.get("new-thread-form").hidden, false);
   assert.equal(document.byId.get("new-thread-submit-button").disabled, true);
   assert.equal(document.byId.get("refresh-button").disabled, true);
@@ -6735,7 +6928,7 @@ async function testPausedCreateReplayRequiresExplicitCancel() {
 
   document.byId.get("new-thread-cancel-button").click();
   assert.equal(document.byId.get("new-thread-form").hidden, true);
-  assert.equal(vm.runInContext("state.createDraft", context), null);
+  assert.equal(ns.state.createDraft, null);
   assert.equal(document.byId.get("refresh-button").disabled, false);
 }
 
@@ -6777,7 +6970,7 @@ async function testCreateEscapeFencesLateCompletion() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   document.byId.get("new-thread-button").click();
   document.byId.get("new-thread-form").submit();
   document.byId.get("new-thread-form").dispatch("keydown", { key: "Escape" });
@@ -6796,8 +6989,8 @@ async function testCreateEscapeFencesLateCompletion() {
   );
   await settle();
   assert.equal(createCalls, 1);
-  assert.equal(vm.runInContext("state.selectedThreadUUID", context), null);
-  assert.equal(vm.runInContext("state.createDraft", context), null);
+  assert.equal(ns.state.selectedThreadUUID, null);
+  assert.equal(ns.state.createDraft, null);
   assert.doesNotMatch(document.byId.get("thread-list").textContent, /Untitled presentation/);
 }
 
@@ -6841,7 +7034,7 @@ async function testCreateSessionChangedUsesUnifiedRecovery() {
     },
   };
 
-  const { context, document } = await runRenderer(bridge, desktopBridge);
+  const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   document.byId.get("new-thread-button").click();
   document.byId.get("new-thread-form").submit();
   await settle();
@@ -6852,7 +7045,7 @@ async function testCreateSessionChangedUsesUnifiedRecovery() {
   assert.equal(threadReads, 2);
   assert.equal(skillReads, 2);
   assert.equal(document.byId.get("new-thread-form").hidden, true);
-  assert.equal(vm.runInContext("state.createDraft", context), null);
+  assert.equal(ns.state.createDraft, null);
   assert.match(document.byId.get("status-card").textContent, /account changed/i);
   assert.match(document.byId.get("status-card").textContent, /creation was not replayed/i);
 }
@@ -6902,11 +7095,11 @@ async function testCreateRejectsForeignUUIDAndMode() {
       },
     };
 
-    const { context, document } = await runRenderer(bridge, desktopBridge);
+    const { context, document, ns } = await runRenderer(bridge, desktopBridge);
     document.byId.get("new-thread-button").click();
     document.byId.get("new-thread-form").submit();
     await settle();
-    assert.equal(vm.runInContext("state.selectedThreadUUID", context), null);
+    assert.equal(ns.state.selectedThreadUUID, null);
     assert.match(document.byId.get("new-thread-error").textContent, /same identity/i);
     assert.doesNotMatch(document.byId.get("thread-list").textContent, /Foreign/);
   }
@@ -6919,7 +7112,7 @@ async function testCreateRejectsForeignUUIDAndMode() {
 // what survives a relaunch.
 async function testAppearanceIsThreeStateAndPersisted() {
   const storage = new FakeStorage();
-  const { document } = await runRenderer(undefined, undefined, { storage });
+  const { document, ns } = await runRenderer(undefined, undefined, { storage });
 
   // Default is "follow the system", expressed as the ABSENCE of the attribute
   // rather than data-theme="system": the media query already is the system
@@ -7011,8 +7204,8 @@ async function testAppearanceIsThreeStateAndPersisted() {
 
 // --- Syntax highlighting -----------------------------------------------------
 async function testCodeTokenizerClassifiesTheLanguagesWeShip() {
-  const { context } = await runRenderer(undefined);
-  const tokenize = (code, language) => context.tokenizeCode(code, language);
+  const { context, ns } = await runRenderer(undefined);
+  const tokenize = (code, language) => ns.tokenizeCode(code, language);
 
   // Every case asserts two things: the classification, and that the runs
   // concatenate back to the input character for character. The second is what
@@ -7095,16 +7288,10 @@ async function testCodeTokenizerClassifiesTheLanguagesWeShip() {
 }
 
 async function testCodeBlocksArePaintedWithoutMarkup() {
-  const { context, document } = await runRenderer(undefined);
+  const { context, document, ns } = await runRenderer(undefined);
   const render = (markdown) => {
-    const container = vm.runInContext(
-      `(() => {
-        const el = document.createElement("div");
-        renderMarkdownInto(el, ${JSON.stringify(markdown)});
-        return el;
-      })()`,
-      context,
-    );
+    const container = document.createElement("div");
+    ns.renderMarkdownInto(container, markdown);
     return container;
   };
   const tokenSpans = (root) =>
@@ -7154,7 +7341,271 @@ async function testCodeBlocksArePaintedWithoutMarkup() {
   assert.equal(tokenSpans(tallContainer).length, 0, "the line bound applies on its own");
 }
 
+
+// --- Transcript windowing ----------------------------------------------------
+//
+// Opening a long conversation must not build a thousand articles. What follows
+// pins the window (how much is mounted), the control (how the rest is reached),
+// the scroll anchor (where the reader ends up after reaching it), and the two
+// things the window could plausibly have broken: the in-place post-turn
+// reconcile, and "jump to latest".
+
+// A thread whose history is `count` exchanges long, newest last.
+function longThreadBridge(count, threadUUID = "long-thread") {
+  const items = [];
+  for (let i = 0; i < count; i += 1) {
+    items.push(message(`m-${i}`, `Prompt ${i}`, `Answer ${i}`));
+  }
+  return {
+    items,
+    bridge: {
+      async fetch(pathname) {
+        if (pathname === "/auth/status") {
+          return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+        }
+        if (pathname === "/agent/threads?include_paused=false") {
+          return response({ items: [thread(threadUUID, "Long thread")] });
+        }
+        if (pathname === `/agent/threads/${threadUUID}/messages`) {
+          return response({ items });
+        }
+        throw new Error(`unexpected fetch path ${pathname}`);
+      },
+    },
+  };
+}
+
+const messageArticles = (document) =>
+  walk(document.byId.get("message-list"), (node) => node.classList?.contains("message"));
+const earlierButton = (document) =>
+  walk(document.byId.get("message-list"), (node) =>
+    node.classList?.contains("transcript-earlier"),
+  )[0] ?? null;
+
+async function openLongThread(count) {
+  const { bridge } = longThreadBridge(count);
+  const { document, ns } = await runRenderer(bridge);
+  const threadButton = walk(
+    document.byId.get("thread-list"),
+    (node) => node.classList?.contains("thread-button"),
+  )[0];
+  threadButton.click();
+  await settle();
+  return { document, ns };
+}
+
+async function testLongTranscriptMountsAWindowNotTheWholeHistory() {
+  const { document, ns } = await openLongThread(120);
+  const window = ns.TRANSCRIPT_WINDOW_TURNS;
+  assert.ok(window > 0 && window < 120, "the fixture must be longer than one window");
+
+  // Two articles per exchange, and only for the window.
+  assert.equal(
+    messageArticles(document).length,
+    window * 2,
+    "opening a long thread must mount one window, not the whole history",
+  );
+  // Which exchanges are mounted is pinned by position rather than by
+  // searching the text: "does the list mention Prompt 0" is the assertion that
+  // silently stops meaning anything the day a prompt reads "Prompt 01".
+  const articles = messageArticles(document);
+  assert.ok(articles[0].textContent.includes("Prompt 80"), "the window starts at the 41st-newest");
+  assert.ok(
+    articles[articles.length - 1].textContent.includes("Answer 119"),
+    "the reader lands on the newest exchange, as before",
+  );
+  // And the oldest is genuinely absent from the DOM, not merely hidden — the
+  // whole point is that its nodes were never built.
+  assert.ok(
+    !articles.some((node) => node.textContent.includes("Prompt 0Edit")),
+    "the oldest exchange must have no nodes at all",
+  );
+
+  const control = earlierButton(document);
+  assert.ok(control, "a truncated transcript must offer a way back");
+  assert.equal(control.textContent, `Show ${120 - window} earlier exchanges`);
+  assert.equal(
+    document.byId.get("message-list").children[0],
+    control,
+    "the control belongs above the oldest mounted message",
+  );
+}
+
+async function testShortTranscriptHasNoWindowControl() {
+  const { document, ns } = await openLongThread(3);
+  assert.equal(messageArticles(document).length, 6);
+  assert.equal(earlierButton(document), null, "a short thread must not grow a control");
+  assert.match(document.byId.get("message-list").textContent, /Prompt 0/);
+}
+
+async function testShowEarlierPrependsWithoutRebuildingWhatIsMounted() {
+  const { document, ns } = await openLongThread(120);
+  const window = ns.TRANSCRIPT_WINDOW_TURNS;
+  const list = document.byId.get("message-list");
+
+  // Node identity is the assertion that matters: a repaint would satisfy every
+  // count while destroying a streaming answer, an open approval card and the
+  // reader's place in the page.
+  const before = messageArticles(document);
+  const newestBefore = before[before.length - 1];
+  const oldestMountedBefore = before[0];
+
+  earlierButton(document).click();
+  await settle();
+
+  const after = messageArticles(document);
+  assert.equal(after.length, window * 4, "one more window's worth is mounted");
+  assert.equal(after[after.length - 1], newestBefore, "the newest node was not rebuilt");
+  assert.equal(
+    after[window * 2],
+    oldestMountedBefore,
+    "the previously mounted rows kept their nodes and their order",
+  );
+  assert.ok(
+    after[0].textContent.includes("Prompt 40"),
+    "the window now starts one window further back",
+  );
+  void list;
+  assert.equal(earlierButton(document).textContent, `Show ${120 - window * 2} earlier exchanges`);
+}
+
+async function testShowEarlierHoldsTheScrollAnchorAndRetiresItselfAtTheTop() {
+  const { document, ns } = await openLongThread(100);
+  const viewport = document.byId.get("message-viewport");
+  const window = ns.TRANSCRIPT_WINDOW_TURNS;
+
+  // Put the reader somewhere in the middle, then grow the document above them.
+  viewport.scrollTop = 500;
+  const heightBefore = viewport.scrollHeight;
+  earlierButton(document).click();
+  await settle();
+  const grew = viewport.scrollHeight - heightBefore;
+  assert.ok(grew > 0, "mounting earlier messages must make the document taller");
+  assert.equal(
+    viewport.scrollTop,
+    500 + grew,
+    "the reader must stay on the same message: scroll moves by exactly what appeared above",
+  );
+
+  // Walk to the top. The control removes itself when there is nothing left
+  // behind it, rather than sitting there claiming zero.
+  while (earlierButton(document)) {
+    earlierButton(document).click();
+    await settle();
+  }
+  const all = messageArticles(document);
+  assert.equal(all.length, 200, "everything is mounted at the top");
+  assert.ok(all[0].textContent.includes("Prompt 0Edit"), "the very first exchange is mounted");
+  assert.equal(earlierButton(document), null);
+  void window;
+}
+
+
+// The window and the in-place reconcile have to work together, and the way
+// they could fail is specific: the reconcile refuses unless the transcript's
+// row count matches the snapshot, and in a windowed transcript most of the
+// snapshot is deliberately not mounted. Get that wrong and every long
+// conversation silently falls back to the full repaint — the exact cost the
+// window exists to remove, now paid on every single turn instead of once.
+async function testCompletedTurnReconcilesInPlaceInsideTheWindow() {
+  const history = [];
+  for (let i = 0; i < 100; i += 1) history.push(message(`m-${i}`, `Prompt ${i}`, `Answer ${i}`));
+  let messageReads = 0;
+  let streamCallback;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=false") {
+        return response({ items: [thread("thread-long", "Long thread", history.length)] });
+      }
+      if (pathname === "/agent/threads/thread-long/messages") {
+        messageReads += 1;
+        return response({
+          items:
+            messageReads === 1
+              ? history
+              : [...history, message("m-new", "One more", "One more answer")],
+        });
+      }
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() {
+        throw new Error("uploadThreadFile is not exercised by this test");
+      },
+      async listSkills() {
+        return typedSuccess(pptCatalog());
+      },
+      startTurn(input, callback) {
+        streamCallback = callback;
+        return { turnID: "turn-long" };
+      },
+      async cancelTurn(turnID) {
+        return { turnID, canceled: true };
+      },
+    },
+  };
+
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[0].click();
+  await settle();
+
+  const window = ns.TRANSCRIPT_WINDOW_TURNS;
+  assert.equal(messageArticles(document).length, window * 2, "the long thread opened windowed");
+  const control = earlierButton(document);
+  assert.ok(control, "and with a control");
+  // A node from the middle of the window. If the reconcile falls back to the
+  // full repaint, this node is replaced and the identity check below fails —
+  // which is the whole point of the assertion.
+  const survivor = messageArticles(document)[0];
+
+  const chatInput = document.byId.get("chat-input");
+  chatInput.value = "One more";
+  chatInput.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  streamCallback({ type: "text_delta", turnID: "turn-long", delta: "One more answer" });
+  await settle();
+  streamCallback({
+    type: "done",
+    turnID: "turn-long",
+    result: { code: "OK", subtype: "", is_error: false },
+  });
+  await settle();
+  await settle();
+
+  const after = messageArticles(document);
+  assert.equal(after.length, window * 2 + 2, "the new exchange joined the window");
+  assert.equal(after[0], survivor, "the reconcile stayed in place: no repaint of the window");
+  assert.equal(earlierButton(document), control, "and the control was not rebuilt either");
+  assert.ok(
+    after[after.length - 1].textContent.includes("One more answer"),
+    "the streamed answer is the transcript's last row",
+  );
+
+  // The bookkeeping has to keep up too, or the NEXT turn counts against a
+  // conversation one exchange shorter than what is on screen and falls back.
+  earlierButton(document).click();
+  await settle();
+  assert.equal(
+    messageArticles(document).length,
+    window * 4 + 2,
+    "showing earlier still lines up with the snapshot after an in-place reconcile",
+  );
+}
+
 await testMissingBridge();
+await testLongTranscriptMountsAWindowNotTheWholeHistory();
+await testShortTranscriptHasNoWindowControl();
+await testShowEarlierPrependsWithoutRebuildingWhatIsMounted();
+await testShowEarlierHoldsTheScrollAnchorAndRetiresItselfAtTheTop();
+await testCompletedTurnReconcilesInPlaceInsideTheWindow();
+await testFencesInvalidateOnBumpAndCascadeFromSession();
 await testAuthenticatedCacheRead();
 await testUnauthenticatedLogin();
 await testResumesAndCancelsPasswordLogin();

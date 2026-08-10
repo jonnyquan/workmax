@@ -124,7 +124,34 @@ expect_fail "rejects non-relative CSS reference" "$bad_css_ref_fixture" "index.h
 bad_js_ref_fixture="$tmp_dir/bad-js-ref"
 make_fixture "$bad_js_ref_fixture"
 perl -0pi -e 's/src="\.\/renderer\.js"/src="renderer.js"/' "$bad_js_ref_fixture/index.html"
-expect_fail "rejects non-relative JS reference" "$bad_js_ref_fixture" "index.html must reference ./renderer.js"
+expect_fail "rejects non-relative JS reference" "$bad_js_ref_fixture" "index.html must load ./renderer.js as a module"
+
+# The renderer is a module graph now, and the two ways to break that are both
+# silent in review and total at runtime: dropping type="module" (the first
+# import is a syntax error) and adding it to a bridge script (which defers the
+# bridge past the renderer that expects it to be installed already).
+classic_entry_fixture="$tmp_dir/classic-entry"
+make_fixture "$classic_entry_fixture"
+perl -0pi -e 's/<script type="module" src="\.\/renderer\.js">/<script src=".\/renderer.js">/' \
+  "$classic_entry_fixture/index.html"
+expect_fail "rejects a renderer entry loaded as a classic script" "$classic_entry_fixture" \
+  "index.html must load ./renderer.js as a module"
+
+module_shim_fixture="$tmp_dir/module-shim"
+make_fixture "$module_shim_fixture"
+perl -0pi -e 's/<script src="\.\/shim\.js">/<script type="module" src=".\/shim.js">/' \
+  "$module_shim_fixture/index.html"
+expect_fail "rejects a bridge script promoted to a module" "$module_shim_fixture" \
+  "index.html must load ./shim.js as a classic script"
+
+# A module that is imported but not on the allowlist would be a 404 during
+# link — a blank window, not a missing feature — so the allowlist has to fail
+# on a file it has never heard of even though the file is real and imported.
+stray_module_fixture="$tmp_dir/stray-module"
+make_fixture "$stray_module_fixture"
+printf 'export const stray = 1;\n' > "$stray_module_fixture/stray.js"
+expect_fail "rejects a renderer module nobody put on the allowlist" "$stray_module_fixture" \
+  "bundled renderer source contains unexpected files"
 
 secret_fixture="$tmp_dir/secret"
 make_fixture "$secret_fixture"

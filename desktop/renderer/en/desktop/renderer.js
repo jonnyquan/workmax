@@ -1,3 +1,158 @@
+// The renderer's entry module: shared state, the boot sequence, and the
+// wiring that connects the DOM to the modules that own each surface.
+//
+// Loaded as `<script type="module">`, which the UI origin's CSP allows under
+// script-src 'self' — verified inside a real WKWebView against the production
+// header, not assumed. Everything below either belongs to no one surface
+// (state, the bridge accessors, the session/turn lifecycle, login, refresh) or
+// is the listener that hands an event to the module that does own it.
+//
+// The other modules import from here freely and this file imports from them:
+// the cycles are real and they are fine, because every cross-module name is
+// either a hoisted function declaration or read inside a callback that runs
+// long after every module has been evaluated. The one rule that is NOT
+// negotiable is that no module may assign to a binding it imported — see
+// fence.js for how the counters that used to do exactly that are shared now.
+import { fences } from "./fence.js";
+import {
+  agentMode,
+  attachButton,
+  chatForm,
+  chatInput,
+  emptyNewThreadButton,
+  emptyState,
+  exportThreadButton,
+  fileInput,
+  localAccountAvatar,
+  localAccountCreateForm,
+  localAccountListEl,
+  localAccountNameEl,
+  localAccountNameInput,
+  localAccountPanel,
+  localAccountRow,
+  loginButton,
+  loginCancelButton,
+  loginEmail,
+  loginForm,
+  loginPassword,
+  loginSubmitButton,
+  messageList,
+  modelAPIKey,
+  modelBaseURL,
+  modelClearAPIKey,
+  modelID,
+  modelKeyStatus,
+  modelLocalFields,
+  modelPreferredRoute,
+  modelProtocol,
+  modelSettingsCancelButton,
+  modelSettingsError,
+  modelSettingsForm,
+  modelSettingsSubmitButton,
+  modelsButton,
+  newThreadButton,
+  newThreadCancelButton,
+  newThreadForm,
+  newThreadMode,
+  newThreadName,
+  newThreadSubmitButton,
+  onboardingLocal,
+  onboardingSignin,
+  openWorkspaceButton,
+  quickSwitcher,
+  refreshButton,
+  renameThreadButton,
+  renameThreadCancel,
+  renameThreadForm,
+  runtimeLabel,
+  statusCard,
+  stopButton,
+  threadPanel,
+  threadSearchInput,
+  threadTitle,
+  turnRecoveryDismissButton,
+  turnRecoveryResumeButton,
+} from "./dom.js";
+import {
+  AUTH_POLL_INTERVAL_MS,
+  AUTH_POLL_TIMEOUT_MS,
+  LOGIN_ERROR_MESSAGES,
+  MAX_CHAT_TEXT_BYTES,
+  MAX_THREAD_NAME_BYTES,
+  isRecord,
+  isSessionChangedPayload,
+  isValidChatText,
+  parseAgentModes,
+  parseAuthStatus,
+  parseDesktopBridgeResult,
+  parseLocalAccounts,
+  parseLoginTransactionResult,
+  parseModelRouteSettings,
+  parseRecoverableTurns,
+  parseSkillsCatalog,
+  parseThreads,
+  parseTurnCancelResult,
+  parseTurnOpenResult,
+  sanitizeErrorMessage,
+  utf8ByteLength,
+  validLoginCredential,
+  validLoginEmail,
+} from "./protocol.js";
+import {
+  clearPendingIndicator,
+  drainStreamBatch,
+  finalizeStreamedAssistant,
+  handleParsedTurnEvent,
+  handleRawTurnEvent,
+  parseAgentTurnEvent,
+} from "./events.js";
+import {
+  appendOptimisticTurn,
+  appendRecoveredAssistant,
+  attachMessageActions,
+  failTurnOpen,
+  formatTurnDuration,
+  isCurrentSelection,
+  loadMessagesForSelection,
+  selectionContext,
+  setTurnState,
+  stashComposerDraft,
+  updateSelectedThreadHeading,
+} from "./transcript.js";
+import {
+  attachDroppedFiles,
+  buildStarterCards,
+  canUseAgent,
+  cancelNewThreadDraft,
+  hasAttemptedCreateDraft,
+  isLocalOnlySession,
+  openNewThreadForm,
+  removeRecoverableTurn,
+  renderAttachments,
+  renderEmptyState,
+  selectedRecoverableTurn,
+  setCreateFeedback,
+  submitNewThread,
+  updateComposerState,
+  updateNewThreadState,
+  updateRecoveryState,
+  uploadThreadFile,
+} from "./composer.js";
+import {
+  DELETE_ARM_MS,
+  closeQuickSwitcher,
+  openQuickSwitcher,
+  renderThreads,
+  scheduleContentSearch,
+} from "./threads.js";
+import {
+  attachLastTurnLog,
+  contextState,
+  loadWorkspaceDeliverables,
+  renderTaskContext,
+  settleTurnNarration,
+} from "./context-panel.js";
+
 // --- Appearance --------------------------------------------------------------
 //
 // Three states: follow the system (the default), force light, force dark. The
@@ -18,18 +173,18 @@
 // accounts, drafts, tokens) stays in SQLite behind the sidecar or in memory, on
 // purpose, and none of it should follow this precedent.
 const THEME_STORAGE_KEY = "workmax.desktop.appearance";
-const THEME_CHOICES = ["system", "light", "dark"];
-const THEME_LABELS = {
+export const THEME_CHOICES = ["system", "light", "dark"];
+export const THEME_LABELS = {
   system: "match system",
   light: "light",
   dark: "dark",
 };
-const THEME_HINTS = {
+export const THEME_HINTS = {
   system: "Follow the desktop appearance",
   light: "Always light, whatever the system does",
   dark: "Always dark, whatever the system does",
 };
-let themeChoice = "system";
+export let themeChoice = "system";
 
 // Absent in the behaviour suite's bare VM, and a locked-down webview can throw
 // on the property itself rather than return null. Either way the app runs; it
@@ -63,7 +218,7 @@ function applyTheme(choice) {
   else root.setAttribute("data-theme", themeChoice);
 }
 
-function setTheme(choice) {
+export function setTheme(choice) {
   applyTheme(choice);
   try {
     themeStore()?.setItem(THEME_STORAGE_KEY, themeChoice);
@@ -74,7 +229,7 @@ function setTheme(choice) {
 
 applyTheme(readStoredTheme());
 
-const state = {
+export const state = {
   auth: null,
   threads: [],
   selectedThreadUUID: null,
@@ -87,16 +242,11 @@ const state = {
   createAvailable: false,
   createFormOpen: false,
   creatingThread: false,
-  createGeneration: 0,
   createDraft: null,
-  sessionGeneration: 0,
-  selectionGeneration: 0,
-  turnGeneration: 0,
   activeTurn: null,
   cancelConfirmationTurnID: null,
   recoverableTurns: [],
   recoveryLoading: false,
-  recoveryGeneration: 0,
   resumingTurn: false,
   dismissingRecovery: false,
   recoveryFeedback: "",
@@ -135,147 +285,16 @@ const state = {
   toolLoop: false,
 };
 
-const defaultLocalAccountLabel = "Local";
-const AUTH_POLL_INTERVAL_MS = 1000;
-const AUTH_POLL_TIMEOUT_MS = 5 * 60 * 1000;
-const AUTH_STATES = new Set(["authenticated", "unauthenticated", "expired"]);
-const MESSAGE_STREAMING_STATES = new Set(["complete", "partial", "streaming"]);
-const LOGIN_TRANSACTION_STATES = new Set([
-  "idle",
-  "awaiting_password",
-  "submitting",
-  "authenticated",
-]);
-const LOGIN_TRANSACTION_ERRORS = new Set([
-  "busy",
-  "invalid_request",
-  "invalid_credentials",
-  "expired",
-  "unavailable",
-  "canceled",
-]);
-const LOGIN_ERROR_MESSAGES = Object.freeze({
-  busy: "Another sign-in action is already in progress. Check the current sign-in state.",
-  invalid_request: "The sign-in request was rejected. Check your details and try again.",
-  invalid_credentials: "The email or password is incorrect. Try again.",
-  expired: "This sign-in session expired. Start a new sign-in.",
-  unavailable: "The sign-in service is temporarily unavailable. Try again shortly.",
-  canceled: "Sign-in was canceled.",
-});
-const PROXY_ERROR_KINDS = new Set([
-  "network_unavailable",
-  "auth_required",
-  "auth_expired",
-  "service_unavailable",
-  "quota_exceeded",
-  "rate_limited",
-  "payload_too_large",
-  "bad_request",
-  "session_changed",
-  "unknown",
-]);
-const AGENT_EVENT_TYPES = new Set([
-  "text_delta",
-  "reasoning_delta",
-  "retrieval",
-  "tool_use",
-  "tool_denied",
-  "approval_request",
-  "unknown",
-  "done",
-  "proxy_error",
-  "canceled",
-  "protocol_error",
-]);
-// Bounds for the retrieval provenance list. The shim already applies its own;
-// these are not a duplicate of that check but the same check at the other end
-// of the bridge, which is the boundary this file is responsible for. The
-// renderer trusts no bridge — that is why parseAgentTurnEvent exists at all.
-const MAX_RETRIEVED_SOURCES = 12;
-const MAX_RETRIEVED_LABEL_CHARS = 120;
-const MAX_RETRIEVED_SNIPPET_CHARS = 400;
-const RETRIEVED_SOURCE_KINDS = new Set(["file", "conversation"]);
-const MAX_CHAT_TEXT_BYTES = 65_536;
-const MAX_THREAD_NAME_BYTES = 200;
-const MAX_EVENT_TEXT_BYTES = 262_144;
-const MAX_TURN_TEXT_BYTES = 4 * 1024 * 1024;
-const CANONICAL_V4_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-let loginOperationGeneration = 0;
+export const defaultLocalAccountLabel = "Local";
 
-const statusCard = document.querySelector("#status-card");
-const localAccountRow = document.querySelector("#local-account-row");
-const localAccountAvatar = document.querySelector("#local-account-avatar");
-const localAccountNameEl = document.querySelector("#local-account-name");
-const localAccountPanel = document.querySelector("#local-account-panel");
-const localAccountListEl = document.querySelector("#local-account-list");
-const localAccountCreateForm = document.querySelector("#local-account-create-form");
-const localAccountNameInput = document.querySelector("#local-account-name-input");
-const runtimeLabel = document.querySelector("#runtime-label");
-const refreshButton = document.querySelector("#refresh-button");
-const modelsButton = document.querySelector("#models-button");
-const modelSettingsForm = document.querySelector("#model-settings-form");
-const modelPreferredRoute = document.querySelector("#model-preferred-route");
-const modelLocalFields = document.querySelector("#model-local-fields");
-const modelProtocol = document.querySelector("#model-protocol");
-const modelBaseURL = document.querySelector("#model-base-url");
-const modelID = document.querySelector("#model-id");
-const modelAPIKey = document.querySelector("#model-api-key");
-const modelClearAPIKey = document.querySelector("#model-clear-api-key");
-const modelKeyStatus = document.querySelector("#model-key-status");
-const modelSettingsError = document.querySelector("#model-settings-error");
-const modelSettingsSubmitButton = document.querySelector("#model-settings-submit-button");
-const modelSettingsCancelButton = document.querySelector("#model-settings-cancel-button");
-const loginButton = document.querySelector("#login-button");
-const loginForm = document.querySelector("#login-form");
-const loginEmail = document.querySelector("#login-email");
-const loginPassword = document.querySelector("#login-password");
-const loginSubmitButton = document.querySelector("#login-submit-button");
-const loginCancelButton = document.querySelector("#login-cancel-button");
-const newThreadButton = document.querySelector("#new-thread-button");
-const newThreadForm = document.querySelector("#new-thread-form");
-const newThreadName = document.querySelector("#new-thread-name");
-const newThreadMode = document.querySelector("#new-thread-mode");
-const newThreadError = document.querySelector("#new-thread-error");
-const newThreadSubmitButton = document.querySelector("#new-thread-submit-button");
-const newThreadCancelButton = document.querySelector("#new-thread-cancel-button");
-const threadList = document.querySelector("#thread-list");
-const emptyState = document.querySelector("#empty-state");
-const emptyTitle = document.querySelector("#empty-title");
-const emptyDescription = document.querySelector("#empty-description");
-const emptyNewThreadButton = document.querySelector("#empty-new-thread-button");
-const threadPanel = document.querySelector("#thread-panel");
-const threadTitle = document.querySelector("#thread-title");
-const threadMeta = document.querySelector("#thread-meta");
-const messageList = document.querySelector("#message-list");
-const messageViewport = document.querySelector("#message-viewport");
-const turnRecoveryCard = document.querySelector("#turn-recovery-card");
-const turnRecoveryDescription = document.querySelector("#turn-recovery-description");
-const turnRecoveryPrompt = document.querySelector("#turn-recovery-prompt");
-const turnRecoveryFeedback = document.querySelector("#turn-recovery-feedback");
-const turnRecoveryResumeButton = document.querySelector("#turn-recovery-resume-button");
-const turnRecoveryDismissButton = document.querySelector("#turn-recovery-dismiss-button");
-const chatForm = document.querySelector("#chat-form");
-const agentMode = document.querySelector("#agent-mode");
-const composerStatus = document.querySelector("#composer-status");
-const chatInput = document.querySelector("#chat-input");
-const stopButton = document.querySelector("#stop-button");
-const sendButton = document.querySelector("#send-button");
-const turnState = document.querySelector("#turn-state");
-const fileInput = document.querySelector("#file-input");
-const attachButton = document.querySelector("#attach-button");
-const attachmentChips = document.querySelector("#attachment-chips");
-// Cached once: scrollMessagesToEnd runs on every streamed frame, and a
-// querySelector per frame is a forced walk the stream never needed.
-const jumpLatestButton = document.querySelector("#jump-latest");
-
-class SessionChangedError extends Error {
+export class SessionChangedError extends Error {
   constructor() {
     super("The authenticated session changed");
     this.name = "SessionChangedError";
   }
 }
 
-class ThreadCreateFailure extends Error {
+export class ThreadCreateFailure extends Error {
   constructor(feedback, statusMessage, retryable) {
     super("Thread creation failed");
     this.name = "ThreadCreateFailure";
@@ -285,713 +304,9 @@ class ThreadCreateFailure extends Error {
   }
 }
 
-function setStatus(message, kind = "default") {
+export function setStatus(message, kind = "default") {
   statusCard.textContent = sanitizeErrorMessage(message);
   statusCard.classList.toggle("error", kind === "error");
-}
-
-function sanitizeErrorMessage(value) {
-  const redacted = String(value)
-    .replace(/(https?:\/\/)[^/\s:@]+(?::[^/\s@]*)?@/gi, "$1[REDACTED]@")
-    .replace(/(X-Local-Token[:=]\s*)\S+/gi, "$1[REDACTED]")
-    .replace(/(Authorization:\s*(?:Bearer|Basic)\s+)\S+/gi, "$1[REDACTED]")
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
-    .replace(/\bBasic\s+[A-Za-z0-9._~+/=-]+/gi, "Basic [REDACTED]")
-    .replace(/((?:access|refresh|id)_token["']?\s*[:=]\s*["']?)[^"',&\s]+/gi, "$1[REDACTED]")
-    .replace(/(api[_-]?key["']?\s*[:=]\s*["']?)[^"',&\s]+/gi, "$1[REDACTED]")
-    .replace(/(apikey["']?\s*[:=]\s*["']?)[^"',&\s]+/gi, "$1[REDACTED]")
-    .replace(/(client_secret["']?\s*[:=]\s*["']?)[^"',&\s]+/gi, "$1[REDACTED]")
-    .replace(/(password["']?\s*[:=]\s*["']?)[^"',&\s]+/gi, "$1[REDACTED]")
-    .replace(/(secret["']?\s*[:=]\s*["']?)[^"',&\s]+/gi, "$1[REDACTED]");
-  if (redacted.length <= 500) return redacted;
-  return `${redacted.slice(0, 500)}...`;
-}
-
-function formatDate(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
-}
-
-function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function optionalString(value) {
-  return typeof value === "string" ? value : "";
-}
-
-function optionalCount(value) {
-  if (!isNonNegativeInteger(value)) {
-    throw new Error("Malformed /agent/threads response");
-  }
-  return value;
-}
-
-function parseAuthStatus(value) {
-  if (
-    !isRecord(value) ||
-    typeof value.state !== "string" ||
-    !AUTH_STATES.has(value.state) ||
-    typeof value.updated_at !== "string" ||
-    (value.user_id !== undefined && typeof value.user_id !== "string") ||
-    (value.tier !== undefined && typeof value.tier !== "string")
-  ) {
-    throw new Error("Malformed /auth/status response");
-  }
-  return {
-    state: value.state,
-    tier: value.tier ?? "",
-    updated_at: value.updated_at,
-  };
-}
-
-function parseLoginTransactionResult(value) {
-  if (!isRecord(value)) {
-    throw new Error("Malformed Desktop login transaction response");
-  }
-  const keys = Object.keys(value).sort();
-  if (
-    typeof value.state === "string" &&
-    LOGIN_TRANSACTION_STATES.has(value.state) &&
-    keys.length === 1 &&
-    keys[0] === "state"
-  ) {
-    return { state: value.state };
-  }
-  if (
-    typeof value.state === "string" &&
-    LOGIN_TRANSACTION_STATES.has(value.state) &&
-    typeof value.error === "string" &&
-    LOGIN_TRANSACTION_ERRORS.has(value.error) &&
-    keys.length === 2 &&
-    keys[0] === "error" &&
-    keys[1] === "state"
-  ) {
-    return { state: value.state, error: value.error };
-  }
-  throw new Error("Malformed Desktop login transaction response");
-}
-
-function parseThread(value) {
-  if (
-    !isRecord(value) ||
-    !isSafeLocalHistoryUUID(value.uuid) ||
-    !isParseableTimestamp(value.updated_at)
-  ) {
-    throw new Error("Malformed /agent/threads response");
-  }
-  return {
-    uuid: value.uuid,
-    name: optionalString(value.name),
-    agent_mode: optionalString(value.agent_mode),
-    message_count: optionalCount(value.message_count),
-    updated_at: optionalString(value.updated_at),
-    // 'local' marks a thread that exists only on this machine — the one kind
-    // the delete affordance is allowed to appear on. Absent or unknown values
-    // are treated as synced, which errs on the side of not offering deletion.
-    cloud_sync_state: optionalString(value.cloud_sync_state),
-    // A local view preference; anything but literal true means unpinned, so
-    // an older sidecar that omits the field degrades to the old behaviour.
-    pinned: value.pinned === true,
-  };
-}
-
-function parseThreads(value) {
-  if (!isRecord(value) || !Array.isArray(value.items)) {
-    throw new Error("Malformed /agent/threads response");
-  }
-  return value.items.map(parseThread);
-}
-
-function parseCreatedThread(value, expectedDraft, created) {
-  if (
-    !hasExactKeys(value, [
-      "uuid",
-      "name",
-      "agent_mode",
-      "message_count",
-      "updated_at",
-      "cloud_sync_state",
-    ]) ||
-    value.uuid !== expectedDraft.threadUUID ||
-    (created && value.name !== expectedDraft.name) ||
-    (created && value.agent_mode !== expectedDraft.agentMode) ||
-    !isValidThreadName(value.name) ||
-    !isSafeAgentMode(value.agent_mode) ||
-    !state.allowedModes.includes(value.agent_mode) ||
-    !isNonNegativeInteger(value.message_count) ||
-    !isParseableTimestamp(value.updated_at) ||
-    // "local" = the signed-out local create branch (L3d). Two other copies
-    // of this set (both in the bridge lib) lagged the same way and silently
-    // broke every local create — keep all three in step.
-    (value.cloud_sync_state !== "synced" &&
-      value.cloud_sync_state !== "paused" &&
-      value.cloud_sync_state !== "local")
-  ) {
-    throw new Error("Malformed agent create thread result");
-  }
-  return {
-    uuid: value.uuid,
-    name: value.name,
-    agent_mode: value.agent_mode,
-    message_count: value.message_count,
-    updated_at: value.updated_at,
-    cloud_sync_state: value.cloud_sync_state,
-  };
-}
-
-function parseCreateThreadData(value, status, expectedDraft) {
-  if (
-    hasExactKeys(value, ["state", "created", "thread"]) &&
-    value.state === "ready" &&
-    typeof value.created === "boolean" &&
-    status === (value.created ? 201 : 200)
-  ) {
-    return {
-      state: "ready",
-      created: value.created,
-      thread: parseCreatedThread(value.thread, expectedDraft, value.created),
-    };
-  }
-  if (
-    status === 202 &&
-    hasExactKeys(value, ["state", "thread_uuid"]) &&
-    value.state === "pending_local_sync" &&
-    value.thread_uuid === expectedDraft.threadUUID
-  ) {
-    return {
-      state: "pending_local_sync",
-      threadUUID: value.thread_uuid,
-    };
-  }
-  throw new Error("Malformed agent create thread result");
-}
-
-function parseMessage(value) {
-  if (
-    !isRecord(value) ||
-    !isSafeLocalHistoryUUID(value.uuid) ||
-    typeof value.streaming_state !== "string" ||
-    !MESSAGE_STREAMING_STATES.has(value.streaming_state) ||
-    !isParseableTimestamp(value.created_at) ||
-    !isParseableTimestamp(value.updated_at)
-  ) {
-    throw new Error("Malformed /agent/threads/:uuid/messages response");
-  }
-  return {
-    user_text: optionalString(value.user_text),
-    ai_text: optionalString(value.ai_text),
-    streaming_state: value.streaming_state,
-    // Validated above; carried so the transcript can date its rows.
-    created_at: optionalString(value.created_at),
-    updated_at: optionalString(value.updated_at),
-  };
-}
-
-function parseMessages(value) {
-  if (!isRecord(value) || !Array.isArray(value.items)) {
-    throw new Error("Malformed /agent/threads/:uuid/messages response");
-  }
-  return value.items.map(parseMessage);
-}
-
-function parseRecoverableTurns(value) {
-  if (
-    !hasExactKeys(value, ["items", "count"]) ||
-    !Array.isArray(value.items) ||
-    !isNonNegativeInteger(value.count) ||
-    value.count !== value.items.length
-  ) {
-    throw new Error("Malformed agent recoverable turns result");
-  }
-  const seen = new Set();
-  const items = value.items.map((item) => {
-    if (
-      !hasExactKeys(item, [
-        "turn_uuid",
-        "thread_uuid",
-        "user_text",
-        "chat_mode",
-        "state",
-        "last_error_kind",
-        "updated_at",
-      ]) ||
-      !CANONICAL_V4_UUID.test(item.turn_uuid) ||
-      !isSafeLocalHistoryUUID(item.thread_uuid) ||
-      !isValidChatText(item.user_text) ||
-      item.user_text.includes("\u0000") ||
-      !isSafeAgentMode(item.chat_mode) ||
-      item.state !== "interrupted" ||
-      !isSafeProtocolString(item.last_error_kind, 128, true) ||
-      !isParseableTimestamp(item.updated_at) ||
-      seen.has(item.turn_uuid)
-    ) {
-      throw new Error("Malformed agent recoverable turns result");
-    }
-    seen.add(item.turn_uuid);
-    return {
-      turn_uuid: item.turn_uuid,
-      thread_uuid: item.thread_uuid,
-      user_text: item.user_text,
-      chat_mode: item.chat_mode,
-      state: "interrupted",
-      last_error_kind: item.last_error_kind,
-      updated_at: item.updated_at,
-    };
-  });
-  return items;
-}
-
-function hasExactKeys(value, expected) {
-  if (!isRecord(value)) return false;
-  const actual = Object.keys(value).sort();
-  const wanted = [...expected].sort();
-  return (
-    actual.length === wanted.length &&
-    actual.every((key, index) => key === wanted[index])
-  );
-}
-
-function isSafeProtocolString(value, maxBytes, allowEmpty = false) {
-  return (
-    typeof value === "string" &&
-    (allowEmpty || value.length > 0) &&
-    hasWellFormedUTF16(value) &&
-    utf8ByteLength(value) <= maxBytes &&
-    !hasControlCharacter(value)
-  );
-}
-
-function isSafeAgentMode(value) {
-  return (
-    isSafeProtocolString(value, 64) &&
-    /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(value)
-  );
-}
-
-function parseStringArray(value, label) {
-  if (!Array.isArray(value)) {
-    throw new Error(`Malformed ${label}`);
-  }
-  const result = [];
-  const seen = new Set();
-  for (const item of value) {
-    if (!isSafeProtocolString(item, 128)) {
-      throw new Error(`Malformed ${label}`);
-    }
-    if (seen.has(item)) {
-      throw new Error(`Malformed ${label}`);
-    }
-    seen.add(item);
-    result.push(item);
-  }
-  return result;
-}
-
-function parseSkillArtifacts(value) {
-  if (
-    !hasExactKeys(value, [
-      "primaryType",
-      "outputTypes",
-      "previewTypes",
-      "exportTargets",
-      "critiqueAnchors",
-    ]) ||
-    !isSafeProtocolString(value.primaryType, 128)
-  ) {
-    throw new Error("Malformed agent skills catalog response");
-  }
-  return {
-    primaryType: value.primaryType,
-    outputTypes: parseStringArray(value.outputTypes, "agent skills catalog response"),
-    previewTypes: parseStringArray(value.previewTypes, "agent skills catalog response"),
-    exportTargets: parseStringArray(value.exportTargets, "agent skills catalog response"),
-    critiqueAnchors: parseStringArray(value.critiqueAnchors, "agent skills catalog response"),
-  };
-}
-
-function parseSkill(value) {
-  const expectedKeys = [
-    "agentMode",
-    "name",
-    "description",
-    "version",
-    "hasQuestionForm",
-    "hasDirectionsFallback",
-    "hasPostScripts",
-    "labelKey",
-    "descriptionKey",
-  ];
-  if (isRecord(value) && value.artifacts !== undefined) {
-    expectedKeys.push("artifacts");
-  }
-  if (
-    !hasExactKeys(value, expectedKeys) ||
-    !isSafeAgentMode(value.agentMode) ||
-    !isSafeProtocolString(value.name, 256, true) ||
-    !isSafeProtocolString(value.description, 4096, true) ||
-    !isSafeProtocolString(value.version, 128) ||
-    typeof value.hasQuestionForm !== "boolean" ||
-    typeof value.hasDirectionsFallback !== "boolean" ||
-    typeof value.hasPostScripts !== "boolean" ||
-    !isSafeProtocolString(value.labelKey, 256) ||
-    !isSafeProtocolString(value.descriptionKey, 256)
-  ) {
-    throw new Error("Malformed agent skills catalog response");
-  }
-  return {
-    agentMode: value.agentMode,
-    name: value.name,
-    description: value.description,
-    version: value.version,
-    hasQuestionForm: value.hasQuestionForm,
-    hasDirectionsFallback: value.hasDirectionsFallback,
-    hasPostScripts: value.hasPostScripts,
-    artifacts: value.artifacts === undefined ? null : parseSkillArtifacts(value.artifacts),
-    labelKey: value.labelKey,
-    descriptionKey: value.descriptionKey,
-  };
-}
-
-function parseSkillsCatalog(value) {
-  if (
-    !hasExactKeys(value, ["items", "count", "allowed_modes"]) ||
-    !Array.isArray(value.items) ||
-    !isNonNegativeInteger(value.count) ||
-    value.count !== value.items.length ||
-    !Array.isArray(value.allowed_modes)
-  ) {
-    throw new Error("Malformed agent skills catalog response");
-  }
-  const allowedModes = [];
-  const allowedSet = new Set();
-  for (const mode of value.allowed_modes) {
-    if (!isSafeAgentMode(mode) || allowedSet.has(mode)) {
-      throw new Error("Malformed agent skills catalog response");
-    }
-    allowedSet.add(mode);
-    allowedModes.push(mode);
-  }
-  const items = value.items.map(parseSkill);
-  const itemModes = new Set();
-  for (const item of items) {
-    if (!allowedSet.has(item.agentMode) || itemModes.has(item.agentMode)) {
-      throw new Error("Malformed agent skills catalog response");
-    }
-    itemModes.add(item.agentMode);
-  }
-  return { items, count: items.length, allowed_modes: allowedModes };
-}
-
-function parseHeaderRecord(value, label) {
-  if (!isRecord(value)) {
-    throw new Error(`Malformed ${label}`);
-  }
-  for (const [name, headerValue] of Object.entries(value)) {
-    if (
-      !isSafeProtocolString(name, 256) ||
-      !isSafeProtocolString(headerValue, 8192, true)
-    ) {
-      throw new Error(`Malformed ${label}`);
-    }
-  }
-}
-
-function parseDesktopBridgeResult(value, label) {
-  if (
-    !isRecord(value) ||
-    typeof value.ok !== "boolean" ||
-    !Number.isInteger(value.status) ||
-    value.status < 100 ||
-    value.status > 599 ||
-    typeof value.statusText !== "string"
-  ) {
-    throw new Error(`Malformed ${label}`);
-  }
-  parseHeaderRecord(value.headers, label);
-  if (value.ok) {
-    if (!hasExactKeys(value, ["ok", "status", "statusText", "headers", "data"])) {
-      throw new Error(`Malformed ${label}`);
-    }
-  } else if (!hasExactKeys(value, ["ok", "status", "statusText", "headers", "error"])) {
-    throw new Error(`Malformed ${label}`);
-  }
-  return value;
-}
-
-function isSessionChangedPayload(value) {
-  return isRecord(value) && value.error === "session_changed";
-}
-
-function parseTurnOpenResult(value) {
-  if (!hasExactKeys(value, ["turnID"]) || !isSafeLocalHistoryUUID(value.turnID)) {
-    throw new Error("Malformed agent turn open result");
-  }
-  return { turnID: value.turnID };
-}
-
-function parseTurnCancelResult(value) {
-  if (
-    !hasExactKeys(value, ["turnID", "canceled"]) ||
-    !isSafeLocalHistoryUUID(value.turnID) ||
-    typeof value.canceled !== "boolean"
-  ) {
-    throw new Error("Malformed agent turn cancel result");
-  }
-  return { turnID: value.turnID, canceled: value.canceled };
-}
-
-function parseProxyError(value) {
-  if (!isRecord(value)) {
-    throw new Error("Malformed agent turn event");
-  }
-  const allowedKeys = new Set([
-    "kind",
-    "message",
-    "retryable",
-    "retry_after_ms",
-    "log_id",
-  ]);
-  if (Object.keys(value).some((key) => !allowedKeys.has(key))) {
-    throw new Error("Malformed agent turn event");
-  }
-  if (
-    !isSafeProtocolString(value.kind, 64) ||
-    !PROXY_ERROR_KINDS.has(value.kind) ||
-    typeof value.message !== "string" ||
-    !hasWellFormedUTF16(value.message) ||
-    utf8ByteLength(value.message) > 4096 ||
-    (value.retryable !== undefined && typeof value.retryable !== "boolean") ||
-    (value.retry_after_ms !== undefined &&
-      (!isNonNegativeInteger(value.retry_after_ms) || value.retry_after_ms > 86_400_000)) ||
-    (value.log_id !== undefined && !isSafeProtocolString(value.log_id, 256, true))
-  ) {
-    throw new Error("Malformed agent turn event");
-  }
-  const error = {
-    kind: value.kind,
-    message: value.message,
-  };
-  if (typeof value.retryable === "boolean") error.retryable = value.retryable;
-  if (value.retry_after_ms !== undefined) error.retry_after_ms = value.retry_after_ms;
-  if (value.log_id !== undefined) error.log_id = value.log_id;
-  return error;
-}
-
-function parseSafeDoneResult(value) {
-  if (
-    !hasExactKeys(value, ["code", "subtype", "is_error"]) ||
-    !isSafeProtocolString(value.code, 128, true) ||
-    !isSafeProtocolString(value.subtype, 128, true) ||
-    typeof value.is_error !== "boolean"
-  ) {
-    throw new Error("Malformed agent turn event");
-  }
-  return {
-    code: value.code,
-    subtype: value.subtype,
-    isError: value.is_error,
-  };
-}
-
-function parseSafeRetrievedSource(value) {
-  if (
-    !hasExactKeys(value, ["kind", "label", "snippet", "score"]) ||
-    !RETRIEVED_SOURCE_KINDS.has(value.kind) ||
-    !isSafeProtocolString(value.label, MAX_RETRIEVED_LABEL_CHARS) ||
-    typeof value.snippet !== "string" ||
-    !hasWellFormedUTF16(value.snippet) ||
-    value.snippet.length > MAX_RETRIEVED_SNIPPET_CHARS ||
-    !(value.score === null || (typeof value.score === "number" && value.score >= 0 && value.score <= 1))
-  ) {
-    throw new Error("Malformed agent turn event");
-  }
-  return {
-    kind: value.kind,
-    label: value.label,
-    snippet: value.snippet,
-    score: value.score,
-  };
-}
-
-function parseAgentTurnEvent(value) {
-  if (
-    !isRecord(value) ||
-    typeof value.type !== "string" ||
-    !AGENT_EVENT_TYPES.has(value.type) ||
-    !isSafeLocalHistoryUUID(value.turnID)
-  ) {
-    throw new Error("Malformed agent turn event");
-  }
-  switch (value.type) {
-    case "text_delta":
-      if (
-        !hasExactKeys(value, ["type", "turnID", "delta"]) ||
-        typeof value.delta !== "string" ||
-        !hasWellFormedUTF16(value.delta) ||
-        utf8ByteLength(value.delta) > MAX_EVENT_TEXT_BYTES
-      ) {
-        throw new Error("Malformed agent turn event");
-      }
-      return { type: value.type, turnID: value.turnID, delta: value.delta };
-    case "reasoning_delta":
-      if (
-        !hasExactKeys(value, ["type", "turnID", "delta"]) ||
-        typeof value.delta !== "string" ||
-        !hasWellFormedUTF16(value.delta) ||
-        utf8ByteLength(value.delta) > MAX_EVENT_TEXT_BYTES
-      ) {
-        throw new Error("Malformed agent turn event");
-      }
-      return { type: value.type, turnID: value.turnID, delta: value.delta };
-    case "approval_request":
-      if (
-        !hasExactKeys(value, ["type", "turnID", "id", "name", "target"]) ||
-        !isSafeProtocolString(value.id, 32) ||
-        !isSafeProtocolString(value.name, 64) ||
-        typeof value.target !== "string" ||
-        !hasWellFormedUTF16(value.target) ||
-        value.target.length > 80
-      ) {
-        throw new Error("Malformed agent turn event");
-      }
-      return { type: value.type, turnID: value.turnID, id: value.id, name: value.name, target: value.target };
-    case "tool_use":
-      if (
-        !hasExactKeys(value, ["type", "turnID", "name", "target"]) ||
-        !isSafeProtocolString(value.name, 64) ||
-        typeof value.target !== "string" ||
-        !hasWellFormedUTF16(value.target) ||
-        value.target.length > 80
-      ) {
-        throw new Error("Malformed agent turn event");
-      }
-      return { type: value.type, turnID: value.turnID, name: value.name, target: value.target };
-    case "tool_denied":
-      if (
-        !hasExactKeys(value, ["type", "turnID", "name", "target", "reason"]) ||
-        !isSafeProtocolString(value.name, 64) ||
-        typeof value.target !== "string" ||
-        value.target.length > 80 ||
-        typeof value.reason !== "string" ||
-        !hasWellFormedUTF16(value.reason) ||
-        value.reason.length > 300
-      ) {
-        throw new Error("Malformed agent turn event");
-      }
-      return { type: value.type, turnID: value.turnID, name: value.name, target: value.target, reason: value.reason };
-    case "retrieval":
-      if (
-        !hasExactKeys(value, ["type", "turnID", "sources"]) ||
-        !Array.isArray(value.sources) ||
-        value.sources.length > MAX_RETRIEVED_SOURCES
-      ) {
-        throw new Error("Malformed agent turn event");
-      }
-      return {
-        type: value.type,
-        turnID: value.turnID,
-        sources: value.sources.map(parseSafeRetrievedSource),
-      };
-    case "unknown":
-      if (
-        !hasExactKeys(value, ["type", "turnID", "event"]) ||
-        !isSafeProtocolString(value.event, 256, true)
-      ) {
-        throw new Error("Malformed agent turn event");
-      }
-      return { type: value.type, turnID: value.turnID, event: value.event };
-    case "done":
-      if (!hasExactKeys(value, ["type", "turnID", "result"])) {
-        throw new Error("Malformed agent turn event");
-      }
-      return {
-        type: value.type,
-        turnID: value.turnID,
-        result: parseSafeDoneResult(value.result),
-      };
-    case "proxy_error":
-      if (!hasExactKeys(value, ["type", "turnID", "error"])) {
-        throw new Error("Malformed agent turn event");
-      }
-      return {
-        type: value.type,
-        turnID: value.turnID,
-        error: parseProxyError(value.error),
-      };
-    case "canceled":
-      if (!hasExactKeys(value, ["type", "turnID"])) {
-        throw new Error("Malformed agent turn event");
-      }
-      return { type: value.type, turnID: value.turnID };
-    case "protocol_error":
-      if (
-        !hasExactKeys(value, ["type", "turnID", "code", "message"]) ||
-        !isSafeProtocolString(value.code, 128) ||
-        typeof value.message !== "string" ||
-        !hasWellFormedUTF16(value.message) ||
-        utf8ByteLength(value.message) > 4096
-      ) {
-        throw new Error("Malformed agent turn event");
-      }
-      return {
-        type: value.type,
-        turnID: value.turnID,
-        message: value.message,
-      };
-  }
-  throw new Error("Malformed agent turn event");
-}
-
-function isSafeLocalHistoryUUID(value) {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    utf8ByteLength(value) <= 200 &&
-    value.trim() === value &&
-    !hasControlCharacter(value)
-  );
-}
-
-function isNonNegativeInteger(value) {
-  return Number.isInteger(value) && value >= 0;
-}
-
-function isParseableTimestamp(value) {
-  return typeof value === "string" && value.trim() !== "" && Number.isFinite(Date.parse(value));
-}
-
-function hasControlCharacter(value) {
-  for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
-    if (code < 0x20 || code === 0x7f) return true;
-  }
-  return false;
-}
-
-function utf8ByteLength(value) {
-  let bytes = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
-    if (code < 0x80) {
-      bytes += 1;
-    } else if (code < 0x800) {
-      bytes += 2;
-    } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < value.length) {
-      const next = value.charCodeAt(i + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        bytes += 4;
-        i += 1;
-      } else {
-        bytes += 3;
-      }
-    } else {
-      bytes += 3;
-    }
-  }
-  return bytes;
 }
 
 function bridge() {
@@ -1015,7 +330,7 @@ function desktopAuthBridge() {
   return auth;
 }
 
-function desktopAgentBridge() {
+export function desktopAgentBridge() {
   const desktop = window.desktopBridge;
   if (!isRecord(desktop) || !isRecord(desktop.agent)) {
     return null;
@@ -1032,136 +347,6 @@ function desktopAgentBridge() {
   return agent;
 }
 
-// uploadThreadFile uploads one file to the selected thread via the typed bridge
-// and tracks it as a pending attachment (chip). Only "ready" attachments are
-// sent with the next turn (fileIDs); "uploading" is excluded, "error" flagged.
-//
-// Each upload carries its own fence — the entry object itself plus the session
-// generation — NOT a shared counter. A shared counter meant that attaching
-// several files at once invalidated every in-flight upload except the last:
-// their completions were dropped and the chips sat on "uploading" forever.
-function uploadThreadFile(file) {
-  const agent = desktopAgentBridge();
-  if (!agent) {
-    setStatus("File upload unavailable", "error");
-    return;
-  }
-  const threadUUID = state.selectedThreadUUID;
-  if (!threadUUID) {
-    return;
-  }
-  const entry = {
-    id: 0,
-    name: file.name,
-    size: file.size,
-    status: "uploading",
-    // Kept for retry: a failed chip re-runs the same file against the thread
-    // it was originally attached to, even if the selection moved on.
-    threadUUID,
-    file,
-  };
-  state.pendingFiles.push(entry);
-  renderAttachments();
-  startPendingFileUpload(agent, entry);
-}
-
-// startPendingFileUpload runs (or re-runs) one tray entry's upload. The
-// completion is fenced per upload: it applies only while the entry is still in
-// the tray (not removed, not consumed by a sent turn) and the session has not
-// changed — the same condition isCurrentSelection expresses for turns, scoped
-// to what an upload can actually outlive.
-function startPendingFileUpload(agent, entry) {
-  const sessionGeneration = state.sessionGeneration;
-  const isLive = () =>
-    sessionGeneration === state.sessionGeneration &&
-    state.pendingFiles.includes(entry);
-  agent
-    .uploadThreadFile(entry.threadUUID, entry.file)
-    .then((result) => {
-      if (!isLive()) return;
-      if (
-        isRecord(result) &&
-        result.ok &&
-        result.data &&
-        typeof result.data.file_id === "number"
-      ) {
-        entry.id = result.data.file_id;
-        entry.status = "ready";
-      } else {
-        entry.status = "error";
-      }
-      renderAttachments();
-    })
-    .catch(() => {
-      // Without this, a rejected bridge call became an unhandled rejection
-      // and the chip froze on "uploading". A failed upload is a failed
-      // attachment: mark it and let the chip offer retry or removal.
-      if (!isLive()) return;
-      entry.status = "error";
-      renderAttachments();
-    });
-}
-
-function retryPendingFileUpload(entry) {
-  const agent = desktopAgentBridge();
-  if (!agent) {
-    setStatus("File upload unavailable", "error");
-    return;
-  }
-  if (!state.pendingFiles.includes(entry) || entry.status !== "error") return;
-  entry.status = "uploading";
-  renderAttachments();
-  startPendingFileUpload(agent, entry);
-}
-
-function removePendingFile(entry) {
-  state.pendingFiles = state.pendingFiles.filter((file) => file !== entry);
-  renderAttachments();
-}
-
-function renderAttachments() {
-  if (!attachmentChips) return;
-  attachmentChips.textContent = "";
-  for (const file of state.pendingFiles) {
-    const chip = document.createElement("span");
-    chip.className = `attachment-chip ${file.status}`;
-    const label = document.createElement("span");
-    label.className = "attachment-chip-name";
-    label.textContent =
-      file.status === "uploading"
-        ? `${file.name}…`
-        : file.status === "error"
-          ? `${file.name} ✗`
-          : file.name;
-    chip.appendChild(label);
-    if (file.status === "error") {
-      // A failed upload is actionable, not terminal: run the same file again,
-      // or take the chip out of the tray.
-      const retry = document.createElement("button");
-      retry.type = "button";
-      retry.className = "attachment-chip-retry";
-      retry.textContent = "Retry";
-      retry.addEventListener("click", () => {
-        retryPendingFileUpload(file);
-      });
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "attachment-chip-remove";
-      remove.textContent = "Remove";
-      remove.addEventListener("click", () => {
-        removePendingFile(file);
-      });
-      chip.append(retry, remove);
-    }
-    attachmentChips.appendChild(chip);
-  }
-  attachmentChips.hidden = state.pendingFiles.length === 0;
-  // The composer tray and the Sources panel show the same files; refreshing
-  // here keeps them from disagreeing after an upload completes or a turn
-  // clears the tray.
-  renderTaskContext();
-}
-
 function desktopAgentModesBridge() {
   const desktop = window.desktopBridge;
   if (
@@ -1174,7 +359,7 @@ function desktopAgentModesBridge() {
   return desktop.agent;
 }
 
-function desktopAgentCreateBridge() {
+export function desktopAgentCreateBridge() {
   const desktop = window.desktopBridge;
   if (
     !isRecord(desktop) ||
@@ -1211,33 +396,6 @@ function desktopSettingsBridge() {
     return null;
   }
   return desktop.settings;
-}
-
-function parseModelRouteSettings(value) {
-  if (!isRecord(value)) {
-    throw new Error("Malformed model route settings");
-  }
-  if (Object.prototype.hasOwnProperty.call(value, "api_key")) {
-    throw new Error("Model route settings must not include api_key");
-  }
-  const route = value.preferred_route;
-  if (route !== "local" && route !== "official") {
-    throw new Error("Malformed preferred_route");
-  }
-  const local = value.local;
-  if (!isRecord(local) || Object.prototype.hasOwnProperty.call(local, "api_key")) {
-    throw new Error("Malformed local model profile");
-  }
-  return {
-    preferred_route: route,
-    local: {
-      protocol: optionalString(local.protocol) || "",
-      base_url: optionalString(local.base_url) || "",
-      model_id: optionalString(local.model_id) || "",
-      api_key_configured: local.api_key_configured === true,
-    },
-    updated_at: optionalString(value.updated_at) || "",
-  };
 }
 
 function setModelSettingsError(message) {
@@ -1304,7 +462,7 @@ function fillModelSettingsForm(settings) {
   setModelSettingsError("");
 }
 
-async function openModelSettings() {
+export async function openModelSettings() {
   if (!modelSettingsForm) return;
   const settings = desktopSettingsBridge();
   if (!settings) {
@@ -1391,7 +549,7 @@ async function submitModelSettings(event) {
   }
 }
 
-async function sidecarFetch(path, init) {
+export async function sidecarFetch(path, init) {
   const api = bridge();
   if (!api) {
     throw new Error("window.workmaxLocal bridge is unavailable");
@@ -1399,7 +557,7 @@ async function sidecarFetch(path, init) {
   return api.fetch(path, init);
 }
 
-async function readSidecarJSON(response, endpoint) {
+export async function readSidecarJSON(response, endpoint) {
   let payload;
   try {
     payload = await response.json();
@@ -1418,20 +576,20 @@ async function readSidecarJSON(response, endpoint) {
   return payload;
 }
 
-async function loadAuthStatus(expectedSessionGeneration = state.sessionGeneration) {
+async function loadAuthStatus(expectedSessionGeneration = fences.session.snapshot()) {
   const res = await sidecarFetch("/auth/status");
   const auth = parseAuthStatus(await readSidecarJSON(res, "/auth/status"));
-  if (expectedSessionGeneration !== state.sessionGeneration) {
+  if (!fences.session.isCurrent(expectedSessionGeneration)) {
     return null;
   }
   state.auth = auth;
   return state.auth;
 }
 
-async function loadThreads(expectedSessionGeneration = state.sessionGeneration) {
+export async function loadThreads(expectedSessionGeneration = fences.session.snapshot()) {
   const res = await sidecarFetch("/agent/threads?include_paused=false");
   const threads = parseThreads(await readSidecarJSON(res, "/agent/threads"));
-  if (expectedSessionGeneration !== state.sessionGeneration) {
+  if (!fences.session.isCurrent(expectedSessionGeneration)) {
     return false;
   }
   state.threads = threads;
@@ -1440,12 +598,12 @@ async function loadThreads(expectedSessionGeneration = state.sessionGeneration) 
   return true;
 }
 
-async function loadSkills(expectedSessionGeneration = state.sessionGeneration) {
+async function loadSkills(expectedSessionGeneration = fences.session.snapshot()) {
   const agent = desktopAgentBridge();
   state.agentAvailable = agent !== null;
   state.createAvailable = desktopAgentCreateBridge() !== null;
   if (!agent) {
-    if (expectedSessionGeneration === state.sessionGeneration) {
+    if (fences.session.isCurrent(expectedSessionGeneration)) {
       state.skills = [];
       state.allowedModes = [];
       state.selectedMode = "";
@@ -1465,7 +623,7 @@ async function loadSkills(expectedSessionGeneration = state.sessionGeneration) {
       "agent skills result"
     );
   } finally {
-    if (expectedSessionGeneration === state.sessionGeneration) {
+    if (fences.session.isCurrent(expectedSessionGeneration)) {
       state.skillsLoading = false;
     }
   }
@@ -1476,7 +634,7 @@ async function loadSkills(expectedSessionGeneration = state.sessionGeneration) {
     throw new Error(`Agent skills HTTP ${result.status}`);
   }
   const catalog = parseSkillsCatalog(result.data);
-  if (expectedSessionGeneration !== state.sessionGeneration) {
+  if (!fences.session.isCurrent(expectedSessionGeneration)) {
     return false;
   }
   state.skills = catalog.items;
@@ -1487,36 +645,12 @@ async function loadSkills(expectedSessionGeneration = state.sessionGeneration) {
   return true;
 }
 
-// parseAgentModes mirrors the strictness of every other bridge parser: the
-// answer decides whether a signed-out user may drive the agent, so a
-// half-understood payload must be an error rather than a permissive default.
-function parseAgentModes(value) {
-  if (
-    !hasExactKeys(value, ["allowed_modes", "local_route", "tool_loop"]) ||
-    !Array.isArray(value.allowed_modes) ||
-    typeof value.local_route !== "boolean" ||
-    typeof value.tool_loop !== "boolean"
-  ) {
-    throw new Error("Malformed agent modes response");
-  }
-  const modes = [];
-  const seen = new Set();
-  for (const mode of value.allowed_modes) {
-    if (!isSafeProtocolString(mode, 64) || seen.has(mode)) {
-      throw new Error("Malformed agent modes response");
-    }
-    seen.add(mode);
-    modes.push(mode);
-  }
-  return { allowed_modes: modes, local_route: value.local_route, tool_loop: value.tool_loop };
-}
-
 // Reads the Desktop's own answer to "what may I run, and would it run here".
 //
 // Never throws outward: this is the call that decides whether a signed-out app
 // is usable, and if it fails the honest outcome is the pre-existing behaviour
 // (sign in first), not a broken boot.
-async function loadLocalModes(expectedSessionGeneration = state.sessionGeneration) {
+async function loadLocalModes(expectedSessionGeneration = fences.session.snapshot()) {
   const agent = desktopAgentModesBridge();
   // The same availability facts loadSkills records. They live in both because
   // this is the only loader that runs on the signed-out path, and without them
@@ -1531,7 +665,7 @@ async function loadLocalModes(expectedSessionGeneration = state.sessionGeneratio
   } catch {
     return false;
   }
-  if (expectedSessionGeneration !== state.sessionGeneration) return false;
+  if (!fences.session.isCurrent(expectedSessionGeneration)) return false;
   if (!result.ok) return false;
   let modes;
   try {
@@ -1576,31 +710,12 @@ function desktopLocalAccountsBridge() {
   return desktop.local;
 }
 
-function parseLocalAccounts(data) {
-  if (!isRecord(data) || !Array.isArray(data.items)) {
-    throw new Error("invalid local accounts payload");
-  }
-  return data.items.map((item) => {
-    if (
-      !isRecord(item) ||
-      !Number.isInteger(item.id) ||
-      item.id <= 0 ||
-      typeof item.name !== "string" ||
-      item.name.length === 0 ||
-      typeof item.active !== "boolean"
-    ) {
-      throw new Error("invalid local account entry");
-    }
-    return { id: item.id, name: item.name, active: item.active };
-  });
-}
-
 // loadLocalAccounts fills the account switcher. Never throws outward: if the
 // sidecar cannot answer, the switcher simply stays hidden and the local route
 // keeps running as whatever account is active server-side — accounts are a
 // convenience surface, not a gate.
 async function loadLocalAccounts(
-  expectedSessionGeneration = state.sessionGeneration
+  expectedSessionGeneration = fences.session.snapshot()
 ) {
   const local = desktopLocalAccountsBridge();
   if (!local) return false;
@@ -1615,19 +730,19 @@ async function loadLocalAccounts(
   } catch {
     return false;
   }
-  if (expectedSessionGeneration !== state.sessionGeneration) return false;
+  if (!fences.session.isCurrent(expectedSessionGeneration)) return false;
   state.localAccounts = accounts;
   renderLocalAccountArea();
   return true;
 }
 
-function activeLocalAccount() {
+export function activeLocalAccount() {
   return state.localAccounts.find((account) => account.active) || null;
 }
 
 // The switcher shows only in local-only sessions: with a cloud session the
 // local account is not what turns run as, and showing it would claim it is.
-function renderLocalAccountArea() {
+export function renderLocalAccountArea() {
   if (!localAccountRow || !localAccountPanel) return;
   const active = activeLocalAccount();
   const visible = isLocalOnlySession() && active !== null;
@@ -1654,7 +769,7 @@ function renderLocalAccountArea() {
 // The context chips above the input, Codex-style: where the turn will run
 // and who it will run as. Facts the dispatch already knows, surfaced where
 // the typing happens instead of buried in Models/settings.
-function renderComposerChips() {
+export function renderComposerChips() {
   const runtime = document.querySelector("#runtime-chip");
   const accountChip = document.querySelector("#account-chip");
   if (runtime) {
@@ -1903,11 +1018,11 @@ async function submitCreateLocalAccount(event) {
 }
 
 async function loadRecoverableTurns(
-  expectedSessionGeneration = state.sessionGeneration
+  expectedSessionGeneration = fences.session.snapshot()
 ) {
   const agent = desktopAgentRecoveryBridge();
   if (!agent) {
-    if (expectedSessionGeneration === state.sessionGeneration) {
+    if (fences.session.isCurrent(expectedSessionGeneration)) {
       state.recoverableTurns = [];
       state.recoveryLoading = false;
       renderThreads();
@@ -1924,7 +1039,7 @@ async function loadRecoverableTurns(
       "agent recoverable turns result"
     );
   } finally {
-    if (expectedSessionGeneration === state.sessionGeneration) {
+    if (fences.session.isCurrent(expectedSessionGeneration)) {
       state.recoveryLoading = false;
       updateComposerState();
     }
@@ -1933,7 +1048,7 @@ async function loadRecoverableTurns(
     if (result.status === 409 && isSessionChangedPayload(result.error)) {
       throw new SessionChangedError();
     }
-    if (expectedSessionGeneration === state.sessionGeneration) {
+    if (fences.session.isCurrent(expectedSessionGeneration)) {
       state.recoverableTurns = [];
       renderThreads();
       updateComposerState();
@@ -1941,7 +1056,7 @@ async function loadRecoverableTurns(
     return false;
   }
   const items = parseRecoverableTurns(result.data);
-  if (expectedSessionGeneration !== state.sessionGeneration) {
+  if (!fences.session.isCurrent(expectedSessionGeneration)) {
     return false;
   }
   state.recoverableTurns = items;
@@ -1950,1219 +1065,10 @@ async function loadRecoverableTurns(
   return true;
 }
 
-function selectionContext(threadUUID = state.selectedThreadUUID) {
-  return {
-    sessionGeneration: state.sessionGeneration,
-    selectionGeneration: state.selectionGeneration,
-    turnGeneration: state.turnGeneration,
-    threadUUID,
-  };
-}
-
-function isCurrentSelection(context) {
-  return (
-    context.sessionGeneration === state.sessionGeneration &&
-    context.selectionGeneration === state.selectionGeneration &&
-    context.turnGeneration === state.turnGeneration &&
-    context.threadUUID === state.selectedThreadUUID
-  );
-}
-
-async function loadMessagesForSelection(thread, context, completedTurn = null) {
-  const res = await sidecarFetch(`/agent/threads/${encodeURIComponent(thread.uuid)}/messages`);
-  const items = parseMessages(
-    await readSidecarJSON(res, "/agent/threads/:uuid/messages")
-  );
-  if (!isCurrentSelection(context)) {
-    return false;
-  }
-  // A turn that just completed already painted its own two messages; when the
-  // snapshot confirms them, the rest of the transcript has no reason to be
-  // torn down and rebuilt. Any doubt falls through to the full repaint.
-  if (completedTurn && reconcileTurnInPlace(items, completedTurn)) {
-    return true;
-  }
-  renderCachedMessages(items);
-  return true;
-}
-
-// How many transcript rows a snapshot renders: renderCachedMessages makes one
-// article per present half of each exchange.
-function expectedMessageArticles(items) {
-  let expected = 0;
-  for (const item of items) {
-    if (item.user_text) expected += 1;
-    if (item.ai_text || item.streaming_state !== "complete") expected += 1;
-  }
-  return expected;
-}
-
-// The in-place half of the post-turn reconcile. The optimistic pair the turn
-// streamed into must still be the transcript's last two rows, and the
-// snapshot's last exchange must be exactly what was streamed — same words,
-// completed. Then the only things the cache repaint would have added are
-// applied directly: timestamps, the Regenerate affordance, and the partial
-// flag coming off. Everything else — earlier messages, the work log strip,
-// the settled reasoning caption, answered approval cards — keeps its nodes.
-// Any mismatch (canceled turn, server-rewritten text, drifted row count)
-// returns false and the caller takes the full-rebuild path, whose correctness
-// this optimization must never outrun.
-function reconcileTurnInPlace(items, completedTurn) {
-  const wrapper = completedTurn.assistantWrapper;
-  const userNode = completedTurn.userNode;
-  if (!wrapper || !userNode) return false;
-  const last = items.length > 0 ? items[items.length - 1] : null;
-  if (!last || last.streaming_state !== "complete") return false;
-  if (!last.user_text || last.user_text !== completedTurn.userText) return false;
-  if (!last.ai_text || last.ai_text !== completedTurn.assistantText) return false;
-  const children = messageList.children;
-  if (children.length < 2) return false;
-  if (children[children.length - 1] !== wrapper) return false;
-  if (children[children.length - 2] !== userNode) return false;
-  if (children.length !== expectedMessageArticles(items)) return false;
-
-  wrapper.classList.remove("pending");
-  wrapper.classList.remove("partial");
-  ensureMessageTime(userNode, last.created_at);
-  ensureMessageTime(wrapper, last.updated_at || last.created_at);
-  ensureRegenerateAction(wrapper, last.user_text);
-  // No scroll write: the reader stays exactly where the stream left them.
-  return true;
-}
-
-// Adds (or refreshes) the stored timestamp a streamed message could not show
-// until the sidecar had one to give.
-function ensureMessageTime(wrapper, timestamp) {
-  const time = formatMessageTime(timestamp);
-  if (!time) return;
-  const label = Array.from(wrapper.children || []).find((child) =>
-    child.classList?.contains("message-role")
-  );
-  if (!label) return;
-  for (const child of Array.from(label.children || [])) {
-    if (child.classList?.contains("message-time")) {
-      child.textContent = time;
-      return;
-    }
-  }
-  const when = document.createElement("span");
-  when.className = "message-time";
-  when.textContent = time;
-  label.appendChild(when);
-}
-
-// The finished final answer gains Regenerate without rebuilding its row. The
-// action row may already exist (copy attaches at the terminal) or not (no
-// clipboard, no copy) — either way exactly one Regenerate results.
-function ensureRegenerateAction(wrapper, regenerateText) {
-  if (!regenerateText) return;
-  let actions = Array.from(wrapper.children || []).find((child) =>
-    child.classList?.contains("message-actions")
-  );
-  if (!actions) {
-    actions = document.createElement("div");
-    actions.className = "message-actions";
-    wrapper.appendChild(actions);
-  }
-  for (const child of Array.from(actions.children || [])) {
-    if (child.classList?.contains("message-action-regenerate")) return;
-  }
-  actions.appendChild(buildRegenerateButton(regenerateText));
-}
-
-// Only the transcript's FINAL answer may offer Regenerate. A new turn makes
-// the previous final answer non-final, so its button comes off the moment the
-// next exchange is appended — the in-place reconcile never revisits old rows.
-function retireStaleRegenerateActions() {
-  const children = messageList.children;
-  const lastAssistant = children[children.length - 1];
-  if (!lastAssistant?.classList?.contains("assistant")) return;
-  const actions = Array.from(lastAssistant.children || []).find((child) =>
-    child.classList?.contains("message-actions")
-  );
-  if (!actions) return;
-  for (const child of Array.from(actions.children || [])) {
-    if (child.classList?.contains("message-action-regenerate")) child.remove();
-  }
-  if ((actions.children || []).length === 0) actions.remove();
-}
-
-function renderCachedMessages(items) {
-  messageList.textContent = "";
-  if (items.length === 0) {
-    messageList.appendChild(renderNotice("No cached messages for this thread yet."));
-    return;
-  }
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (item.user_text) {
-      messageList.appendChild(renderMessage("user", item.user_text, "complete", item.created_at));
-    }
-    if (item.ai_text || item.streaming_state !== "complete") {
-      // Only the final, completed answer can be re-run; see
-      // attachMessageActions for why earlier ones cannot.
-      const regenerable =
-        i === items.length - 1 && item.user_text && item.streaming_state === "complete";
-      messageList.appendChild(
-        renderMessage(
-          "assistant",
-          item.ai_text || "Response interrupted before text was cached.",
-          item.streaming_state,
-          item.updated_at || item.created_at,
-          regenerable ? { regenerateText: item.user_text } : {}
-        )
-      );
-    }
-  }
-  attachLastTurnLog();
-  scrollMessagesToEnd(true);
-}
-
-// stashComposerDraft remembers the composer's unsent text for the thread that
-// owns it. Called before anything rewrites chatInput.value on a thread switch
-// or a refresh: silently dropping a half-written long prompt is data loss.
-// An emptied composer clears the stash — keeping a stale draft would resurrect
-// words the user deliberately deleted.
-function stashComposerDraft() {
-  const threadUUID = state.selectedThreadUUID;
-  if (!threadUUID) return;
-  if (chatInput.value.trim() !== "") {
-    state.composerDrafts.set(threadUUID, chatInput.value);
-  } else {
-    state.composerDrafts.delete(threadUUID);
-  }
-}
-
-function selectThread(thread) {
-  if (state.activeTurn && thread.uuid === state.selectedThreadUUID) {
-    return;
-  }
-  if (state.createFormOpen) {
-    if (state.createDraft?.attempted) {
-      const retryable = state.createDraft.retryable === true;
-      setStatus(
-        retryable
-          ? "Retry or cancel the current thread draft before switching."
-          : "Cancel the current thread draft before switching.",
-        "error"
-      );
-      (retryable ? newThreadSubmitButton : newThreadCancelButton).focus();
-      return;
-    }
-    cancelNewThreadDraft(false);
-  }
-  if (state.activeTurn) {
-    invalidateActiveTurn(true);
-  }
-  stashComposerDraft();
-  state.selectionGeneration += 1;
-  state.selectedThreadUUID = thread.uuid;
-  // Restore this thread's stashed draft, or a clean box. Before the map the
-  // outgoing thread's words simply stayed in the composer — leaking into the
-  // next thread, and overwritten the moment anything typed there.
-  chatInput.value = state.composerDrafts.get(thread.uuid) ?? "";
-  // The context panel follows the selection: its sources belong to a thread,
-  // not to the session.
-  void loadThreadSources(thread.uuid);
-  state.recoveryGeneration += 1;
-  state.resumingTurn = false;
-  state.dismissingRecovery = false;
-  state.recoveryFeedback = "";
-  state.recoveryFeedbackKind = "default";
-  const context = selectionContext(thread.uuid);
-  renderThreads();
-  emptyState.hidden = true;
-  threadPanel.hidden = false;
-  updateSelectedThreadHeading();
-  chooseModeForThread(thread);
-  renderSkillOptions();
-  updateComposerState();
-  setTurnState(selectedRecoverableTurn() ? "Interrupted" : "Ready");
-  messageList.textContent = "";
-  messageList.appendChild(renderNotice("Loading cached messages..."));
-  void loadMessagesForSelection(thread, context).catch((error) => {
-    void handleScopedError(error, context);
-  });
-}
-
-function renderNotice(text) {
-  const node = document.createElement("p");
-  node.className = "status-card";
-  node.textContent = text;
-  return node;
-}
-
-// Models answer in Markdown. Until this existed the renderer put that string
-// straight into textContent, so every list arrived as "- item", every code
-// block as three backticks, and every heading as "###". The content was right
-// and unreadable.
-//
-// Everything below builds DOM nodes. There is no innerHTML on this path and no
-// HTML parsing of model output at any point: a document fragment assembled
-// from createElement and createTextNode cannot execute anything, whatever the
-// model was talked into writing. That is the whole security argument, and it
-// is structural rather than a matter of escaping correctly.
-
-// Above this the text is rendered plain. A wall this large is not made
-// readable by formatting, and it keeps a single parse bounded.
-const MARKDOWN_MAX_CHARS = 200_000;
-
-const MARKDOWN_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*([A-Za-z0-9_+-]*)\s*$/u;
-const MARKDOWN_HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/u;
-const MARKDOWN_RULE = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/u;
-const MARKDOWN_BULLET = /^(\s*)[-*+]\s+(.*)$/u;
-const MARKDOWN_ORDERED = /^(\s*)(\d{1,9})[.)]\s+(.*)$/u;
-const MARKDOWN_QUOTE = /^\s{0,3}>\s?(.*)$/u;
-const INLINE_ESCAPABLE = "\\`*_~[]()#-";
-
-// The class goes on here rather than at bubble creation because it is what
-// switches the bubble from pre-wrap (right for the raw text arriving during a
-// stream) to normal flow (right once blocks own their own spacing). Setting it
-// early would collapse the newlines of a streaming answer.
-function renderMarkdownInto(container, text) {
-  container.textContent = "";
-  container.classList.remove("markdown");
-  if (typeof text !== "string" || text === "") return;
-  if (text.length > MARKDOWN_MAX_CHARS) {
-    container.textContent = text;
-    return;
-  }
-  container.classList.add("markdown");
-  for (const block of parseMarkdownBlocks(text.split(/\r\n|\r|\n/u))) {
-    container.appendChild(block);
-  }
-}
-
-function parseMarkdownBlocks(lines) {
-  const blocks = [];
-  let index = 0;
-  while (index < lines.length) {
-    const line = lines[index];
-    if (line.trim() === "") {
-      index += 1;
-      continue;
-    }
-
-    const fence = MARKDOWN_FENCE.exec(line);
-    if (fence) {
-      const [, marker, language] = fence;
-      const body = [];
-      index += 1;
-      // An unterminated fence runs to the end rather than falling back to
-      // paragraphs: while a turn is still streaming that is the normal state,
-      // and reflowing it as prose would make the block flicker between two
-      // shapes as the closing fence arrives.
-      while (index < lines.length && !isClosingFence(lines[index], marker)) {
-        body.push(lines[index]);
-        index += 1;
-      }
-      if (index < lines.length) index += 1;
-      blocks.push(buildCodeBlock(body.join("\n"), language));
-      continue;
-    }
-
-    const heading = MARKDOWN_HEADING.exec(line);
-    if (heading) {
-      // Clamped to h4-h6 so a model-authored "#" can never outrank the
-      // application's own headings in the document outline.
-      const level = Math.min(6, heading[1].length + 3);
-      const node = document.createElement(`h${level}`);
-      node.className = "md-heading";
-      parseInlineInto(node, heading[2].trim());
-      blocks.push(node);
-      index += 1;
-      continue;
-    }
-
-    if (MARKDOWN_RULE.test(line)) {
-      blocks.push(document.createElement("hr"));
-      index += 1;
-      continue;
-    }
-
-    if (MARKDOWN_QUOTE.test(line)) {
-      const quoted = [];
-      while (index < lines.length && MARKDOWN_QUOTE.test(lines[index])) {
-        quoted.push(MARKDOWN_QUOTE.exec(lines[index])[1]);
-        index += 1;
-      }
-      const node = document.createElement("blockquote");
-      for (const child of parseMarkdownBlocks(quoted)) node.appendChild(child);
-      blocks.push(node);
-      continue;
-    }
-
-    const listStart = matchListItem(line);
-    if (listStart) {
-      const node = document.createElement(listStart.ordered ? "ol" : "ul");
-      node.className = "md-list";
-      while (index < lines.length) {
-        const item = matchListItem(lines[index]);
-        if (!item || item.ordered !== listStart.ordered) break;
-        const li = document.createElement("li");
-        parseInlineInto(li, item.text);
-        node.appendChild(li);
-        index += 1;
-      }
-      blocks.push(node);
-      continue;
-    }
-
-    // A paragraph runs until a blank line or the start of another block.
-    const paragraph = [];
-    while (index < lines.length && lines[index].trim() !== "" && !startsBlock(lines[index])) {
-      paragraph.push(lines[index].trim());
-      index += 1;
-    }
-    const node = document.createElement("p");
-    node.className = "md-paragraph";
-    parseInlineInto(node, paragraph.join("\n"));
-    blocks.push(node);
-  }
-  return blocks;
-}
-
-function isClosingFence(line, marker) {
-  const trimmed = line.trim();
-  return trimmed.startsWith(marker[0].repeat(3)) && trimmed === marker[0].repeat(trimmed.length);
-}
-
-function startsBlock(line) {
-  return (
-    MARKDOWN_FENCE.test(line) ||
-    MARKDOWN_HEADING.test(line) ||
-    MARKDOWN_RULE.test(line) ||
-    MARKDOWN_QUOTE.test(line) ||
-    matchListItem(line) !== null
-  );
-}
-
-function matchListItem(line) {
-  const ordered = MARKDOWN_ORDERED.exec(line);
-  if (ordered) return { ordered: true, text: ordered[3] };
-  const bullet = MARKDOWN_BULLET.exec(line);
-  // A rule ("---") also matches the bullet pattern; rules are checked first by
-  // the caller, but matchListItem is used for lookahead too.
-  if (bullet && !MARKDOWN_RULE.test(line)) return { ordered: false, text: bullet[2] };
-  return null;
-}
-
-function buildCodeBlock(code, language) {
-  const pre = document.createElement("pre");
-  pre.className = "md-code";
-  const node = document.createElement("code");
-  if (language) {
-    // Recorded for styling only; nothing reads it back to decide behaviour, so
-    // an unknown language is inert rather than something to validate against a
-    // list that would go stale.
-    node.className = `language-${language.toLowerCase()}`;
-  }
-  // Plain text first, always. Highlighting is a later, optional improvement on
-  // something already readable — see scheduleCodeHighlight.
-  node.textContent = code;
-  scheduleCodeHighlight(node, code, language);
-  pre.appendChild(node);
-
-  // A code block the user cannot get out of the window is a screenshot of
-  // code. The button is a sibling of <pre>, not a child: inside it, its label
-  // would become part of the block's own text — so selecting the code by hand,
-  // or copying it, would pick up the word "Copy".
-  // The language rides in the fence ("```sql") and until now was recorded
-  // only as a class. Naming it answers "what am I looking at" before the
-  // reader parses a line.
-  const tag = language
-    ? (() => {
-        const badge = document.createElement("span");
-        badge.className = "md-code-lang";
-        badge.textContent = language.toLowerCase();
-        return badge;
-      })()
-    : null;
-  const copy = buildCopyButton(code, "Copy code");
-  if (!copy && !tag) return pre;
-  // A header strip, the shape every reader already knows from code hosts:
-  // what it is on the left, what you can do with it on the right.
-  const wrap = document.createElement("div");
-  wrap.className = "md-code-wrap";
-  const head = document.createElement("div");
-  head.className = "md-code-head";
-  head.appendChild(tag || document.createElement("span"));
-  if (copy) head.appendChild(copy);
-  wrap.append(head, pre);
-  return wrap;
-}
-
-// --- Syntax highlighting -----------------------------------------------------
-//
-// Self-contained on purpose. Every off-the-shelf highlighter is either a
-// megabyte of grammars or wants to hand back HTML, and both are the wrong
-// shape here: the shell serves an allowlist of five renderer files under
-// script-src 'self', so a new dependency is a new shipped file to justify, and
-// anything returning markup would have to be written with innerHTML — the one
-// thing the whole Markdown renderer above exists to avoid. So: a scanner that
-// returns typed runs of TEXT, painted with createElement and createTextNode,
-// structurally unable to inject anything whatever the model wrote.
-//
-// It is a display aid, not a compiler. It does not track scope, does not parse
-// JS regex literals, and cannot tell a Python decorator from a matrix product.
-// Being wrong colours a word; being slow or unsafe would cost much more.
-//
-// Coverage is what a coding agent actually emits: js/ts, python, go, json,
-// sql, bash, html, css, markdown. Anything else keeps its plain text and its
-// language badge, which is already most of the value.
-
-// Bounds, in the same spirit as MARKDOWN_MAX_CHARS: past these a code block is
-// a data dump, not something anyone reads, and colouring it would cost far
-// more than it returns. Plain text is the honest fallback, not a failure.
-const CODE_HIGHLIGHT_MAX_CHARS = 100_000;
-const CODE_HIGHLIGHT_MAX_LINES = 5_000;
-// A hard ceiling on DOM nodes for one block. Minified or highly punctuated
-// input can produce a token per character; 6000 spans is already more than a
-// screen can show, and past it the block goes back to being one text node.
-const CODE_HIGHLIGHT_MAX_TOKENS = 6_000;
-
-// Highlighting waits for idle time. The block is on screen as plain text the
-// moment it is built — during a stream that is every few frames — and the
-// colouring lands afterwards, so a long answer never pays for typesetting on
-// the frame that shows it. requestIdleCallback is not everywhere (WebKit was
-// late to it), and the behaviour suite's VM has neither it nor rAF, so a
-// zero-delay timeout is the fallback: still after the current task, still
-// before the suite's next settle().
-const scheduleIdleWork =
-  typeof globalThis.requestIdleCallback === "function"
-    ? (callback) => {
-        globalThis.requestIdleCallback(callback, { timeout: 500 });
-      }
-    : (callback) => {
-        setTimeout(callback, 0);
-      };
-
-// Fence labels as people actually write them, mapped onto the grammars that
-// exist. An unknown label resolves to nothing and the block stays plain.
-const CODE_LANGUAGE_ALIASES = {
-  js: "js",
-  jsx: "js",
-  javascript: "js",
-  mjs: "js",
-  cjs: "js",
-  node: "js",
-  ts: "js",
-  tsx: "js",
-  typescript: "js",
-  py: "python",
-  py3: "python",
-  python: "python",
-  python3: "python",
-  go: "go",
-  golang: "go",
-  json: "json",
-  json5: "json",
-  jsonc: "json",
-  sql: "sql",
-  psql: "sql",
-  mysql: "sql",
-  sqlite: "sql",
-  sh: "bash",
-  bash: "bash",
-  zsh: "bash",
-  shell: "bash",
-  console: "bash",
-  html: "html",
-  xml: "html",
-  svg: "html",
-  vue: "html",
-  css: "css",
-  scss: "css",
-  less: "css",
-  md: "markdown",
-  markdown: "markdown",
-};
-
-// Sticky (`y`) so a rule can only match AT the cursor, never by searching
-// ahead: the scanner's whole correctness argument is that position advances by
-// exactly the text consumed. Unicode (`u`) for the same reason every other
-// regex in this file carries it — and it is why a backtick in a pattern is
-// written \x60 below: under `u` a backslash-backtick is an invalid escape.
-function codeRule(type, source, extraFlags = "") {
-  return { type, re: new RegExp(source, "yu" + extraFlags) };
-}
-
-// Fragments shared by the C-family grammars. Strings stop at a newline so an
-// unbalanced quote colours one line rather than swallowing the rest of the
-// file — the failure mode that makes naive highlighters look broken.
-const CODE_DQ_STRING = String.raw`"(?:\\.|[^"\\\n])*"`;
-const CODE_SQ_STRING = String.raw`'(?:\\.|[^'\\\n])*'`;
-const CODE_LINE_COMMENT_SLASH = String.raw`//[^\n]*`;
-const CODE_BLOCK_COMMENT = String.raw`/\*[\s\S]*?(?:\*/|$)`;
-const CODE_NUMBER = String.raw`0[xXbBoO][0-9a-fA-F_]+n?|\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d+)?n?`;
-const CODE_WORD = String.raw`[A-Za-z_$][A-Za-z0-9_$]*`;
-const CODE_PUNCT = String.raw`[{}()[\];,.:?=+\-*/%<>!&|^~@#]+`;
-
-function words(list) {
-  return new Set(list.split(" "));
-}
-
-// Each grammar is an ordered rule list plus, for languages that have them, the
-// word sets. Order matters: comments before punctuation, strings before
-// everything, so a `//` inside a string cannot start a comment.
-const CODE_GRAMMARS = {
-  js: {
-    rules: [
-      codeRule("comment", CODE_LINE_COMMENT_SLASH),
-      codeRule("comment", CODE_BLOCK_COMMENT),
-      codeRule("string", CODE_DQ_STRING),
-      codeRule("string", CODE_SQ_STRING),
-      codeRule("string", String.raw`\x60(?:\\.|[^\x60\\])*\x60`),
-      codeRule("number", CODE_NUMBER),
-      codeRule("word", CODE_WORD),
-      codeRule("punct", CODE_PUNCT),
-    ],
-    keywords: words(
-      "const let var function return if else for while do break continue new class extends " +
-        "super this typeof instanceof in of delete void null undefined true false async await " +
-        "yield try catch finally throw switch case default import export from as static get set " +
-        "debugger interface type enum implements private public protected readonly abstract " +
-        "declare namespace satisfies keyof infer"
-    ),
-    builtins: words(
-      "Math JSON Object Array String Number Boolean Promise Symbol Map Set WeakMap WeakSet " +
-        "Date RegExp Error TypeError document window globalThis fetch Headers URL " +
-        "string number boolean any unknown never void object"
-    ),
-  },
-  python: {
-    rules: [
-      codeRule("comment", String.raw`#[^\n]*`),
-      codeRule("string", String.raw`[rRbBuUfF]{0,2}"""[\s\S]*?(?:"""|$)`),
-      codeRule("string", String.raw`[rRbBuUfF]{0,2}'''[\s\S]*?(?:'''|$)`),
-      codeRule("string", String.raw`[rRbBuUfF]{0,2}` + CODE_DQ_STRING),
-      codeRule("string", String.raw`[rRbBuUfF]{0,2}` + CODE_SQ_STRING),
-      codeRule("number", CODE_NUMBER),
-      codeRule("word", CODE_WORD),
-      codeRule("punct", CODE_PUNCT),
-    ],
-    keywords: words(
-      "def class return if elif else for while break continue pass import from as with try " +
-        "except finally raise lambda yield global nonlocal assert del in is not and or None " +
-        "True False async await match case"
-    ),
-    builtins: words(
-      "print len range str int float list dict set tuple bool open enumerate zip map filter " +
-        "sum min max sorted type isinstance super self cls Exception ValueError TypeError"
-    ),
-  },
-  go: {
-    rules: [
-      codeRule("comment", CODE_LINE_COMMENT_SLASH),
-      codeRule("comment", CODE_BLOCK_COMMENT),
-      codeRule("string", String.raw`\x60[^\x60]*\x60`),
-      codeRule("string", CODE_DQ_STRING),
-      codeRule("string", CODE_SQ_STRING),
-      codeRule("number", CODE_NUMBER),
-      codeRule("word", CODE_WORD),
-      codeRule("punct", CODE_PUNCT),
-    ],
-    keywords: words(
-      "package import func var const type struct interface map chan go defer if else for range " +
-        "return switch case default break continue fallthrough goto select nil true false"
-    ),
-    builtins: words(
-      "string bool byte rune error int int8 int16 int32 int64 uint uint8 uint16 uint32 uint64 " +
-        "uintptr float32 float64 complex64 complex128 any len cap make new append copy delete " +
-        "panic recover close min max"
-    ),
-  },
-  json: {
-    rules: [
-      // A key is a string that a colon follows. Looking ahead is safe: the
-      // lookahead is not consumed, so the cursor still advances by the string.
-      codeRule("attr", String.raw`"(?:\\.|[^"\\])*"(?=\s*:)`),
-      codeRule("string", String.raw`"(?:\\.|[^"\\])*"`),
-      codeRule("number", String.raw`-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?`),
-      codeRule("word", String.raw`[A-Za-z_][A-Za-z0-9_]*`),
-      codeRule("punct", String.raw`[{}[\],:]`),
-    ],
-    keywords: words("true false null"),
-    builtins: new Set(),
-  },
-  sql: {
-    rules: [
-      codeRule("comment", String.raw`--[^\n]*`),
-      codeRule("comment", CODE_BLOCK_COMMENT),
-      // SQL escapes a quote by doubling it, not with a backslash.
-      codeRule("string", String.raw`'(?:''|[^'\n])*'`),
-      codeRule("attr", String.raw`"[^"\n]*"`),
-      codeRule("attr", String.raw`\x60[^\x60\n]*\x60`),
-      codeRule("number", String.raw`\d+(?:\.\d+)?`),
-      codeRule("word", String.raw`[A-Za-z_][A-Za-z0-9_]*`),
-      codeRule("punct", String.raw`[(),;.*=<>+\-/%|]+`),
-    ],
-    // SQL keywords are case-insensitive and people write them both ways.
-    foldWords: true,
-    keywords: words(
-      "SELECT FROM WHERE INSERT INTO VALUES UPDATE SET DELETE CREATE TABLE ALTER DROP INDEX " +
-        "VIEW JOIN LEFT RIGHT INNER OUTER FULL CROSS ON AS AND OR NOT NULL IS IN EXISTS BETWEEN " +
-        "LIKE GROUP BY ORDER HAVING LIMIT OFFSET UNION ALL DISTINCT CASE WHEN THEN ELSE END " +
-        "PRIMARY KEY FOREIGN REFERENCES DEFAULT UNIQUE CONSTRAINT WITH RETURNING ASC DESC " +
-        "BEGIN COMMIT ROLLBACK TRANSACTION IF CASCADE USING"
-    ),
-    builtins: words(
-      "COUNT SUM AVG MIN MAX COALESCE NULLIF CAST NOW DATE TIMESTAMP INTEGER TEXT VARCHAR " +
-        "BOOLEAN SERIAL BIGINT REAL BLOB JSON JSONB UUID"
-    ),
-  },
-  bash: {
-    rules: [
-      codeRule("comment", String.raw`#[^\n]*`),
-      codeRule("string", String.raw`"(?:\\.|[^"\\])*"`),
-      codeRule("string", String.raw`'[^']*'`),
-      codeRule("builtin", String.raw`\$\{[^}\n]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9@*#?$!]`),
-      codeRule("number", String.raw`\d+`),
-      codeRule("word", String.raw`[A-Za-z_][A-Za-z0-9_-]*`),
-      codeRule("punct", String.raw`[|&;()<>=]+`),
-    ],
-    keywords: words(
-      "if then else elif fi for while until do done case esac function in return exit local " +
-        "export set unset source declare readonly shift trap break continue eval exec"
-    ),
-    builtins: words(
-      "echo printf read cd ls cat grep sed awk cut sort uniq head tail find xargs cp mv rm " +
-        "mkdir rmdir touch chmod chown ln pwd which curl wget tar zip unzip git make go node " +
-        "npm pnpm yarn python python3 pip docker kubectl ssh scp sudo env test"
-    ),
-  },
-  html: {
-    rules: [
-      codeRule("comment", String.raw`<!--[\s\S]*?(?:-->|$)`),
-      codeRule("keyword", String.raw`<!DOCTYPE[^>\n]*>`, "i"),
-      codeRule("tag", String.raw`</?[A-Za-z][A-Za-z0-9:-]*`),
-      codeRule("string", String.raw`"[^"\n]*"`),
-      codeRule("string", String.raw`'[^'\n]*'`),
-      codeRule("attr", String.raw`[A-Za-z_:][A-Za-z0-9_:.-]*(?=\s*=)`),
-      codeRule("punct", String.raw`[<>/=]+`),
-    ],
-    keywords: new Set(),
-    builtins: new Set(),
-  },
-  css: {
-    rules: [
-      codeRule("comment", CODE_BLOCK_COMMENT),
-      codeRule("string", CODE_DQ_STRING),
-      codeRule("string", CODE_SQ_STRING),
-      codeRule("keyword", String.raw`@[A-Za-z-]+|!important`),
-      // A colour literal before the selector rule, so #fff is a colour and
-      // #main is an id.
-      codeRule("number", String.raw`#[0-9a-fA-F]{3,8}\b`),
-      codeRule("tag", String.raw`[.#][A-Za-z_-][A-Za-z0-9_-]*`),
-      codeRule("attr", String.raw`--[A-Za-z0-9_-]+|[A-Za-z-]+(?=\s*:)`),
-      codeRule(
-        "number",
-        String.raw`[+-]?(?:\d*\.)?\d+(?:px|em|rem|ex|ch|vh|vw|vmin|vmax|%|s|ms|deg|turn|fr|pt)?`
-      ),
-      codeRule("punct", String.raw`[{}();:,>+~*]+`),
-    ],
-    keywords: new Set(),
-    builtins: new Set(),
-  },
-  markdown: {
-    // No word rule: prose must stay prose. Only the marks are coloured.
-    rules: [
-      codeRule("comment", String.raw`^ {0,3}>[^\n]*`, "m"),
-      codeRule("keyword", String.raw`^ {0,3}#{1,6}[^\n]*`, "m"),
-      codeRule("punct", String.raw`^ {0,3}(?:[-*+]|\d{1,9}[.)])(?= )`, "m"),
-      codeRule("string", String.raw`\x60{1,3}[^\x60\n]+\x60{1,3}`),
-      codeRule("function", String.raw`!?\[[^\]\n]*\]\([^)\n]*\)`),
-      codeRule("tag", String.raw`\*\*[^*\n]+\*\*|__[^_\n]+__`),
-      codeRule("tag", String.raw`\*[^*\n]+\*|_[^_\n]+_`),
-    ],
-    keywords: new Set(),
-    builtins: new Set(),
-  },
-};
-
-function codeGrammarFor(language) {
-  if (typeof language !== "string" || language === "") return null;
-  const key = CODE_LANGUAGE_ALIASES[language.toLowerCase()];
-  return key ? CODE_GRAMMARS[key] : null;
-}
-
-// True when the identifier at `after` is being called. The cheapest signal that
-// separates a function name from a variable, and the only structure this
-// scanner attempts.
-function isCodeCallSite(code, after) {
-  let index = after;
-  while (index < code.length && (code[index] === " " || code[index] === "\t")) index += 1;
-  return code[index] === "(";
-}
-
-// Returns runs of { type, text } covering `code` exactly — concatenating the
-// texts reproduces the input character for character, which is what lets the
-// painted block still be selected and copied as the code it is. Returns null
-// when the language is unknown or the block blew a bound, which the caller
-// reads as "leave it plain".
-function tokenizeCode(code, language) {
-  const grammar = codeGrammarFor(language);
-  if (!grammar) return null;
-
-  const tokens = [];
-  let plain = "";
-  const flushPlain = () => {
-    if (plain !== "") {
-      tokens.push({ type: "", text: plain });
-      plain = "";
-    }
-  };
-
-  let index = 0;
-  while (index < code.length) {
-    let match = null;
-    for (const rule of grammar.rules) {
-      rule.re.lastIndex = index;
-      const found = rule.re.exec(code);
-      if (found && found[0].length > 0) {
-        match = { type: rule.type, text: found[0] };
-        break;
-      }
-    }
-    if (!match) {
-      // Nothing claims this character — whitespace, an operator no grammar
-      // lists, a CJK identifier. It joins the running plain run.
-      plain += code[index];
-      index += 1;
-      continue;
-    }
-    if (match.type === "word") {
-      const word = grammar.foldWords ? match.text.toUpperCase() : match.text;
-      if (grammar.keywords.has(word)) match.type = "keyword";
-      else if (grammar.builtins.has(word)) match.type = "builtin";
-      else if (isCodeCallSite(code, index + match.text.length)) match.type = "function";
-      else match.type = "";
-    }
-    if (match.type === "") {
-      plain += match.text;
-    } else {
-      flushPlain();
-      tokens.push(match);
-    }
-    index += match.text.length;
-    if (tokens.length > CODE_HIGHLIGHT_MAX_TOKENS) return null;
-  }
-  flushPlain();
-  return tokens;
-}
-
-// Text nodes for the unclassified runs, one span per classified run. No
-// innerHTML, no string concatenation into markup — the same structural
-// argument the Markdown renderer above rests on.
-function paintCodeTokens(node, tokens) {
-  node.textContent = "";
-  for (const token of tokens) {
-    if (token.type === "") {
-      node.appendChild(document.createTextNode(token.text));
-      continue;
-    }
-    const span = document.createElement("span");
-    span.className = `tok-${token.type}`;
-    span.textContent = token.text;
-    node.appendChild(span);
-  }
-}
-
-function scheduleCodeHighlight(node, code, language) {
-  if (!codeGrammarFor(language)) return;
-  if (code.length > CODE_HIGHLIGHT_MAX_CHARS) return;
-  // Counted rather than split: a 100 KB block should not be copied into an
-  // array just to be rejected.
-  let lines = 1;
-  for (let index = 0; index < code.length; index += 1) {
-    if (code[index] === "\n") lines += 1;
-    if (lines > CODE_HIGHLIGHT_MAX_LINES) return;
-  }
-  scheduleIdleWork(() => {
-    const tokens = tokenizeCode(code, language);
-    // A block committed mid-stream is already on screen; this replaces its one
-    // text node with the coloured runs. The turn it belongs to may since have
-    // been superseded, in which case the node is detached and this paints
-    // something nobody sees — cheap, and cheaper than tracking ownership.
-    if (tokens) paintCodeTokens(node, tokens);
-  });
-}
-
-// Inline scanning. Written as a scanner rather than a chain of replacements
-// because replacements operate on a string, and a string is exactly the thing
-// that must never come back as markup.
-function parseInlineInto(parent, text) {
-  let buffer = "";
-  const flush = () => {
-    if (buffer !== "") {
-      parent.appendChild(document.createTextNode(buffer));
-      buffer = "";
-    }
-  };
-
-  let index = 0;
-  while (index < text.length) {
-    const char = text[index];
-
-    if (char === "\\" && index + 1 < text.length && INLINE_ESCAPABLE.includes(text[index + 1])) {
-      buffer += text[index + 1];
-      index += 2;
-      continue;
-    }
-    if (char === "\n") {
-      flush();
-      parent.appendChild(document.createElement("br"));
-      index += 1;
-      continue;
-    }
-    if (char === "`") {
-      const span = matchCodeSpan(text, index);
-      if (span) {
-        flush();
-        const node = document.createElement("code");
-        node.className = "md-code-inline";
-        node.textContent = span.content;
-        parent.appendChild(node);
-        index = span.end;
-        continue;
-      }
-    }
-    if (char === "[") {
-      const link = matchLink(text, index);
-      if (link) {
-        flush();
-        parent.appendChild(buildLink(link));
-        index = link.end;
-        continue;
-      }
-    }
-    if (char === "*" || char === "_" || char === "~") {
-      const emphasis = matchEmphasis(text, index);
-      if (emphasis) {
-        flush();
-        const node = document.createElement(emphasis.tag);
-        parseInlineInto(node, emphasis.content);
-        parent.appendChild(node);
-        index = emphasis.end;
-        continue;
-      }
-    }
-    buffer += char;
-    index += 1;
-  }
-  flush();
-}
-
-function matchCodeSpan(text, start) {
-  let run = 0;
-  while (text[start + run] === "`") run += 1;
-  const fence = "`".repeat(run);
-  const close = text.indexOf(fence, start + run);
-  if (close < 0) return null;
-  return { content: text.slice(start + run, close), end: close + run };
-}
-
-function matchEmphasis(text, start) {
-  const char = text[start];
-  const double = text.slice(start, start + 2);
-  const candidates = char === "~"
-    ? [{ marker: "~~", tag: "del" }]
-    : [
-        { marker: double === char + char ? double : null, tag: "strong" },
-        { marker: char, tag: "em" },
-      ];
-  for (const candidate of candidates) {
-    if (!candidate.marker) continue;
-    if (text.slice(start, start + candidate.marker.length) !== candidate.marker) continue;
-    const from = start + candidate.marker.length;
-    const close = text.indexOf(candidate.marker, from);
-    // Empty emphasis is not emphasis; leaving it as literal text is what a
-    // reader would expect from "**" typed on its own.
-    if (close < 0 || close === from) continue;
-    return { tag: candidate.tag, content: text.slice(from, close), end: close + candidate.marker.length };
-  }
-  return null;
-}
-
-function matchLink(text, start) {
-  const labelEnd = text.indexOf("]", start + 1);
-  if (labelEnd < 0 || text[labelEnd + 1] !== "(") return null;
-  const urlEnd = text.indexOf(")", labelEnd + 2);
-  if (urlEnd < 0) return null;
-  const label = text.slice(start + 1, labelEnd);
-  const href = text.slice(labelEnd + 2, urlEnd).trim();
-  if (label === "" || href === "" || /\s/u.test(href)) return null;
-  return { label, href, end: urlEnd + 1 };
-}
-
-// Only http and https become links. Anything else — javascript:, data:, a
-// custom scheme another installed app registered — is rendered as the literal
-// text the model wrote, so the user can see exactly what was proposed without
-// the renderer offering to follow it.
-function buildLink(link) {
-  const safe = /^https?:\/\//iu.test(link.href);
-  if (!safe) {
-    const fallback = document.createElement("span");
-    fallback.className = "md-link-refused";
-    fallback.textContent = `[${link.label}](${link.href})`;
-    return fallback;
-  }
-  const anchor = document.createElement("a");
-  anchor.className = "md-link";
-  anchor.setAttribute("href", link.href);
-  // rel is belt-and-braces: the shim intercepts the click and hands the URL to
-  // Go before any navigation happens, so the window is never handed over.
-  anchor.setAttribute("rel", "noopener noreferrer");
-  parseInlineInto(anchor, link.label);
-  return anchor;
-}
-
-// Clipboard access, or null when there is none.
-//
-// The UI origin is http://127.0.0.1, which browsers treat as a secure context,
-// so this is present in the shipped shell. It is still checked because the
-// behaviour suite runs the same code in a VM with no navigator at all, and
-// because a missing clipboard should remove the affordance rather than break
-// the message.
-const COPY_FEEDBACK_MS = 1200;
-
-function clipboardWriter() {
-  const clipboard = globalThis.navigator?.clipboard;
-  return typeof clipboard?.writeText === "function" ? clipboard : null;
-}
-
-function buildCopyButton(text, label) {
-  const clipboard = clipboardWriter();
-  if (!clipboard || typeof text !== "string" || text === "") return null;
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "message-action";
-  button.textContent = label;
-  button.addEventListener("click", () => {
-    // The result is reported on the button itself rather than in the status
-    // card: this is a per-message action, and a global status line would make
-    // every copy look like an application event.
-    Promise.resolve(clipboard.writeText(text)).then(
-      () => {
-        button.textContent = "Copied";
-        setTimeout(() => {
-          button.textContent = label;
-        }, COPY_FEEDBACK_MS);
-      },
-      () => {
-        button.textContent = "Copy failed";
-        setTimeout(() => {
-          button.textContent = label;
-        }, COPY_FEEDBACK_MS);
-      }
-    );
-  });
-  return button;
-}
-
-// formatMessageTime keeps timestamps quiet: today's messages show only the
-// clock, older ones add the date. A full locale string on every row is noise
-// that says the same day twenty times.
-function formatMessageTime(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const sameDay =
-    localCalendarDay(date) === localCalendarDay(new Date());
-  return sameDay
-    ? date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
-function renderMessage(role, text, streamingState = "complete", timestamp = "", actionOptions = {}) {
-  const wrapper = document.createElement("article");
-  wrapper.className = `message ${role}`;
-  wrapper.classList.toggle(
-    "partial",
-    role === "assistant" && streamingState !== "complete"
-  );
-  const label = document.createElement("div");
-  label.className = "message-role";
-  // The wrapper class stays the raw role (tests and CSS key off it); the
-  // visible text speaks the product's voice. "ASSISTANT" is a protocol word,
-  // not a name. The assistant also gets the brand mark — the same "v" the
-  // sidebar wears — so its answers are visually signed.
-  if (role === "assistant") {
-    const avatar = document.createElement("span");
-    avatar.className = "message-avatar";
-    avatar.textContent = "v";
-    label.appendChild(avatar);
-    label.appendChild(document.createTextNode("WorkMax"));
-  } else {
-    label.textContent = role === "user" ? "You" : role;
-  }
-  // Cached messages carry their stored time; a streaming message shows none
-  // until the post-turn reconcile repaints it from cache — which is when a
-  // real timestamp exists to show.
-  const time = formatMessageTime(timestamp);
-  if (time) {
-    const when = document.createElement("span");
-    when.className = "message-time";
-    when.textContent = time;
-    label.appendChild(when);
-  }
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
-  // Only the assistant's text is Markdown. What the user typed is shown back
-  // exactly as typed — rendering their asterisks as emphasis would change the
-  // record of what they asked.
-  if (role === "assistant") {
-    renderMarkdownInto(bubble, text);
-  } else {
-    bubble.textContent = text;
-  }
-  wrapper.append(label, bubble);
-
-  attachMessageActions(wrapper, role, text, actionOptions);
-  return wrapper;
-}
-
-// Built separately from the bubble because a streamed answer starts empty:
-// renderMessage cannot offer "copy" for text that has not arrived yet, so the
-// finished turn calls this once it has.
-function attachMessageActions(wrapper, role, text, options = {}) {
-  if (!wrapper) return;
-  // Idempotent. No current path reaches this: renderMessage builds the
-  // streaming bubble from empty text, which yields no row, so the finished
-  // turn is always the first to add one. Kept because "one row per message" is
-  // the invariant, and the day a placeholder action appears on a streaming
-  // bubble the alternative is two of every button.
-  for (const child of Array.from(wrapper.children || [])) {
-    if (child.classList?.contains("message-actions")) return;
-  }
-  const actions = document.createElement("div");
-  actions.className = "message-actions";
-  const copy = buildCopyButton(text, role === "assistant" ? "Copy answer" : "Copy");
-  if (copy) actions.appendChild(copy);
-  if (role === "assistant" && options.regenerateText) {
-    actions.appendChild(buildRegenerateButton(options.regenerateText));
-  }
-  if (role === "user" && text) {
-    // Not a retry: it puts the words back in the composer so they can be
-    // changed first. Re-running a prompt verbatim is rarely what someone wants
-    // when they did not like the answer, and a one-click resend would also
-    // have to duplicate the turn machinery it would be bypassing.
-    const reuse = document.createElement("button");
-    reuse.type = "button";
-    reuse.className = "message-action";
-    reuse.textContent = "Edit and resend";
-    reuse.addEventListener("click", () => {
-      chatInput.value = text;
-      updateComposerState();
-      chatInput.focus();
-    });
-    actions.appendChild(reuse);
-  }
-  if (actions.children.length > 0) wrapper.appendChild(actions);
-}
-
-// Only the FINAL answer is regenerable — re-running an earlier prompt
-// mid-conversation would fork history the transcript cannot show. The
-// click is the consent: unlike "Edit and resend", the whole point here
-// is running the same words again. The dedicated class is how the in-place
-// reconcile finds and retires the button once the answer stops being final.
-function buildRegenerateButton(regenerateText) {
-  const regen = document.createElement("button");
-  regen.type = "button";
-  regen.className = "message-action message-action-regenerate";
-  regen.textContent = "Regenerate";
-  regen.addEventListener("click", () => {
-    if (chatInput.disabled) return;
-    chatInput.value = regenerateText;
-    updateComposerState();
-    submitChat({ preventDefault() {} });
-  });
-  return regen;
-}
-
-// Whether the viewport is glued to the newest content. True until the user
-// scrolls away from the bottom; a stream that keeps yanking the reader back
-// down while they are checking an earlier answer is hostile, not helpful.
-let viewportSticky = true;
-
-function viewportNearBottom() {
-  const remaining =
-    messageViewport.scrollHeight -
-    messageViewport.scrollTop -
-    (messageViewport.clientHeight || 0);
-  return remaining < 48;
-}
-
-// force is for the user's own actions — sending a message, opening a thread,
-// jumping — where "take me to the newest" is exactly what they asked for.
-// Streaming deltas pass no force: they follow only a reader who is already
-// following, and otherwise light the jump affordance instead.
-// formatTurnDuration speaks in the units a person watches a turn in.
-function formatTurnDuration(ms) {
-  const secs = Math.max(0, Math.round(ms / 1000));
-  if (secs < 60) return `${secs}s`;
-  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
-}
-
-// setTurnState is the one place the pill's text and colour change together.
-// The class is derived from the label so the two can never disagree.
-function setTurnState(label, detail = "") {
-  turnState.textContent = detail ? `${label} · ${detail}` : label;
-  const tone =
-    label === "Working" || label === "Resuming" || label === "Stopping"
-      ? "busy"
-      : label === "Done"
-        ? "ok"
-        : label === "Error"
-          ? "error"
-          : label === "Interrupted" || label === "Stopped" || label === "Stopped locally" || label === "Session changed"
-            ? "warn"
-            : "idle";
-  turnState.className = `turn-state is-${tone}`;
-}
-
-function scrollMessagesToEnd(force = false) {
-  if (force || viewportSticky) {
-    messageViewport.scrollTop = messageViewport.scrollHeight;
-    viewportSticky = true;
-    if (jumpLatestButton) jumpLatestButton.hidden = true;
-    return;
-  }
-  if (jumpLatestButton) jumpLatestButton.hidden = false;
-}
-
-function updateSelectedThreadHeading() {
-  if (!state.selectedThreadUUID) return;
-  const thread = state.threads.find(
-    (candidate) => candidate.uuid === state.selectedThreadUUID
-  );
-  if (!thread) return;
-  threadTitle.textContent = thread.name || "Untitled thread";
-  threadMeta.textContent = `${thread.agent_mode || "agent"} · ${thread.message_count || 0} messages · ${formatMessageTime(thread.updated_at) || formatDate(thread.updated_at)}`;
-  // Rename lives where the title is read, and only where the sidecar would
-  // accept it: a synced thread's name belongs to the cloud copy, which the
-  // sync worker would restore over any local edit.
-  const renameButton = document.querySelector("#rename-thread-button");
-  if (renameButton) {
-    renameButton.hidden =
-      thread.cloud_sync_state !== "local" || !renameThreadBridgeAvailable();
-  }
-  // Export needs messages to export and a bridge to ask through; unlike
-  // rename it works for synced threads too — the file is a copy, not an
-  // edit, so the sync worker has nothing to restore.
-  const exportButton = document.querySelector("#export-thread-button");
-  if (exportButton) {
-    exportButton.hidden =
-      (thread.message_count || 0) === 0 ||
-      typeof window.desktopBridge?.agent?.exportThread !== "function";
-  }
-  closeRenameForm();
-}
-
 // Export writes the conversation into the thread's workspace as Markdown,
 // then opens the folder: "take your data with you" ends with the file in
 // front of the user, not with a path in a status message they must chase.
-async function exportSelectedThread() {
+export async function exportSelectedThread() {
   const agent = window.desktopBridge?.agent;
   if (!agent || typeof agent.exportThread !== "function") return;
   const threadUUID = state.selectedThreadUUID;
@@ -3201,11 +1107,11 @@ async function exportSelectedThread() {
   }
 }
 
-function renameThreadBridgeAvailable() {
+export function renameThreadBridgeAvailable() {
   return typeof window.desktopBridge?.agent?.renameThread === "function";
 }
 
-function closeRenameForm() {
+export function closeRenameForm() {
   const form = document.querySelector("#rename-thread-form");
   const titleRow = document.querySelector("#thread-title");
   if (form) form.hidden = true;
@@ -3268,7 +1174,7 @@ async function submitRename() {
   setStatus("Conversation renamed.");
 }
 
-function chooseModeForThread(thread) {
+export function chooseModeForThread(thread) {
   if (state.allowedModes.includes(thread.agent_mode)) {
     state.selectedMode = thread.agent_mode;
     return;
@@ -3278,7 +1184,7 @@ function chooseModeForThread(thread) {
   }
 }
 
-function renderSkillOptions() {
+export function renderSkillOptions() {
   const selectedThread = state.threads.find(
     (thread) => thread.uuid === state.selectedThreadUUID
   );
@@ -3318,869 +1224,16 @@ function renderSkillOptions() {
   updateNewThreadState();
 }
 
-function isValidChatText(value) {
-  if (typeof value !== "string" || !hasWellFormedUTF16(value)) return false;
-  const trimmed = value.trim();
-  return trimmed.length > 0 && utf8ByteLength(trimmed) <= MAX_CHAT_TEXT_BYTES;
-}
-
-function isValidThreadName(value) {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.trim() === value &&
-    hasWellFormedUTF16(value) &&
-    !hasControlCharacter(value) &&
-    utf8ByteLength(value) <= MAX_THREAD_NAME_BYTES
-  );
-}
-
-function selectedRecoverableTurn() {
-  return state.recoverableTurns.find(
-    (turn) => turn.thread_uuid === state.selectedThreadUUID
-  ) || null;
-}
-
-function removeRecoverableTurn(turnUUID) {
-  state.recoverableTurns = state.recoverableTurns.filter(
-    (turn) => turn.turn_uuid !== turnUUID
-  );
-  state.recoveryFeedback = "";
-  state.recoveryFeedbackKind = "default";
-  renderThreads();
-  updateRecoveryState();
-}
-
-function recoveryPromptPreview(value) {
-  const characters = Array.from(value);
-  const preview = characters.slice(0, 120).join("");
-  return `Prompt: ${preview}${characters.length > 120 ? "…" : ""}`;
-}
-
-function updateRecoveryState() {
-  const recoverable = selectedRecoverableTurn();
-  const visible = recoverable !== null;
-  const busy =
-    state.recoveryLoading || state.resumingTurn || state.dismissingRecovery;
-  turnRecoveryCard.hidden = !visible;
-  turnRecoveryCard.setAttribute("aria-busy", String(visible && busy));
-  turnRecoveryResumeButton.disabled =
-    !visible ||
-    busy ||
-    state.activeTurn !== null ||
-    state.recoveringSession;
-  turnRecoveryDismissButton.disabled =
-    !visible || busy || state.activeTurn !== null || state.recoveringSession;
-  turnRecoveryResumeButton.textContent = state.resumingTurn
-    ? "Resuming..."
-    : state.recoveryLoading
-      ? "Checking..."
-      : "Resume";
-  turnRecoveryDismissButton.textContent = state.dismissingRecovery
-    ? "Dismissing..."
-    : "Dismiss";
-  turnRecoveryDescription.textContent = state.resumingTurn
-    ? "Retrying the interrupted request safely."
-    : "Retry this interrupted response using the same request.";
-  turnRecoveryPrompt.textContent = recoverable
-    ? recoveryPromptPreview(recoverable.user_text)
-    : "";
-  turnRecoveryFeedback.textContent = state.recoveryFeedback;
-  turnRecoveryFeedback.classList.toggle(
-    "error",
-    state.recoveryFeedbackKind === "error"
-  );
-}
-
-function updateComposerState() {
-  renderLocalAccountArea();
-  renderComposerChips();
-  // An open palette shows availability-gated commands; when availability
-  // changes under it (skills finish loading, a turn starts), the list must
-  // follow — otherwise it either hides a now-possible action or offers a
-  // now-impossible one.
-  const palette = document.querySelector("#quick-switcher");
-  if (palette && !palette.hidden) renderQuickSwitcher();
-  const authenticated = canUseAgent();
-  const hasThread = Boolean(state.selectedThreadUUID);
-  const hasMode = state.allowedModes.includes(state.selectedMode);
-  const active = state.activeTurn !== null;
-  const cancelConfirmationPending = state.cancelConfirmationTurnID !== null;
-  const recoverable = selectedRecoverableTurn();
-  const ready =
-    authenticated &&
-    hasThread &&
-    state.agentAvailable &&
-    !state.skillsLoading &&
-    !state.recoveryLoading &&
-    hasMode &&
-    !active &&
-    !cancelConfirmationPending &&
-    !recoverable &&
-    !state.createFormOpen &&
-    !state.recoveringSession;
-  agentMode.disabled = !ready;
-  // One allowed skill is not a choice; the composer status already names it.
-  // The selector earns its pixels back the day a second skill ships.
-  const singleSkill = state.allowedModes.length <= 1;
-  agentMode.hidden = singleSkill;
-  const modeLabel = document.querySelector("#agent-mode-label");
-  if (modeLabel) modeLabel.hidden = singleSkill;
-  // The chip keeps the mode visible when the selector has nothing to select.
-  const modeChip = document.querySelector("#mode-chip");
-  if (modeChip) {
-    const shown = singleSkill && authenticated && state.selectedMode !== "";
-    modeChip.hidden = !shown;
-    if (shown) modeChip.textContent = state.selectedMode.toUpperCase();
-  }
-  chatInput.disabled = !ready;
-  sendButton.disabled = !ready || !isValidChatText(chatInput.value);
-  stopButton.hidden = !active;
-  stopButton.disabled = !active || state.activeTurn?.stopRequested === true;
-
-  if (state.recoveringSession) {
-    composerStatus.textContent = "Your signed-in account changed. Select a thread again.";
-  } else if (!authenticated) {
-    composerStatus.textContent =
-      "Sign in, or choose a local model under Models, to start a conversation.";
-  } else if (!hasThread) {
-    composerStatus.textContent = isLocalOnlySession()
-      ? "Select or create a thread. It stays on this machine."
-      : "Select a synced thread to continue.";
-  } else if (!state.agentAvailable) {
-    composerStatus.textContent = "Agent streaming is unavailable in this Desktop build.";
-  } else if (state.skillsLoading) {
-    composerStatus.textContent = "Loading available skills...";
-  } else if (state.recoveryLoading) {
-    composerStatus.textContent = "Checking interrupted responses...";
-  } else if (!hasMode) {
-    composerStatus.textContent = "No Desktop skill is currently available.";
-  } else if (recoverable) {
-    composerStatus.textContent = state.resumingTurn
-      ? "Resuming the interrupted response..."
-      : "Resume or dismiss the interrupted response before sending another prompt.";
-  } else if (cancelConfirmationPending) {
-    composerStatus.textContent = "Confirming persistent cancellation...";
-  } else if (active) {
-    composerStatus.textContent = state.activeTurn.stopRequested
-      ? "Stopping this turn..."
-      : "WorkMax Agent is responding...";
-  } else if (isLocalOnlySession()) {
-    composerStatus.textContent = state.toolLoop
-      ? `${state.selectedMode.toUpperCase()} on your local model with tools. Signed out — nothing leaves this machine.`
-      : `${state.selectedMode.toUpperCase()} on your local model, chat only. Signed out — nothing leaves this machine.`;
-  } else if (state.skillsDegraded) {
-    composerStatus.textContent = `${state.selectedMode.toUpperCase()} is available; live skill details are offline.`;
-  } else {
-    composerStatus.textContent = `Continue with ${state.selectedMode.toUpperCase()}.`;
-  }
-  updateRecoveryState();
-  updateNewThreadState();
-}
-
-// Whether the agent can be driven at all right now.
-//
-// It used to be "is there a cloud session", which made the local route
-// unreachable: the sidecar has served unauthenticated turns since L3d, but the
-// renderer disabled its composer, hid the new-thread button and never even
-// loaded local threads, so the signed-out local-first configuration existed
-// only on the server side.
-function canUseAgent() {
-  return state.auth?.state === "authenticated" || state.localRoute;
-}
-
-// Signed out and running locally. Worth naming because several messages have
-// to say something different in this state — "sign in" is not the answer to
-// anything here.
-function isLocalOnlySession() {
-  return state.localRoute && state.auth?.state !== "authenticated";
-}
-
-function canGenerateThreadUUID() {
-  return typeof globalThis.crypto?.randomUUID === "function";
-}
-
-function generateThreadUUID() {
-  if (!canGenerateThreadUUID()) {
-    throw new Error("Secure thread identity generation is unavailable.");
-  }
-  const value = globalThis.crypto.randomUUID();
-  if (!CANONICAL_V4_UUID.test(value)) {
-    throw new Error("Secure thread identity generation returned an invalid value.");
-  }
-  return value;
-}
-
-function canOpenNewThread() {
-  return (
-    canUseAgent() &&
-    state.agentAvailable &&
-    state.createAvailable &&
-    canGenerateThreadUUID() &&
-    !state.skillsLoading &&
-    state.allowedModes.length > 0 &&
-    !state.activeTurn &&
-    !state.creatingThread &&
-    !state.recoveringSession &&
-    !state.createFormOpen
-  );
-}
-
-// What a first-time user can actually do here. Three honest starters — each
-// is a prompt the local PPT agent can genuinely act on, not aspirational
-// marketing copy. Clicking one opens the same new-thread flow the button
-// does, and plants the prompt in the composer once the thread exists.
-const STARTER_PROMPTS = [
-  {
-    title: "Quarterly business review",
-    icon: "▤",
-    tone: "tone-blue",
-    prompt: "Turn my Q3 numbers into an 8-slide business review. Ask me for the figures you need first.",
-  },
-  {
-    title: "Product launch deck",
-    icon: "▶",
-    tone: "tone-violet",
-    prompt: "Outline a product launch deck, then draft speaker notes for each slide.",
-  },
-  {
-    title: "Brief from documents",
-    icon: "≡",
-    tone: "tone-green",
-    prompt: "Summarize the documents I attach into a one-page executive brief.",
-  },
-];
-
-function buildStarterCards() {
-  const container = document.querySelector("#starter-prompts");
-  if (!container) return;
-  for (const starter of STARTER_PROMPTS) {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = "starter-card";
-    const icon = document.createElement("span");
-    icon.className = "starter-icon " + starter.tone;
-    icon.setAttribute("aria-hidden", "true");
-    icon.textContent = starter.icon;
-    const title = document.createElement("strong");
-    title.textContent = starter.title;
-    const preview = document.createElement("span");
-    preview.className = "starter-preview";
-    preview.textContent = starter.prompt;
-    card.append(icon, title, preview);
-    card.addEventListener("click", () => {
-      state.starterPrompt = starter.prompt;
-      openNewThreadForm();
-    });
-    container.appendChild(card);
-  }
-}
-
-function renderEmptyState() {
-  const authenticated = canUseAgent();
-  // First run, neither path chosen yet: the two ways of working are equal
-  // citizens shown side by side, not a sign-in wall with the local path
-  // buried in a settings button. 登录 = 本地模型 + 远程授权, at first sight.
-  const onboarding = document.querySelector("#onboarding-paths");
-  if (onboarding) onboarding.hidden = authenticated;
-  if (!authenticated) {
-    emptyTitle.textContent = "How do you want to work?";
-    emptyDescription.textContent =
-      "Both paths lead to the same app. You can sign in later, or switch models any time.";
-  } else {
-    // One question, Codex-style: the app is usable, so the headline invites
-    // work instead of describing machinery. The identity joins the question
-    // when it is a real name — "What should we make, Local?" is nobody.
-    const account = isLocalOnlySession() ? activeLocalAccount() : null;
-    emptyTitle.textContent =
-      account && account.name !== defaultLocalAccountLabel
-        ? "What should we make, " + account.name + "?"
-        : "What should we make today?";
-    if (isLocalOnlySession()) {
-      emptyDescription.textContent = state.toolLoop
-        ? "Runs on your local model with tools. Everything stays in this app's own database."
-        : "Runs on your local model. Everything stays in this app's own database.";
-    } else if (state.threads.length === 0 && !state.createAvailable) {
-      emptyDescription.textContent =
-        "This Desktop build can continue existing threads after they appear in local history.";
-    } else {
-      emptyDescription.textContent = "Pick a conversation on the left, or start fresh below.";
-    }
-  }
-  emptyNewThreadButton.hidden = !authenticated || !state.createAvailable;
-  const starters = document.querySelector("#starter-prompts");
-  if (starters) {
-    // Same conditions as the button they are a richer version of.
-    starters.hidden = emptyNewThreadButton.hidden;
-  }
-}
-
-function setCreateFeedback(message, kind = "error") {
-  newThreadError.textContent = message;
-  newThreadError.hidden = message === "";
-  newThreadError.classList.toggle("pending", kind === "pending");
-}
-
-function hasAttemptedCreateDraft() {
-  return state.createFormOpen && state.createDraft?.attempted === true;
-}
-
-function createFailureCode(value) {
-  if (
-    !isRecord(value) ||
-    typeof value.error !== "string" ||
-    !isSafeProtocolString(value.error, 128)
-  ) {
-    return "";
-  }
-  return value.error;
-}
-
-function classifyCreateThreadFailure(result) {
-  const code = createFailureCode(result.error);
-  if (result.status === 401 || code === "authentication_required") {
-    return new ThreadCreateFailure(
-      "Authentication is required. Cancel this draft, then sign in again.",
-      "Authentication is required before creating a thread.",
-      false
-    );
-  }
-  if (code === "thread_uuid_conflict") {
-    return new ThreadCreateFailure(
-      "This thread identity is already owned elsewhere. Cancel and start a new draft.",
-      "The generated thread identity cannot be used.",
-      false
-    );
-  }
-  if (code === "local_identity_conflict") {
-    return new ThreadCreateFailure(
-      "Local history has an identity conflict. Cancel this draft before refreshing.",
-      "Local history could not safely accept this thread.",
-      false
-    );
-  }
-  if (
-    result.status >= 500 &&
-    result.status <= 599 &&
-    isRecord(result.error) &&
-    result.error.retry_with_same_uuid === true
-  ) {
-    return new ThreadCreateFailure(
-      "This thread could not be completed. Retry keeps the same identity.",
-      "The presentation thread could not be completed.",
-      true
-    );
-  }
-  return new ThreadCreateFailure(
-    "Thread creation was rejected. Cancel this draft before continuing.",
-    "The presentation thread cannot be retried.",
-    false
-  );
-}
-
-function updateNewThreadState() {
-  // canUseAgent, not the raw cloud-auth state: a signed-out session with a
-  // local route creates local threads. This was the one predicate left on
-  // the old check — the form would open (canOpenNewThread) but the submit
-  // stayed disabled forever, which the packaged-app smoke caught.
-  const authenticated = canUseAgent();
-  const hasMode = state.allowedModes.includes(newThreadMode.value);
-  const attempted = state.createDraft?.attempted === true;
-  const pending = state.createDraft?.pending === true;
-  const retryable = state.createDraft?.retryable === true;
-  const validName = isValidThreadName(newThreadName.value.trim());
-  const canSubmit =
-    state.createFormOpen &&
-    authenticated &&
-    state.agentAvailable &&
-    state.createAvailable &&
-    !state.skillsLoading &&
-    hasMode &&
-    validName &&
-    (!attempted || retryable) &&
-    !state.activeTurn &&
-    !state.creatingThread &&
-    !state.recoveringSession;
-
-  newThreadButton.disabled = !canOpenNewThread();
-  emptyNewThreadButton.disabled = !canOpenNewThread();
-  refreshButton.disabled =
-    state.creatingThread || state.recoveringSession || hasAttemptedCreateDraft();
-  refreshButton.title = hasAttemptedCreateDraft()
-    ? "Cancel or complete the current thread draft before refreshing"
-    : "Refresh local history";
-  newThreadButton.title = state.createAvailable
-    ? "Create a synced presentation thread"
-    : "Thread creation is unavailable in this Desktop build";
-  newThreadForm.hidden = !state.createFormOpen;
-  newThreadForm.setAttribute("aria-busy", String(state.creatingThread));
-  newThreadName.disabled = state.creatingThread || attempted;
-  newThreadMode.disabled = state.creatingThread || attempted || state.allowedModes.length === 0;
-  newThreadSubmitButton.disabled = !canSubmit;
-  newThreadCancelButton.disabled = false;
-  newThreadSubmitButton.textContent = state.creatingThread
-    ? "Creating..."
-    : pending
-      ? "Retry sync"
-      : attempted && retryable
-        ? "Retry"
-        : attempted
-          ? "Cannot retry"
-        : "Create";
-  renderEmptyState();
-}
-
-function openNewThreadForm() {
-  if (!canOpenNewThread()) {
-    updateNewThreadState();
-    return;
-  }
-  let threadUUID;
-  try {
-    threadUUID = generateThreadUUID();
-  } catch {
-    setStatus("Secure thread identity generation is unavailable.", "error");
-    updateNewThreadState();
-    return;
-  }
-  const mode = state.allowedModes.includes(state.selectedMode)
-    ? state.selectedMode
-    : state.allowedModes[0];
-  state.createGeneration += 1;
-  state.createFormOpen = true;
-  state.createDraft = {
-    threadUUID,
-    name: "Untitled presentation",
-    agentMode: mode,
-    attempted: false,
-    pending: false,
-    retryable: false,
-  };
-  newThreadName.value = state.createDraft.name;
-  newThreadMode.value = mode;
-  setCreateFeedback("");
-  updateComposerState();
-  newThreadName.focus();
-  if (typeof newThreadName.select === "function") {
-    newThreadName.select();
-  }
-}
-
-function cancelNewThreadDraft(restoreFocus = true) {
-  // The starter's prompt belonged to the thread that was not created.
-  state.starterPrompt = null;
-  const wasAttempted = state.createDraft?.attempted === true;
-  state.createGeneration += 1;
-  state.createFormOpen = false;
-  state.creatingThread = false;
-  state.createDraft = null;
-  newThreadName.value = "Untitled presentation";
-  setCreateFeedback("");
-  updateComposerState();
-  if (!restoreFocus) return;
-  setStatus(wasAttempted ? "Thread creation canceled. A late result will be ignored." : "New thread canceled.");
-  if (state.selectedThreadUUID && !chatInput.disabled) {
-    chatInput.focus();
-  } else {
-    newThreadButton.focus();
-  }
-}
-
-function isCurrentCreate(context) {
-  return (
-    context.sessionGeneration === state.sessionGeneration &&
-    context.createGeneration === state.createGeneration &&
-    context.threadUUID === state.createDraft?.threadUUID &&
-    state.createFormOpen
-  );
-}
-
-function upsertCreatedThread(thread) {
-  state.threads = [
-    thread,
-    ...state.threads.filter((candidate) => candidate.uuid !== thread.uuid),
-  ].sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
-}
-
-async function submitNewThread(event) {
-  event.preventDefault();
-  if (state.creatingThread || !state.createFormOpen || !state.createDraft) {
-    return;
-  }
-  const agent = desktopAgentCreateBridge();
-  const name = newThreadName.value.trim();
-  const mode = newThreadMode.value;
-  if (
-    !canUseAgent() ||
-    !agent ||
-    !state.agentAvailable ||
-    state.skillsLoading ||
-    !isValidThreadName(name) ||
-    !state.allowedModes.includes(mode) ||
-    state.activeTurn ||
-    state.recoveringSession
-  ) {
-    setCreateFeedback("Enter a valid name and choose an available skill.");
-    updateNewThreadState();
-    return;
-  }
-  if (state.createDraft.attempted && state.createDraft.retryable !== true) {
-    updateNewThreadState();
-    return;
-  }
-
-  if (!state.createDraft.attempted) {
-    state.createDraft = {
-      ...state.createDraft,
-      name,
-      agentMode: mode,
-      attempted: true,
-      pending: false,
-      retryable: false,
-    };
-    newThreadName.value = name;
-  }
-  const draft = {
-    threadUUID: state.createDraft.threadUUID,
-    name: state.createDraft.name,
-    agentMode: state.createDraft.agentMode,
-  };
-  state.createGeneration += 1;
-  const context = {
-    sessionGeneration: state.sessionGeneration,
-    createGeneration: state.createGeneration,
-    threadUUID: draft.threadUUID,
-  };
-  state.creatingThread = true;
-  setCreateFeedback("");
-  setStatus("Creating a synced presentation thread...");
-  updateComposerState();
-
-  try {
-    const result = parseDesktopBridgeResult(
-      await agent.createThread(draft),
-      "agent create thread result"
-    );
-    if (!isCurrentCreate(context)) return;
-    if (!result.ok) {
-      if (result.status === 409 && isSessionChangedPayload(result.error)) {
-        throw new SessionChangedError();
-      }
-      throw classifyCreateThreadFailure(result);
-    }
-    const data = parseCreateThreadData(result.data, result.status, draft);
-    if (!isCurrentCreate(context)) return;
-    if (data.state === "pending_local_sync") {
-      state.createDraft = {
-        ...state.createDraft,
-        pending: true,
-        retryable: true,
-      };
-      setCreateFeedback(
-        "The cloud thread is ready. Retry sync with the same identity, or cancel this draft.",
-        "pending"
-      );
-      setStatus("Thread created. Local history is still syncing.");
-      return;
-    }
-    if (data.thread.cloud_sync_state === "paused") {
-      throw new ThreadCreateFailure(
-        "This existing thread is paused and cannot be continued here. Cancel this draft before continuing.",
-        "The existing presentation thread is paused.",
-        false
-      );
-    }
-
-    upsertCreatedThread(data.thread);
-    state.creatingThread = false;
-    state.createFormOpen = false;
-    state.createDraft = null;
-    setCreateFeedback("");
-    renderThreads();
-    selectThread(data.thread);
-    if (state.starterPrompt) {
-      // The card's promise lands here: the thread exists, the words are in
-      // the box, and sending is still the user's decision.
-      chatInput.value = state.starterPrompt;
-      state.starterPrompt = null;
-    }
-    chatInput.focus();
-    updateComposerState();
-    setStatus(data.created ? "Thread created. Ready for the first prompt." : "Thread recovered. Ready for the first prompt.");
-  } catch (error) {
-    if (error instanceof SessionChangedError) {
-      await handleSessionChanged();
-      return;
-    }
-    if (!isCurrentCreate(context)) return;
-    const failure = error instanceof ThreadCreateFailure
-      ? error
-      : new ThreadCreateFailure(
-          "This thread could not be completed. Retry keeps the same identity, or cancel this draft.",
-          "The presentation thread could not be completed.",
-          true
-        );
-    state.createDraft = {
-      ...state.createDraft,
-      pending: false,
-      retryable: failure.retryable,
-    };
-    setCreateFeedback(failure.feedback);
-    setStatus(failure.statusMessage, "error");
-  } finally {
-    if (isCurrentCreate(context)) {
-      state.creatingThread = false;
-      updateComposerState();
-    }
-  }
-}
-
-// Groups threads by the user's local calendar day rather than elapsed hours.
-//
-// Ported from the web client, including the two edge cases that make the
-// difference between a list that reads right and one that surprises people: a
-// conversation from 11pm last night belongs under "Yesterday" at 1am, not
-// "3 hours ago", and a timestamp that will not parse goes to Older rather than
-// silently disappearing. Future timestamps stay in Today.
-function localCalendarDay(date) {
-  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000;
-}
-
-const THREAD_GROUPS = [
-  { key: "pinned", label: "Pinned" },
-  { key: "today", label: "Today" },
-  { key: "week", label: "Previous 7 days" },
-  { key: "older", label: "Older" },
-];
-
-function groupThreads(threads, now) {
-  const today = localCalendarDay(now);
-  const groups = { pinned: [], today: [], week: [], older: [] };
-  for (const thread of threads) {
-    if (thread.pinned) {
-      // A pin overrides the calendar: that is what pinning means.
-      groups.pinned.push(thread);
-      continue;
-    }
-    const updated = new Date(thread.updated_at);
-    if (Number.isNaN(updated.getTime())) {
-      // Unreachable through the normal path today: parseThread rejects an
-      // unparseable updated_at, and parseThreadList maps over every item, so a
-      // single bad row empties the whole list before it gets here. Kept
-      // because grouping should not be the thing that breaks if that parser
-      // ever softens — and because a thread with no readable date is still a
-      // thread the user has.
-      groups.older.push(thread);
-      continue;
-    }
-    const ageInDays = today - localCalendarDay(updated);
-    if (ageInDays <= 0) groups.today.push(thread);
-    else if (ageInDays <= 7) groups.week.push(thread);
-    else groups.older.push(thread);
-  }
-  return groups;
-}
-
-// Matches on the title only. Message bodies live in SQLite and are not loaded
-// for unselected threads, so searching them here would quietly match a subset
-// — the threads that happen to be open — which is worse than not offering it.
-function threadMatchesQuery(thread, query) {
-  if (!query) return true;
-  return (thread.name || "Untitled thread").toLowerCase().includes(query);
-}
-
-async function toggleThreadPin(thread) {
-  const agent = window.desktopBridge?.agent;
-  const method = thread.pinned ? agent?.unpinThread : agent?.pinThread;
-  if (typeof method !== "function") return;
-  try {
-    const result = parseDesktopBridgeResult(
-      await method.call(agent, thread.uuid),
-      "thread pin result"
-    );
-    if (!result.ok) {
-      const raw = isRecord(result.error) ? result.error.error : result.error;
-      throw new Error(sanitizeErrorMessage(raw) || "Could not update the pin");
-    }
-  } catch (error) {
-    setStatus(String(error.message || error), "error");
-    return;
-  }
-  // Reload rather than patch: the pin changes the server-side sort, and the
-  // sidebar should show exactly what the sidecar would answer, not a local
-  // approximation of it.
-  await loadThreads();
-}
-
-// Deleting is offered only where the sidecar would allow it: threads that
-// exist solely on this machine. A synced thread has a cloud copy and a sync
-// worker that would pull it straight back, so showing a delete that undoes
-// itself would be worse than showing none.
-function threadIsDeletable(thread) {
-  return thread.cloud_sync_state === "local";
-}
-
-async function deleteThread(thread) {
-  const agent = window.desktopBridge?.agent;
-  if (!agent || typeof agent.deleteThread !== "function") return;
-  try {
-    const result = parseDesktopBridgeResult(
-      await agent.deleteThread(thread.uuid),
-      "agent delete result"
-    );
-    if (!result.ok) {
-      const code = isRecord(result.error) ? result.error.error : "";
-      setStatus(
-        code === "thread_busy"
-          ? "That conversation still has a response in flight. Stop it first."
-          : "Could not delete the conversation.",
-        "error"
-      );
-      return;
-    }
-  } catch {
-    setStatus("Could not delete the conversation.", "error");
-    return;
-  }
-  state.threads = state.threads.filter((t) => t.uuid !== thread.uuid);
-  state.recoverableTurns = state.recoverableTurns.filter(
-    (turn) => turn.thread_uuid !== thread.uuid
-  );
-  if (state.selectedThreadUUID === thread.uuid) {
-    state.selectionGeneration += 1;
-    state.selectedThreadUUID = null;
-    messageList.textContent = "";
-    emptyState.hidden = false;
-    threadPanel.hidden = true;
-    contextState.sources = [];
-    contextState.retrieved = [];
-  }
-  renderThreads();
-  renderTaskContext();
-  updateComposerState();
-  setStatus("Conversation deleted from this machine.");
-}
-
-function renderThreadButton(thread) {
-  const item = document.createElement("li");
-  item.className = "thread-item";
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "thread-button";
-  button.classList.toggle("active", thread.uuid === state.selectedThreadUUID);
-  const title = document.createElement("strong");
-  title.textContent = thread.name || "Untitled thread";
-  const meta = document.createElement("p");
-  meta.textContent = `${thread.message_count || 0} messages · ${formatMessageTime(thread.updated_at) || formatDate(thread.updated_at)}`;
-  button.append(title, meta);
-  if (state.recoverableTurns.some((turn) => turn.thread_uuid === thread.uuid)) {
-    const badge = document.createElement("span");
-    badge.className = "thread-recovery-badge";
-    badge.textContent = "Interrupted";
-    button.appendChild(badge);
-  }
-  button.addEventListener("click", () => {
-    selectThread(thread);
-  });
-  item.appendChild(button);
-  const pin = document.createElement("button");
-  pin.type = "button";
-  pin.className = "thread-pin";
-  pin.classList.toggle("pinned", thread.pinned === true);
-  pin.textContent = thread.pinned ? "Unpin" : "Pin";
-  pin.setAttribute(
-    "aria-label",
-    (thread.pinned ? "Unpin " : "Pin ") + (thread.name || "Untitled thread")
-  );
-  pin.addEventListener("click", () => {
-    pin.disabled = true;
-    void toggleThreadPin(thread);
-  });
-  item.appendChild(pin);
-  if (threadIsDeletable(thread)) {
-    // Two clicks, one control: the first arms it, the second deletes. A modal
-    // would be heavier machinery for the same guarantee — that no single
-    // misclick destroys a conversation.
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "thread-delete";
-    del.textContent = "Delete";
-    del.setAttribute("aria-label", `Delete ${thread.name || "Untitled thread"}`);
-    del.addEventListener("click", () => {
-      if (!del.classList.contains("armed")) {
-        del.classList.add("armed");
-        del.textContent = "Confirm";
-        setTimeout(() => {
-          del.classList.remove("armed");
-          del.textContent = "Delete";
-        }, DELETE_ARM_MS);
-        return;
-      }
-      del.disabled = true;
-      void deleteThread(thread);
-    });
-    item.appendChild(del);
-  }
-  return item;
-}
-
-// Long enough to move the pointer one row down and click again; short enough
-// that an armed Delete does not lie in wait for a later stray click.
-const DELETE_ARM_MS = 4000;
-
-function renderThreads() {
-  threadList.textContent = "";
-  // A filter above a list with nothing in it is noise — and worse, it reads as
-  // "your search found nothing" when the truth is that nothing is cached yet.
-  // Looked up here rather than held in a module const: this runs before the
-  // element lookups at the bottom of the file have been evaluated.
-  const searchPanel = document.querySelector("#thread-search-panel");
-  if (searchPanel) searchPanel.hidden = state.threads.length === 0;
-  if (state.threads.length === 0) {
-    const item = document.createElement("li");
-    item.appendChild(renderNotice("No cached threads yet."));
-    threadList.appendChild(item);
-    renderEmptyState();
-    return;
-  }
-
-  const query = (state.threadQuery || "").trim().toLowerCase();
-  const matches = state.threads.filter((thread) => threadMatchesQuery(thread, query));
-  if (matches.length === 0) {
-    const item = document.createElement("li");
-    // Naming the query distinguishes "nothing matched" from "nothing cached",
-    // which the empty list alone cannot.
-    item.appendChild(renderNotice(`No conversations match “${state.threadQuery.trim()}”.`));
-    threadList.appendChild(item);
-    renderEmptyState();
-    return;
-  }
-
-  const groups = groupThreads(matches, new Date());
-  for (const group of THREAD_GROUPS) {
-    const bucket = groups[group.key];
-    if (bucket.length === 0) continue;
-    const heading = document.createElement("li");
-    heading.className = "thread-group";
-    heading.textContent = group.label;
-    threadList.appendChild(heading);
-    for (const thread of bucket) {
-      threadList.appendChild(renderThreadButton(thread));
-    }
-  }
-  renderEmptyState();
-}
-
 function isTurnContextCurrent(activeTurn) {
   return (
-    activeTurn.sessionGeneration === state.sessionGeneration &&
-    activeTurn.selectionGeneration === state.selectionGeneration &&
-    activeTurn.turnGeneration === state.turnGeneration &&
+    fences.session.isCurrent(activeTurn.sessionGeneration) &&
+    fences.selection.isCurrent(activeTurn.selectionGeneration) &&
+    fences.turn.isCurrent(activeTurn.turnGeneration) &&
     activeTurn.threadUUID === state.selectedThreadUUID
   );
 }
 
-function isCurrentTurn(activeTurn) {
+export function isCurrentTurn(activeTurn) {
   return state.activeTurn === activeTurn && isTurnContextCurrent(activeTurn);
 }
 
@@ -4195,18 +1248,18 @@ function requestTurnCancellation(turnID) {
     .catch(() => {});
 }
 
-function invalidateActiveTurn(requestCancellation) {
+export function invalidateActiveTurn(requestCancellation) {
   const activeTurn = state.activeTurn;
   if (!activeTurn) return;
   state.activeTurn = null;
-  state.turnGeneration += 1;
+  fences.turn.bump();
   if (requestCancellation) {
     requestTurnCancellation(activeTurn.turnID);
   }
   updateComposerState();
 }
 
-async function handleScopedError(error, context) {
+export async function handleScopedError(error, context) {
   if (error instanceof SessionChangedError) {
     await handleSessionChanged();
     return;
@@ -4222,7 +1275,7 @@ async function handleGlobalError(error, expectedSessionGeneration) {
     await handleSessionChanged();
     return;
   }
-  if (expectedSessionGeneration !== state.sessionGeneration) {
+  if (!fences.session.isCurrent(expectedSessionGeneration)) {
     return;
   }
   setStatus(String(error), "error");
@@ -4231,20 +1284,20 @@ async function handleGlobalError(error, expectedSessionGeneration) {
 function clearWorkbenchForSessionChange() {
   invalidateActiveTurn(true);
   state.cancelConfirmationTurnID = null;
-  state.recoveryGeneration += 1;
+  fences.recovery.bump();
   state.recoverableTurns = [];
   state.recoveryLoading = false;
   state.resumingTurn = false;
   state.dismissingRecovery = false;
   state.recoveryFeedback = "";
   state.recoveryFeedbackKind = "default";
-  state.createGeneration += 1;
+  fences.create.bump();
   state.createFormOpen = false;
   state.creatingThread = false;
   state.createDraft = null;
   newThreadName.value = "Untitled presentation";
   setCreateFeedback("");
-  state.selectionGeneration += 1;
+  fences.selection.bump();
   state.selectedThreadUUID = null;
   state.threads = [];
   state.skills = [];
@@ -4265,14 +1318,14 @@ function clearWorkbenchForSessionChange() {
   threadPanel.hidden = true;
 }
 
-async function handleSessionChanged() {
+export async function handleSessionChanged() {
   if (state.recoveringSession) {
     return;
   }
   state.recoveringSession = true;
-  state.sessionGeneration += 1;
-  loginOperationGeneration += 1;
-  const generation = state.sessionGeneration;
+  fences.session.bump();
+  fences.loginOperation.bump();
+  const generation = fences.session.snapshot();
   clearWorkbenchForSessionChange();
   setTurnState("Session changed");
   renderTaskContext();
@@ -4284,7 +1337,7 @@ async function handleSessionChanged() {
 
   try {
     const auth = await loadAuthStatus(generation);
-    if (generation !== state.sessionGeneration || !auth) return;
+    if (!fences.session.isCurrent(generation) || !auth) return;
     loginButton.hidden = auth.state === "authenticated";
     if (auth.state !== "authenticated") {
       // The account went away rather than changing. If the local route is
@@ -4292,7 +1345,7 @@ async function handleSessionChanged() {
       // session instead of an empty workbench.
       state.localRoute = false;
       await loadLocalModes(generation);
-      if (generation !== state.sessionGeneration) return;
+      if (!fences.session.isCurrent(generation)) return;
       if (state.localRoute) {
         await Promise.allSettled([
           loadThreads(generation),
@@ -4319,12 +1372,12 @@ async function handleSessionChanged() {
       }
     }
   } catch {
-    if (generation === state.sessionGeneration) {
+    if (fences.session.isCurrent(generation)) {
       state.auth = null;
       loginButton.hidden = false;
     }
   } finally {
-    if (generation === state.sessionGeneration) {
+    if (fences.session.isCurrent(generation)) {
       state.recoveringSession = false;
       renderSkillOptions();
       updateComposerState();
@@ -4336,40 +1389,7 @@ async function handleSessionChanged() {
   }
 }
 
-function appendOptimisticTurn(userText) {
-  const notices = Array.from(messageList.children).filter(
-    (node) => node.classList?.contains("status-card")
-  );
-  for (const notice of notices) {
-    notice.remove();
-  }
-  // The answer about to be superseded stops being regenerable now, because
-  // the in-place reconcile will not repaint it later.
-  retireStaleRegenerateActions();
-  const userNode = renderMessage("user", userText);
-  const assistantNode = renderMessage("assistant", "");
-  // Waiting for the first token had no face: the bubble sat empty. The
-  // pending class puts a typing indicator there until text or a terminal
-  // event arrives.
-  assistantNode.classList.add("pending");
-  messageList.append(userNode, assistantNode);
-  scrollMessagesToEnd(true);
-  return { userNode, assistantNode, assistantBubble: assistantNode.children[1] };
-}
-
-function failTurnOpen(activeTurn, userText, message) {
-  if (!isCurrentTurn(activeTurn)) return;
-  state.activeTurn = null;
-  state.turnGeneration += 1;
-  activeTurn.assistantBubble.textContent = message;
-  chatInput.value = userText;
-  setTurnState("Error");
-  renderTaskContext();
-  updateComposerState();
-  setStatus(message, "error");
-}
-
-function submitChat(event) {
+export function submitChat(event) {
   event.preventDefault();
   if (state.activeTurn) {
     return;
@@ -4391,7 +1411,7 @@ function submitChat(event) {
     return;
   }
 
-  state.turnGeneration += 1;
+  fences.turn.bump();
   // The previous turn's provenance stops being true the moment a new question
   // is asked. Cleared here rather than when the next retrieval event arrives,
   // because a turn that retrieves nothing sends no event at all. Tool
@@ -4405,9 +1425,9 @@ function submitChat(event) {
     threadUUID: thread.uuid,
     userText,
     chatMode: state.selectedMode,
-    sessionGeneration: state.sessionGeneration,
-    selectionGeneration: state.selectionGeneration,
-    turnGeneration: state.turnGeneration,
+    sessionGeneration: fences.session.snapshot(),
+    selectionGeneration: fences.selection.snapshot(),
+    turnGeneration: fences.turn.snapshot(),
     userNode: optimistic.userNode,
     assistantWrapper: optimistic.assistantNode,
     assistantBubble: optimistic.assistantBubble,
@@ -4490,9 +1510,9 @@ function submitChat(event) {
 
 function recoveryContext(turnUUID) {
   return {
-    sessionGeneration: state.sessionGeneration,
-    selectionGeneration: state.selectionGeneration,
-    recoveryGeneration: state.recoveryGeneration,
+    sessionGeneration: fences.session.snapshot(),
+    selectionGeneration: fences.selection.snapshot(),
+    recoveryGeneration: fences.recovery.snapshot(),
     threadUUID: state.selectedThreadUUID,
     turnUUID,
   };
@@ -4500,38 +1520,14 @@ function recoveryContext(turnUUID) {
 
 function isCurrentRecovery(context) {
   return (
-    context.sessionGeneration === state.sessionGeneration &&
-    context.selectionGeneration === state.selectionGeneration &&
-    context.recoveryGeneration === state.recoveryGeneration &&
+    fences.session.isCurrent(context.sessionGeneration) &&
+    fences.selection.isCurrent(context.selectionGeneration) &&
+    fences.recovery.isCurrent(context.recoveryGeneration) &&
     context.threadUUID === state.selectedThreadUUID &&
     state.recoverableTurns.some(
       (turn) => turn.turn_uuid === context.turnUUID
     )
   );
-}
-
-function appendRecoveredAssistant() {
-  const notices = Array.from(messageList.children).filter(
-    (node) => node.classList?.contains("status-card")
-  );
-  for (const notice of notices) {
-    notice.remove();
-  }
-  const partial = Array.from(messageList.children)
-    .reverse()
-    .find(
-      (node) =>
-        node.classList?.contains("assistant") &&
-        node.classList?.contains("partial")
-    );
-  if (partial?.children?.[1]) {
-    partial.children[1].textContent = "";
-    return partial.children[1];
-  }
-  const assistantNode = renderMessage("assistant", "", "streaming");
-  messageList.appendChild(assistantNode);
-  scrollMessagesToEnd(true);
-  return assistantNode.children[1];
 }
 
 function resumeRecoverableTurn() {
@@ -4549,18 +1545,18 @@ function resumeRecoverableTurn() {
     return;
   }
 
-  state.recoveryGeneration += 1;
+  fences.recovery.bump();
   const context = recoveryContext(recoverable.turn_uuid);
-  state.turnGeneration += 1;
+  fences.turn.bump();
   const activeTurn = {
     turnID: "",
     startedAt: Date.now(),
     threadUUID: recoverable.thread_uuid,
     userText: recoverable.user_text,
     chatMode: recoverable.chat_mode,
-    sessionGeneration: state.sessionGeneration,
-    selectionGeneration: state.selectionGeneration,
-    turnGeneration: state.turnGeneration,
+    sessionGeneration: fences.session.snapshot(),
+    selectionGeneration: fences.selection.snapshot(),
+    turnGeneration: fences.turn.snapshot(),
     assistantBubble: appendRecoveredAssistant(),
     assistantText: "",
     assistantTextBytes: 0,
@@ -4617,7 +1613,7 @@ function resumeRecoverableTurn() {
   } catch {
     if (!isCurrentTurn(activeTurn) || !isCurrentRecovery(context)) return;
     state.activeTurn = null;
-    state.turnGeneration += 1;
+    fences.turn.bump();
     state.resumingTurn = false;
     state.recoveryFeedback = "Recovery could not connect. Select Resume to try again.";
     state.recoveryFeedbackKind = "error";
@@ -4642,7 +1638,7 @@ async function dismissRecoverableTurn() {
   ) {
     return;
   }
-  state.recoveryGeneration += 1;
+  fences.recovery.bump();
   const context = recoveryContext(recoverable.turn_uuid);
   state.dismissingRecovery = true;
   state.recoveryFeedback = "Canceling the interrupted response...";
@@ -4677,23 +1673,11 @@ async function dismissRecoverableTurn() {
   }
 }
 
-function handleRawTurnEvent(activeTurn, rawEvent) {
-  if (!isCurrentTurn(activeTurn)) return;
-  let event;
-  try {
-    event = parseAgentTurnEvent(rawEvent);
-  } catch {
-    failActiveTurnProtocol(activeTurn, "The Agent stream returned an invalid event.");
-    return;
-  }
-  handleParsedTurnEvent(activeTurn, event);
-}
-
-function keepRecoverableTurnForRetry(activeTurn, feedback, statusMessage) {
+export function keepRecoverableTurnForRetry(activeTurn, feedback, statusMessage) {
   if (!isCurrentTurn(activeTurn) || !activeTurn.recoveryTurn) return;
   settleTurnNarration(activeTurn);
   state.activeTurn = null;
-  state.turnGeneration += 1;
+  fences.turn.bump();
   state.resumingTurn = false;
   state.recoveryFeedback = feedback;
   state.recoveryFeedbackKind = "error";
@@ -4706,7 +1690,7 @@ function keepRecoverableTurnForRetry(activeTurn, feedback, statusMessage) {
   turnRecoveryResumeButton.focus();
 }
 
-function isThreadBusyResult(result) {
+export function isThreadBusyResult(result) {
   return result.code === "THREAD_BUSY" || result.subtype === "thread_busy";
 }
 
@@ -4743,7 +1727,7 @@ async function refreshRecoveryAfterInitialBusy(activeTurn, fallback) {
       return;
     }
   }
-  if (expectedSessionGeneration !== state.sessionGeneration) return;
+  if (!fences.session.isCurrent(expectedSessionGeneration)) return;
   let discovered = state.recoverableTurns.some(
     (turn) => turn.turn_uuid === activeTurn.turnID
   );
@@ -4768,12 +1752,12 @@ async function refreshRecoveryAfterInitialBusy(activeTurn, fallback) {
   updateComposerState();
 }
 
-function handleInitialTurnBusy(activeTurn) {
+export function handleInitialTurnBusy(activeTurn) {
   if (!isCurrentTurn(activeTurn) || activeTurn.recoveryTurn) return;
   const fallback = localRecoverableTurn(activeTurn);
   settleTurnNarration(activeTurn);
   state.activeTurn = null;
-  state.recoveryGeneration += 1;
+  fences.recovery.bump();
   retainLocalRecoverableTurn(fallback);
   state.recoveryFeedback =
     "This request is still busy. Checking its persistent recovery state...";
@@ -4791,333 +1775,14 @@ function handleInitialTurnBusy(activeTurn) {
   void refreshRecoveryAfterInitialBusy(activeTurn, fallback);
 }
 
-function recoveredTurnErrorMessage(result) {
+export function recoveredTurnErrorMessage(result) {
   const label = [result.code, result.subtype].filter(Boolean).join(" · ");
   return label
     ? `The recovered response failed (${label}).`
     : "The recovered response failed.";
 }
 
-// The typing indicator ends the moment there is anything better to show —
-// the first token, or any terminal outcome.
-function clearPendingIndicator(activeTurn) {
-  activeTurn.assistantBubble?.parentNode?.classList?.remove("pending");
-}
-
-// --- Streamed-frame batching ------------------------------------------------
-//
-// Token deltas arrive far faster than a screen can show them. Painting each
-// one meant, per token: a full-string textContent reset (quadratic over the
-// answer), a selector walk, and a forced layout for the scroll write. The
-// batcher makes the DOM a per-frame concern instead: deltas accumulate in a
-// buffer and one rAF flush appends the merged chunk to a dedicated Text node
-// — appendData only ever adds, so the cost of a delta no longer grows with
-// everything that came before it.
-//
-// Causal order is a discipline, not an accident: every non-delta event
-// (tool_use, approval, done, errors) drains the buffer synchronously before
-// it is handled, so nothing the model said can appear after something it did.
-
-// The behavior suite runs this file in a bare VM with no rAF; a microtask is
-// the closest honest stand-in — still strictly after the current burst of
-// synchronous deltas, still before the test's next settle().
-const scheduleStreamFrame =
-  typeof globalThis.requestAnimationFrame === "function"
-    ? (callback) => globalThis.requestAnimationFrame(callback)
-    : (callback) => {
-        void Promise.resolve().then(callback);
-      };
-
-// Module state rather than renderer `state`: this is paint plumbing, and it
-// must never ride along when session-change hygiene serializes `state`.
-const streamBatch = {
-  turn: null,
-  text: "",
-  reasoningDirty: false,
-  scheduled: false,
-};
-
-function scheduleStreamFlush(activeTurn) {
-  // A new turn's first delta can arrive before a superseded turn's buffer
-  // ever flushed. Its words belong to a bubble that is gone; drop them
-  // rather than letting them lead another turn's answer.
-  if (streamBatch.turn !== activeTurn) {
-    streamBatch.turn = activeTurn;
-    streamBatch.text = "";
-    streamBatch.reasoningDirty = false;
-  }
-  if (streamBatch.scheduled) return;
-  // The sentinel prevents one frame from being scheduled per delta; the
-  // frame that runs picks up everything queued behind it.
-  streamBatch.scheduled = true;
-  scheduleStreamFrame(flushStreamBatch);
-}
-
-function flushStreamBatch() {
-  // Snapshot, then reset, then apply: a handler that enqueues during the
-  // apply phase re-schedules cleanly instead of corrupting this flush.
-  const turn = streamBatch.turn;
-  const text = streamBatch.text;
-  const reasoningDirty = streamBatch.reasoningDirty;
-  streamBatch.turn = null;
-  streamBatch.text = "";
-  streamBatch.reasoningDirty = false;
-  streamBatch.scheduled = false;
-  // A superseded turn's buffered words are dropped, not painted: its bubble
-  // may already belong to another thread's transcript.
-  if (!turn || !isCurrentTurn(turn)) return;
-  if (text !== "") {
-    appendStreamText(turn, text);
-    // At most one scroll write per flush — and only for a reader who is
-    // already following; the jump affordance handles everyone else.
-    scrollMessagesToEnd();
-  }
-  if (reasoningDirty) paintReasoningCaption(turn);
-}
-
-// drainStreamBatch is the causal fence. Any code about to reflect a
-// non-delta fact into the DOM calls this first so buffered text lands ahead
-// of it, in order.
-function drainStreamBatch() {
-  if (streamBatch.text === "" && !streamBatch.reasoningDirty) return;
-  flushStreamBatch();
-}
-
-// --- Streaming Markdown commit ----------------------------------------------
-//
-// While a turn streams, the bubble is two zones: blocks that are finished and
-// already typeset, then a raw pre-wrap tail holding the text still being
-// written. A block is only committed once a blank line outside any open code
-// fence closes it — before that its final shape is ambiguous, and committing
-// early is how streamed answers visibly change shape. The tail is a real Text
-// node so the per-frame append stays an appendData, never a re-parse.
-
-// Past this many characters, commits happen every few frames instead of every
-// frame: the boundary scan re-reads the tail, and a very long unbroken tail
-// should not be re-scanned 60 times a second.
-const STREAM_COMMIT_EAGER_CHARS = 8192;
-const STREAM_COMMIT_FRAME_STRIDE = 4;
-
-function ensureStreamTail(activeTurn) {
-  const bubble = activeTurn.assistantBubble;
-  const tail = activeTurn.streamTail;
-  if (tail && tail.wrap.parentNode === bubble) return tail;
-  // First streamed text: replace whatever placeholder the bubble held.
-  bubble.textContent = "";
-  const textNode = document.createTextNode("");
-  const wrap = document.createElement("span");
-  wrap.className = "md-stream-tail";
-  wrap.appendChild(textNode);
-  bubble.appendChild(wrap);
-  activeTurn.streamTail = {
-    wrap,
-    textNode,
-    committedChars: 0,
-    framesSinceCommit: 0,
-  };
-  return activeTurn.streamTail;
-}
-
-function appendStreamText(activeTurn, chunk) {
-  const tail = ensureStreamTail(activeTurn);
-  tail.textNode.appendData(chunk);
-  tail.framesSinceCommit += 1;
-  const throttled =
-    activeTurn.assistantText.length > STREAM_COMMIT_EAGER_CHARS &&
-    tail.framesSinceCommit < STREAM_COMMIT_FRAME_STRIDE;
-  if (!throttled) commitStreamBlocks(activeTurn);
-}
-
-// The last position in tailText (an offset just past a newline) up to which
-// the text parses to exactly the blocks a final full parse would produce.
-// That is any blank line at fence-depth zero: this parser never lets a block
-// other than a fence span one. Inside an open fence nothing commits — the
-// whole unclosed block stays in the tail rather than flickering into a
-// half-rendered shape.
-function streamCommitBoundary(tailText) {
-  const lastNewline = tailText.lastIndexOf("\n");
-  if (lastNewline < 0) return 0;
-  const lines = tailText.slice(0, lastNewline).split("\n");
-  let openFence = null;
-  let boundary = 0;
-  let offset = 0;
-  for (const line of lines) {
-    const lineEnd = offset + line.length + 1;
-    if (openFence) {
-      if (isClosingFence(line, openFence)) openFence = null;
-    } else {
-      const fence = MARKDOWN_FENCE.exec(line);
-      if (fence) {
-        openFence = fence[1];
-      } else if (line.trim() === "") {
-        boundary = lineEnd;
-      }
-    }
-    offset = lineEnd;
-  }
-  return boundary;
-}
-
-function commitStreamBlocks(activeTurn) {
-  const tail = activeTurn.streamTail;
-  if (!tail) return;
-  tail.framesSinceCommit = 0;
-  // Past the formatting bound the final render is plain text; committing
-  // more typeset blocks would diverge from it.
-  if (activeTurn.assistantText.length > MARKDOWN_MAX_CHARS) return;
-  const tailText = activeTurn.assistantText.slice(tail.committedChars);
-  const boundary = streamCommitBoundary(tailText);
-  if (boundary === 0) return;
-  const bubble = activeTurn.assistantBubble;
-  bubble.classList.add("markdown");
-  for (const block of parseMarkdownBlocks(tailText.slice(0, boundary).split(/\r\n|\r|\n/u))) {
-    bubble.insertBefore(block, tail.wrap);
-  }
-  tail.textNode.textContent = tailText.slice(boundary);
-  tail.committedChars += boundary;
-}
-
-// The turn's terminal formatting step. With a streaming tail in place only
-// the uncommitted remainder is parsed — the spike that used to re-parse the
-// whole answer at the finish line is gone. Without one (recovered bubbles,
-// oversized answers) this falls back to the one-shot full render.
-function finalizeStreamedAssistant(activeTurn) {
-  const bubble = activeTurn.assistantBubble;
-  const text = activeTurn.assistantText;
-  const tail = activeTurn.streamTail;
-  activeTurn.streamTail = null;
-  if (!tail || tail.wrap.parentNode !== bubble || text.length > MARKDOWN_MAX_CHARS) {
-    renderMarkdownInto(bubble, text);
-    return;
-  }
-  const remaining = text.slice(tail.committedChars);
-  if (remaining !== "") {
-    for (const block of parseMarkdownBlocks(remaining.split(/\r\n|\r|\n/u))) {
-      bubble.insertBefore(block, tail.wrap);
-    }
-  }
-  bubble.classList.add("markdown");
-  tail.wrap.remove();
-}
-
-function handleParsedTurnEvent(activeTurn, event) {
-  if (!isCurrentTurn(activeTurn)) return;
-  if (event.turnID !== activeTurn.turnID) {
-    failActiveTurnProtocol(activeTurn, "The Agent stream returned an invalid turn identifier.");
-    return;
-  }
-
-  // Deltas queue for the next frame; everything else is a fact the DOM must
-  // not show ahead of the words that preceded it — drain first.
-  if (event.type !== "text_delta" && event.type !== "reasoning_delta") {
-    drainStreamBatch();
-  }
-
-  switch (event.type) {
-    case "text_delta": {
-      const deltaBytes = utf8ByteLength(event.delta);
-      if (activeTurn.assistantTextBytes + deltaBytes > MAX_TURN_TEXT_BYTES) {
-        failActiveTurnProtocol(activeTurn, "The Agent response exceeded the display limit.");
-        return;
-      }
-      // Bookkeeping stays synchronous — limits and terminals read it — while
-      // the paint itself waits for the frame.
-      activeTurn.assistantText += event.delta;
-      activeTurn.assistantTextBytes += deltaBytes;
-      clearPendingIndicator(activeTurn);
-      // Schedule first: it re-keys the buffer to this turn before the append.
-      scheduleStreamFlush(activeTurn);
-      streamBatch.text += event.delta;
-      return;
-    }
-    case "reasoning_delta":
-      recordReasoningDelta(activeTurn, event.delta);
-      return;
-    case "approval_request":
-      presentApprovalRequest(activeTurn, event);
-      return;
-    case "tool_use":
-      recordToolActivity({ name: event.name, target: event.target, denied: false }, activeTurn);
-      return;
-    case "tool_denied":
-      recordToolActivity({ name: event.name, target: event.target, denied: true, reason: event.reason }, activeTurn);
-      return;
-    case "retrieval":
-      // What the local model was given from the knowledge base, announced
-      // before the first token. Recorded against the turn so a stale event
-      // from a superseded turn cannot repaint the panel — isCurrentTurn above
-      // already fenced that, and this keeps the panel's own copy honest.
-      setRetrievedContext(event.sources);
-      return;
-    case "unknown":
-      // Preload exposes only the bounded event name for unknown events. There
-      // is intentionally no upstream payload to stringify or render.
-      return;
-    case "done":
-      if (isThreadBusyResult(event.result)) {
-        if (activeTurn.recoveryTurn) {
-          keepRecoverableTurnForRetry(
-            activeTurn,
-            "This response is still busy. Select Resume again in a moment.",
-            "The interrupted response is still busy; no new execution was started."
-          );
-        } else {
-          handleInitialTurnBusy(activeTurn);
-        }
-        return;
-      }
-      if (activeTurn.recoveryTurn && event.result.isError) {
-        const message = recoveredTurnErrorMessage(event.result);
-        state.resumingTurn = false;
-        removeRecoverableTurn(activeTurn.recoveryTurn.turn_uuid);
-        finishActiveTurnWithError(activeTurn, message);
-        return;
-      }
-      if (activeTurn.recoveryTurn) {
-        state.resumingTurn = false;
-        removeRecoverableTurn(activeTurn.recoveryTurn.turn_uuid);
-      }
-      finishActiveTurn(activeTurn, "Done", false);
-      return;
-    case "canceled":
-      if (activeTurn.stopRequested) {
-        activeTurn.localCancelObserved = true;
-      }
-      if (activeTurn.recoveryTurn) {
-        state.resumingTurn = false;
-        removeRecoverableTurn(activeTurn.recoveryTurn.turn_uuid);
-      }
-      finishActiveTurn(activeTurn, "Stopped", true);
-      return;
-    case "proxy_error":
-      if (event.error.kind === "session_changed") {
-        void handleSessionChanged();
-        return;
-      }
-      if (activeTurn.recoveryTurn) {
-        keepRecoverableTurnForRetry(
-          activeTurn,
-          "Recovery was interrupted. Select Resume to try the same request again.",
-          "The interrupted response could not be recovered yet."
-        );
-        return;
-      }
-      finishActiveTurnWithError(activeTurn, event.error.message || "The Agent turn failed.");
-      return;
-    case "protocol_error":
-      if (activeTurn.recoveryTurn) {
-        keepRecoverableTurnForRetry(
-          activeTurn,
-          "Recovery was interrupted. Select Resume to try the same request again.",
-          "The interrupted response could not be recovered yet."
-        );
-        return;
-      }
-      failActiveTurnProtocol(activeTurn, event.message || "The Agent stream failed.");
-  }
-}
-
-function finishActiveTurn(activeTurn, label, canceled) {
+export function finishActiveTurn(activeTurn, label, canceled) {
   if (!isCurrentTurn(activeTurn)) return;
   // Buffered words land before the outcome that follows them.
   drainStreamBatch();
@@ -5174,7 +1839,7 @@ function finishActiveTurn(activeTurn, label, canceled) {
   });
 }
 
-function finishActiveTurnWithError(activeTurn, message) {
+export function finishActiveTurnWithError(activeTurn, message) {
   if (!isCurrentTurn(activeTurn)) return;
   drainStreamBatch();
   clearPendingIndicator(activeTurn);
@@ -5197,7 +1862,7 @@ function finishActiveTurnWithError(activeTurn, message) {
   setStatus(safeMessage, "error");
 }
 
-function failActiveTurnProtocol(activeTurn, message) {
+export function failActiveTurnProtocol(activeTurn, message) {
   if (!isCurrentTurn(activeTurn)) return;
   if (activeTurn.recoveryTurn) {
     keepRecoverableTurnForRetry(
@@ -5242,7 +1907,7 @@ async function refreshRecoveryAfterUnconfirmedCancel(activeTurn) {
       return;
     }
   }
-  if (expectedSessionGeneration !== state.sessionGeneration) return;
+  if (!fences.session.isCurrent(expectedSessionGeneration)) return;
   const discovered = state.recoverableTurns.some(
     (turn) => turn.turn_uuid === activeTurn.turnID
   );
@@ -5300,7 +1965,7 @@ async function stopActiveTurn() {
     clearCancelConfirmation(activeTurn);
     if (
       activeTurn.localCancelObserved &&
-      activeTurn.sessionGeneration === state.sessionGeneration
+      fences.session.isCurrent(activeTurn.sessionGeneration)
     ) {
       if (isTurnContextCurrent(activeTurn)) {
         setTurnState(
@@ -5349,8 +2014,8 @@ function showLoginFailure(result) {
   }
 }
 
-async function applyLoginTransactionResult(result, pollSubmitting = false, generation = loginOperationGeneration) {
-  if (generation !== loginOperationGeneration) {
+async function applyLoginTransactionResult(result, pollSubmitting = false, generation = fences.loginOperation.snapshot()) {
+  if (!fences.loginOperation.isCurrent(generation)) {
     return;
   }
   if (result.error) {
@@ -5401,7 +2066,7 @@ async function waitForLoginTransaction(generation) {
   }
   const started = Date.now();
   while (
-    generation === loginOperationGeneration &&
+    fences.loginOperation.isCurrent(generation) &&
     Date.now() - started < AUTH_POLL_TIMEOUT_MS
   ) {
     await sleep(AUTH_POLL_INTERVAL_MS);
@@ -5409,12 +2074,12 @@ async function waitForLoginTransaction(generation) {
     try {
       result = parseLoginTransactionResult(await auth.loginStatus());
     } catch {
-      if (generation === loginOperationGeneration) {
+      if (fences.loginOperation.isCurrent(generation)) {
         showLoginBridgeUnavailable();
       }
       return;
     }
-    if (generation !== loginOperationGeneration) {
+    if (!fences.loginOperation.isCurrent(generation)) {
       return;
     }
     if (result.state !== "submitting" || result.error) {
@@ -5422,7 +2087,7 @@ async function waitForLoginTransaction(generation) {
       return;
     }
   }
-  if (generation !== loginOperationGeneration) {
+  if (!fences.loginOperation.isCurrent(generation)) {
     return;
   }
   setLoginFormState(false);
@@ -5440,55 +2105,19 @@ async function login() {
     showLoginBridgeUnavailable();
     return;
   }
-  const generation = ++loginOperationGeneration;
+  const generation = fences.loginOperation.bump();
   loginButton.disabled = true;
   setStatus("Preparing a secure sign-in session...");
   try {
     const result = parseLoginTransactionResult(await auth.beginLogin());
     await applyLoginTransactionResult(result, true, generation);
   } catch {
-    if (generation === loginOperationGeneration) {
+    if (fences.loginOperation.isCurrent(generation)) {
       showLoginBridgeUnavailable();
     }
   } finally {
     loginButton.disabled = false;
   }
-}
-
-function validLoginCredential(value, minBytes, maxBytes) {
-  return (
-    typeof value === "string" &&
-    hasWellFormedUTF16(value) &&
-    !/\p{Cc}/u.test(value) &&
-    utf8ByteLength(value) >= minBytes &&
-    utf8ByteLength(value) <= maxBytes
-  );
-}
-
-function validLoginEmail(value) {
-  return (
-    validLoginCredential(value, 3, 320) &&
-    value.trim() === value &&
-    value.includes("@")
-  );
-}
-
-function hasWellFormedUTF16(value) {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (!Number.isInteger(next) || next < 0xdc00 || next > 0xdfff) {
-        return false;
-      }
-      index += 1;
-      continue;
-    }
-    if (code >= 0xdc00 && code <= 0xdfff) {
-      return false;
-    }
-  }
-  return true;
 }
 
 async function submitLogin(event) {
@@ -5497,7 +2126,7 @@ async function submitLogin(event) {
   const email = loginEmail.value.trim();
   let password = loginPassword.value;
   loginPassword.value = "";
-  const generation = ++loginOperationGeneration;
+  const generation = fences.loginOperation.bump();
   try {
     if (!auth) {
       showLoginBridgeUnavailable();
@@ -5518,7 +2147,7 @@ async function submitLogin(event) {
       );
     } catch {
       if (
-        generation === loginOperationGeneration &&
+        fences.loginOperation.isCurrent(generation) &&
         !(await reconcileAmbiguousLoginOutcome(generation))
       ) {
         showLoginBridgeUnavailable();
@@ -5548,10 +2177,10 @@ async function submitLogin(event) {
 
 async function reconcileAmbiguousLoginOutcome(generation) {
   try {
-    const sessionGeneration = state.sessionGeneration;
+    const sessionGeneration = fences.session.snapshot();
     const current = await loadAuthStatus(sessionGeneration);
     if (
-      generation !== loginOperationGeneration ||
+      !fences.loginOperation.isCurrent(generation) ||
       !current ||
       current.state !== "authenticated"
     ) {
@@ -5576,11 +2205,11 @@ async function cancelLogin() {
     showLoginBridgeUnavailable();
     return;
   }
-  const generation = ++loginOperationGeneration;
+  const generation = fences.loginOperation.bump();
   loginCancelButton.disabled = true;
   try {
     const result = parseLoginTransactionResult(await auth.cancelLogin());
-    if (generation !== loginOperationGeneration) {
+    if (!fences.loginOperation.isCurrent(generation)) {
       return;
     }
     if (result.error && result.error !== "canceled") {
@@ -5590,7 +2219,7 @@ async function cancelLogin() {
     setLoginFormState(false);
     setStatus(LOGIN_ERROR_MESSAGES.canceled);
   } catch {
-    if (generation === loginOperationGeneration) {
+    if (fences.loginOperation.isCurrent(generation)) {
       showLoginBridgeUnavailable();
     }
   } finally {
@@ -5605,12 +2234,12 @@ async function restoreLoginTransaction() {
     showLoginBridgeUnavailable();
     return;
   }
-  const generation = ++loginOperationGeneration;
+  const generation = fences.loginOperation.bump();
   try {
     const result = parseLoginTransactionResult(await auth.loginStatus());
     await applyLoginTransactionResult(result, true, generation);
   } catch {
-    if (generation === loginOperationGeneration) {
+    if (fences.loginOperation.isCurrent(generation)) {
       showLoginBridgeUnavailable();
     }
   }
@@ -5620,7 +2249,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function refresh() {
+export async function refresh() {
   const api = bridge();
   if (!api) {
     state.agentAvailable = false;
@@ -5645,18 +2274,18 @@ async function refresh() {
     updateNewThreadState();
     return;
   }
-  state.sessionGeneration += 1;
-  const generation = state.sessionGeneration;
+  fences.session.bump();
+  const generation = fences.session.snapshot();
   invalidateActiveTurn(true);
   state.cancelConfirmationTurnID = null;
-  state.recoveryGeneration += 1;
+  fences.recovery.bump();
   state.recoverableTurns = [];
   state.recoveryLoading = false;
   state.resumingTurn = false;
   state.dismissingRecovery = false;
   state.recoveryFeedback = "";
   state.recoveryFeedbackKind = "default";
-  state.createGeneration += 1;
+  fences.create.bump();
   state.createFormOpen = false;
   state.creatingThread = false;
   state.createDraft = null;
@@ -5666,7 +2295,7 @@ async function refresh() {
   // draft so re-selecting the thread restores it. Only a session change
   // (clearWorkbenchForSessionChange) drops drafts outright.
   stashComposerDraft();
-  state.selectionGeneration += 1;
+  fences.selection.bump();
   state.selectedThreadUUID = null;
   state.skills = [];
   state.allowedModes = [];
@@ -5684,7 +2313,7 @@ async function refresh() {
   setStatus("Checking auth status...");
   try {
     const auth = await loadAuthStatus(generation);
-    if (!auth || generation !== state.sessionGeneration) return;
+    if (!auth || !fences.session.isCurrent(generation)) return;
     loginButton.hidden = auth.state === "authenticated";
     if (auth.state !== "authenticated") {
       state.threads = [];
@@ -5695,14 +2324,14 @@ async function refresh() {
       // configured the sidecar will serve turns under its single local user,
       // so load what that user has instead of stopping at the sign-in wall.
       await loadLocalModes(generation);
-      if (generation !== state.sessionGeneration) return;
+      if (!fences.session.isCurrent(generation)) return;
       if (state.localRoute) {
         setStatus("Local model route. Signed out — history stays on this machine.");
         await Promise.all([
           loadThreads(generation),
           loadRecoverableTurns(generation),
         ]);
-        if (generation !== state.sessionGeneration) return;
+        if (!fences.session.isCurrent(generation)) return;
         renderEmptyState();
         updateComposerState();
         await restoreLoginTransaction();
@@ -5717,7 +2346,7 @@ async function refresh() {
       await restoreLoginTransaction();
       // Last word on purpose: whatever the login machinery wrote above, a
       // version skew is the thing the user actually needs to know about.
-      if (state.modesParseSkew && generation === state.sessionGeneration) {
+      if (state.modesParseSkew && fences.session.isCurrent(generation)) {
         setStatus(
           "App and sidecar are out of sync: the sidecar's answers no longer match this UI. Restart the app; if this persists, reinstall.",
           "error"
@@ -5738,7 +2367,7 @@ async function refresh() {
       await handleSessionChanged();
       return;
     }
-    if (generation === state.sessionGeneration) {
+    if (fences.session.isCurrent(generation)) {
       loginButton.hidden = true;
       setStatus(String(error), "error");
       updateComposerState();
@@ -5777,13 +2406,11 @@ if (modelSettingsCancelButton) {
 loginButton.addEventListener("click", () => {
   void login();
 });
-const onboardingSignin = document.querySelector("#onboarding-signin");
 if (onboardingSignin) {
   onboardingSignin.addEventListener("click", () => {
     void login();
   });
 }
-const onboardingLocal = document.querySelector("#onboarding-local");
 if (onboardingLocal) {
   onboardingLocal.addEventListener("click", () => {
     void openModelSettings();
@@ -5837,16 +2464,6 @@ fileInput.addEventListener("change", () => {
     uploadThreadFile(file);
   }
 });
-
-// Files arrive however the user's hands bring them: the picker, a drop onto
-// the conversation, or a paste. All three land in the same upload path, so
-// the chips, the Sources panel, and the send-time union behave identically.
-function attachDroppedFiles(files) {
-  if (!state.selectedThreadUUID || !canUseAgent()) return;
-  for (const file of Array.from(files || [])) {
-    uploadThreadFile(file);
-  }
-}
 
 threadPanel.addEventListener("dragover", (event) => {
   if (!event.dataTransfer) return;
@@ -5929,810 +2546,22 @@ if (localAccountCreateForm) {
 
 void refresh();
 
-// ---------------------------------------------------------------------------
-// Task context panel
-// ---------------------------------------------------------------------------
-//
-// The right rail describes the current run: which steps have happened, what
-// the agent was given, and what it produced. Every value here is derived from
-// state this renderer already holds or reads back from the sidecar.
-//
-// Deliverables is deliberately an empty state with a reason rather than a
-// hidden section. A local turn produces text, not files — the panel says so
-// instead of showing an empty box that looks broken.
-
-// Looked up on use rather than bound at module scope. These functions are
-// called from code that runs earlier in the file, and a const initialised down
-// here would be in its temporal dead zone at that point — a ReferenceError
-// that would only appear once an attachment or a turn touched the panel.
-function ctxEl(id) {
-  return document.querySelector(`#${id}`);
-}
-
-const contextState = {
-  sources: [],
-  sourcesThreadUUID: null,
-  retrieved: [],
-  // The current turn's tool activity, in order. Per-turn like retrieval:
-  // cleared when a new turn starts, because last turn's Writes are not what
-  // this turn is doing.
-  toolActivity: [],
-  // Files the tool loop produced in this thread's workspace — the
-  // Deliverables panel's content. Loaded on selection, refreshed when a turn
-  // completes (that is when new files can exist).
-  deliverables: [],
-  deliverablesTruncated: false,
-  // The finished turn's work log: its tool steps plus the files that
-  // appeared. The in-place reconcile keeps the strip's own nodes alive, but
-  // its fallback repaints the transcript from cache, and the cache stores
-  // none of this — without a survivor copy the story would vanish whenever
-  // the fallback runs.
-  lastTurnLog: null,
-  // File ids the user has checked in the Sources panel to send with the NEXT
-  // request. Per-request on purpose — the label says "next request", so the
-  // set clears once a turn owns the ids, exactly like the upload tray.
-  selectedFileIDs: new Set(),
-};
-
-// Retrieval provenance is per-turn and lives only in memory: the sidecar
-// announces it on the stream and does not persist it, so there is nothing to
-// read back. Clearing on every new turn is therefore not tidiness — leaving
-// the previous turn's list up would attribute this answer to sources it never
-// saw, which is worse than showing nothing.
-function setRetrievedContext(sources) {
-  contextState.retrieved = Array.isArray(sources) ? sources : [];
-  renderTaskContext();
-}
-
-function recordToolActivity(entry, activeTurn) {
-  // Bounded: a pathological turn making thousands of calls must not grow an
-  // unbounded array behind the panel.
-  if (contextState.toolActivity.length >= 200) return;
-  contextState.toolActivity.push(entry);
-  renderTaskContext();
-  // The step also lands inline, Codex-style: the transcript is a work log,
-  // not a chat with a hidden engine room.
-  if (activeTurn?.assistantBubble?.parentNode) {
-    renderWorkLog(activeTurn.assistantBubble.parentNode, contextState.toolActivity, [], true);
-  }
-}
-
-// Past this many steps, a finished log collapses to its summary — the
-// Codex idiom: the work is a receipt once it is done, a narration only while
-// it is happening.
-const WORKLOG_COLLAPSE_AFTER = 3;
-
-// renderWorkLog paints the step strip on one assistant message: tool steps
-// in order, then the files the turn produced. Idempotent — it replaces the
-// strip it finds, so streaming updates and post-repaint re-attachment share
-// one code path.
-//
-// live=true is a streaming turn: always expanded, because watching the agent
-// work is the point. A finished log longer than the threshold collapses to
-// "N steps · K blocked"; produced rows stay visible either way — they are
-// the deliverable, not the plumbing. Expansion survives re-renders by
-// reading the outgoing strip before replacing it.
-function renderWorkLog(wrapper, steps, produced, live = false, duration = "") {
-  if (!wrapper) return;
-  let wasExpanded = false;
-  for (const child of Array.from(wrapper.children || [])) {
-    if (child.classList?.contains("message-worklog")) {
-      // Expansion survives a re-render only as a user's choice. A live strip
-      // is expanded by definition, not by choice — when it settles in place
-      // (the in-place reconcile keeps its nodes) it must still fold to the
-      // receipt, exactly as it does after a full repaint.
-      wasExpanded =
-        child.classList.contains("expanded") && !child.classList.contains("live");
-      child.remove();
-    }
-  }
-  if (steps.length === 0 && produced.length === 0) return;
-  const strip = document.createElement("ul");
-  strip.className = "message-worklog";
-  if (live) strip.classList.add("live");
-
-  const collapsible = !live && steps.length > WORKLOG_COLLAPSE_AFTER;
-  const expanded = live || !collapsible || wasExpanded;
-  if (expanded) strip.classList.add("expanded");
-
-  if (collapsible) {
-    const denied = steps.filter((s) => s.denied).length;
-    const header = document.createElement("li");
-    header.className = "worklog-summary";
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "worklog-toggle";
-    const parts = [`${steps.length} steps`];
-    if (denied > 0) parts.push(`${denied} blocked`);
-    if (duration) parts.push(duration);
-    toggle.textContent = `${expanded ? "▾" : "▸"} ${parts.join(" · ")}`;
-    toggle.addEventListener("click", () => {
-      strip.classList.toggle("expanded");
-      // Re-render through the same path so the glyph and rows agree.
-      renderWorkLog(wrapper, steps, produced, live, duration);
-    });
-    header.appendChild(toggle);
-    strip.appendChild(header);
-  }
-
-  const stepRows = expanded ? steps : [];
-  for (const step of stepRows) {
-    const row = document.createElement("li");
-    row.className = "worklog-step" + (step.denied ? " denied" : "");
-    const verb = document.createElement("span");
-    verb.className = "worklog-verb";
-    verb.textContent = step.name;
-    row.appendChild(verb);
-    if (step.target) {
-      const target = document.createElement("span");
-      target.className = "worklog-target";
-      target.textContent = step.target;
-      row.appendChild(target);
-    }
-    if (step.denied) {
-      const why = document.createElement("span");
-      why.className = "worklog-denied";
-      why.textContent = step.reason ? `blocked — ${step.reason}` : "blocked";
-      row.appendChild(why);
-    }
-    strip.appendChild(row);
-  }
-  for (const file of produced) {
-    const row = document.createElement("li");
-    row.className = "worklog-step produced";
-    const verb = document.createElement("span");
-    verb.className = "worklog-verb";
-    verb.textContent = "Produced";
-    const target = document.createElement("span");
-    target.className = "worklog-target";
-    target.textContent = file.path;
-    row.append(verb, target);
-    row.addEventListener("click", () => {
-      const agent = window.desktopBridge?.agent;
-      if (state.selectedThreadUUID && typeof agent?.revealWorkspace === "function") {
-        void agent.revealWorkspace(state.selectedThreadUUID);
-      }
-    });
-    strip.appendChild(row);
-  }
-  // Above the bubble: the steps happen before the words that explain them.
-  const bubble = Array.from(wrapper.children || []).find((c) => c.classList?.contains("bubble"));
-  if (bubble && typeof wrapper.insertBefore === "function") {
-    wrapper.insertBefore(strip, bubble);
-  } else {
-    wrapper.appendChild(strip);
-  }
-}
-
-// attachLastTurnLog re-hangs the survivor copy on the transcript's final
-// assistant message — the one the cache repaint just rebuilt.
-function attachLastTurnLog() {
-  const log = contextState.lastTurnLog;
-  if (!log || log.threadUUID !== state.selectedThreadUUID) return;
-  const assistants = Array.from(messageList.children || []).filter((n) =>
-    n.classList?.contains("assistant")
-  );
-  const last = assistants[assistants.length - 1];
-  if (last) renderWorkLog(last, log.steps, log.produced, false, log.duration);
-}
-
-// --- Reasoning caption and L2 tool approvals -------------------------------
-//
-// Both live on the streaming assistant message, above the bubble, and both are
-// per-turn state kept on the activeTurn object itself: a superseded turn's
-// caption or cards can never repaint under a newer turn because every entry
-// point is already fenced by isCurrentTurn.
-
-// insertAboveBubble parks a strip on the message wrapper, above the words it
-// narrates — same placement rule as the work log.
-function insertAboveBubble(wrapper, node) {
-  const bubble = Array.from(wrapper.children || []).find((child) =>
-    child.classList?.contains("bubble")
-  );
-  if (bubble && typeof wrapper.insertBefore === "function") {
-    wrapper.insertBefore(node, bubble);
-  } else {
-    wrapper.appendChild(node);
-  }
-}
-
-// The caption shows one line: the last non-empty line of the reasoning so far.
-// Scanning backwards keeps the cost proportional to the tail, not the text.
-function reasoningCaptionLine(text) {
-  let end = text.length;
-  while (end > 0) {
-    const start = text.lastIndexOf("\n", end - 1);
-    const line = text.slice(start + 1, end).trim();
-    if (line !== "") return line;
-    if (start < 0) break;
-    end = start;
-  }
-  return "";
-}
-
-function ensureReasoningStrip(activeTurn) {
-  const wrapper = activeTurn.assistantBubble?.parentNode;
-  if (!wrapper) return null;
-  if (
-    activeTurn.reasoningStrip &&
-    activeTurn.reasoningStrip.parentNode === wrapper
-  ) {
-    return activeTurn.reasoningStrip;
-  }
-  const strip = document.createElement("div");
-  strip.className = "reasoning-strip";
-  const caption = document.createElement("span");
-  caption.className = "reasoning-caption";
-  strip.appendChild(caption);
-  insertAboveBubble(wrapper, strip);
-  activeTurn.reasoningStrip = strip;
-  activeTurn.reasoningCaption = caption;
-  return strip;
-}
-
-function recordReasoningDelta(activeTurn, delta) {
-  const total = (activeTurn.reasoningTextBytes || 0) + utf8ByteLength(delta);
-  // Reasoning is narration: past the display bound the rest is dropped rather
-  // than failing a turn whose answer is still arriving.
-  if (total > MAX_TURN_TEXT_BYTES) return;
-  activeTurn.reasoningText = (activeTurn.reasoningText || "") + delta;
-  activeTurn.reasoningTextBytes = total;
-  // The caption repaints once per frame with the rest of the stream; per-delta
-  // it would re-render a line nobody could read at that rate.
-  scheduleStreamFlush(activeTurn);
-  streamBatch.reasoningDirty = true;
-}
-
-function paintReasoningCaption(activeTurn) {
-  const strip = ensureReasoningStrip(activeTurn);
-  if (!strip) return;
-  const line = reasoningCaptionLine(activeTurn.reasoningText || "");
-  activeTurn.reasoningCaption.textContent = line
-    ? `Thinking… ${line}`
-    : "Thinking…";
-}
-
-// When the turn settles, the live caption folds into a "Thought" label whose
-// click reveals the full reasoning text. A turn that never sent reasoning has
-// no strip; a strip whose turn ends before any text is removed outright.
-function settleReasoningStrip(activeTurn) {
-  const strip = activeTurn.reasoningStrip;
-  if (!strip) return;
-  const text = activeTurn.reasoningText || "";
-  if (!text) {
-    strip.remove();
-    activeTurn.reasoningStrip = null;
-    return;
-  }
-  strip.textContent = "";
-  strip.classList.add("settled");
-  const toggle = document.createElement("button");
-  toggle.type = "button";
-  toggle.className = "reasoning-toggle";
-  const detail = document.createElement("pre");
-  detail.className = "reasoning-detail";
-  detail.textContent = text;
-  detail.hidden = true;
-  const paint = () => {
-    toggle.textContent = `${detail.hidden ? "▸" : "▾"} Thought`;
-  };
-  paint();
-  toggle.addEventListener("click", () => {
-    detail.hidden = !detail.hidden;
-    paint();
-  });
-  strip.append(toggle, detail);
-}
-
-// Bounded like the work log: a runaway turn cannot stack cards without limit.
-const MAX_APPROVAL_CARDS_PER_TURN = 40;
-
-// Order fixed by the sidecar's decision vocabulary: [decision, button label,
-// settled label].
-const APPROVAL_DECISIONS = [
-  ["allow_once", "Allow once", "Allowed once"],
-  ["allow_session", "Allow this session", "Allowed for this session"],
-  ["allow_always", "Always allow", "Always allowed"],
-  ["deny", "Deny", "Denied"],
-];
-
-function desktopAgentApprovalBridge() {
-  const desktop = window.desktopBridge;
-  if (
-    !isRecord(desktop) ||
-    !isRecord(desktop.agent) ||
-    typeof desktop.agent.approveTurnTool !== "function"
-  ) {
-    return null;
-  }
-  return desktop.agent;
-}
-
-// The card collapses in place to its outcome — the question is answered, so
-// the buttons go away rather than merely disabling.
-function settleApprovalCard(entry, label, tone) {
-  entry.answered = true;
-  entry.card.textContent = "";
-  entry.card.classList.add("approval-settled");
-  const result = document.createElement("span");
-  result.className = tone ? `approval-result ${tone}` : "approval-result";
-  result.textContent = label;
-  entry.card.appendChild(result);
-}
-
-function presentApprovalRequest(activeTurn, event) {
-  const wrapper = activeTurn.assistantBubble?.parentNode;
-  if (!wrapper) return;
-  if (!activeTurn.approvalCards) activeTurn.approvalCards = new Map();
-  // One card per approval id: a duplicated frame must not stack a second
-  // question for the same answer.
-  if (activeTurn.approvalCards.has(event.id)) return;
-  if (activeTurn.approvalCards.size >= MAX_APPROVAL_CARDS_PER_TURN) return;
-
-  const card = document.createElement("div");
-  card.className = "approval-card";
-  const title = document.createElement("div");
-  title.className = "approval-title";
-  title.textContent = event.target
-    ? `Agent requests to run ${event.name} · ${event.target}`
-    : `Agent requests to run ${event.name}`;
-  const note = document.createElement("div");
-  note.className = "approval-note";
-  note.hidden = true;
-  const actions = document.createElement("div");
-  actions.className = "approval-actions";
-  const entry = { card, note, actions, answered: false };
-  for (const [decision, buttonLabel, settledLabel] of APPROVAL_DECISIONS) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className =
-      decision === "deny" ? "approval-button deny" : "approval-button";
-    button.textContent = buttonLabel;
-    button.addEventListener("click", () => {
-      submitApprovalDecision(activeTurn, event.id, decision, settledLabel, entry);
-    });
-    actions.appendChild(button);
-  }
-  card.append(title, actions, note);
-  insertAboveBubble(wrapper, card);
-  activeTurn.approvalCards.set(event.id, entry);
-  scrollMessagesToEnd();
-}
-
-function setApprovalButtonsDisabled(entry, disabled) {
-  for (const button of Array.from(entry.actions.children || [])) {
-    button.disabled = disabled;
-  }
-}
-
-function submitApprovalDecision(activeTurn, approvalID, decision, settledLabel, entry) {
-  if (entry.answered) return;
-  const agent = desktopAgentApprovalBridge();
-  if (!agent || !activeTurn.turnID) {
-    settleApprovalCard(entry, "Approvals are unavailable", "expired");
-    return;
-  }
-  // Answered the moment the click lands: a second click while the request is
-  // in flight must not send a second decision.
-  entry.answered = true;
-  entry.note.hidden = true;
-  setApprovalButtonsDisabled(entry, true);
-  agent
-    .approveTurnTool(activeTurn.turnID, {
-      approval_id: approvalID,
-      decision,
-    })
-    .then((result) => {
-      if (!isRecord(result) || typeof result.ok !== "boolean") {
-        throw new Error("Malformed approval result");
-      }
-      if (result.ok) {
-        settleApprovalCard(
-          entry,
-          settledLabel,
-          decision === "deny" ? "denied" : "allowed"
-        );
-        return;
-      }
-      if (result.status === 404) {
-        // The pending set no longer knows this id: the turn moved on
-        // (timeout, cancel, completion). Expired, not an error.
-        settleApprovalCard(entry, "Expired", "expired");
-        return;
-      }
-      throw new Error("Approval delivery failed");
-    })
-    .catch(() => {
-      // The decision never landed, so the question is still open — unless the
-      // turn already settled this card as expired while the request was out.
-      if (entry.card.classList.contains("approval-settled")) return;
-      entry.answered = false;
-      setApprovalButtonsDisabled(entry, false);
-      entry.note.textContent = "The decision could not be delivered. Try again.";
-      entry.note.hidden = false;
-    });
-}
-
-// A terminal turn takes its unanswered questions with it: the sidecar's
-// pending set is keyed by turn, so a card that outlives the turn could only
-// ever answer into a 404.
-function expireApprovalCards(activeTurn) {
-  if (!activeTurn.approvalCards) return;
-  for (const entry of activeTurn.approvalCards.values()) {
-    if (entry.answered) continue;
-    settleApprovalCard(entry, "Expired", "expired");
-  }
-}
-
-// settleTurnNarration is the single hook every local turn terminal calls:
-// done, canceled, proxy/protocol errors, busy retention — the caption folds
-// and the open approval cards expire together.
-function settleTurnNarration(activeTurn) {
-  settleReasoningStrip(activeTurn);
-  expireApprovalCards(activeTurn);
-}
-
-function formatRetrievalScore(score) {
-  if (typeof score !== "number" || !Number.isFinite(score)) return "";
-  return `${Math.round(score * 100)}% match`;
-}
-
-function formatFileSize(bytes) {
-  if (!Number.isFinite(bytes) || bytes < 0) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-// Mirrors the reference implementation's four steps. "Brief captured" is true
-// once the thread has any message or a turn is running, because that is the
-// point at which the agent has actually been told something.
-function buildRunSteps() {
-  const running = Boolean(state.activeTurn);
-  const messageCount = messageList ? messageList.children.length : 0;
-  const sourceCount = contextState.sources.length + state.pendingFiles.length;
-  // The tone class, not the text: the pill's label now carries a duration
-  // suffix, and deriving state from prose is how this comparison silently
-  // broke the moment the label grew.
-  const failed = turnState && turnState.classList?.contains("is-error");
-
-  const brief = messageCount > 0 || running;
-  return [
-    {
-      label: "Brief captured",
-      state: brief ? "complete" : "pending",
-      detail: brief ? "Complete" : "Waiting",
-    },
-    {
-      label: "Sources",
-      // No sources is a valid way to run, so this is never "pending" —
-      // reporting it as incomplete would imply the run is blocked on it.
-      state: sourceCount > 0 ? "complete" : "neutral",
-      detail: sourceCount > 0
-        ? `${sourceCount} source${sourceCount === 1 ? "" : "s"}`
-        : "None attached",
-    },
-    {
-      label: "Agent execution",
-      state: failed ? "failed" : running ? "active" : brief ? "complete" : "pending",
-      detail: agentExecutionDetail(running, failed, brief),
-    },
-    {
-      label: "Deliverables",
-      state: contextState.deliverables.length > 0 ? "complete" : "neutral",
-      detail: contextState.deliverables.length > 0
-        ? `${contextState.deliverables.length} file${contextState.deliverables.length === 1 ? "" : "s"}`
-        : "None yet",
-    },
-  ];
-}
-
-// The execution step used to be a binary; with a tool loop it has a story.
-// While running it names the latest tool; finished, it counts what ran and
-// what was blocked.
-function agentExecutionDetail(running, failed, brief) {
-  const activity = contextState.toolActivity;
-  const denied = activity.filter((a) => a.denied).length;
-  if (running) {
-    const last = activity[activity.length - 1];
-    if (last) return last.denied ? `${last.name} blocked` : `${last.name}…`;
-    return "In progress";
-  }
-  if (failed) return "Failed";
-  if (!brief) return "Waiting";
-  if (activity.length === 0) return "Complete";
-  const calls = `${activity.length - denied} tool call${activity.length - denied === 1 ? "" : "s"}`;
-  return denied > 0 ? `${calls} · ${denied} blocked` : calls;
-}
-
-const RUN_STEP_MARKS = {
-  complete: "✓",
-  active: "◐",
-  failed: "✕",
-  pending: "○",
-  neutral: "–",
-};
-
-function renderRunOverview() {
-  if (!ctxEl("run-overview-list")) return;
-  const steps = buildRunSteps();
-  ctxEl("run-overview-list").innerHTML = "";
-  for (const step of steps) {
-    const item = document.createElement("li");
-    item.className = `run-step is-${step.state}`;
-
-    const mark = document.createElement("span");
-    mark.className = "run-step-mark";
-    mark.textContent = RUN_STEP_MARKS[step.state] ?? "–";
-
-    const label = document.createElement("span");
-    label.className = "run-step-label";
-    label.textContent = step.label;
-
-    const detail = document.createElement("span");
-    detail.className = "run-step-detail";
-    detail.textContent = step.detail;
-
-    item.append(mark, label, detail);
-    ctxEl("run-overview-list").appendChild(item);
-  }
-  const done = steps.filter((s) => s.state === "complete").length;
-  if (ctxEl("run-overview-meta")) ctxEl("run-overview-meta").textContent = `${done}/${steps.length}`;
-}
-
-function renderSources() {
-  if (!ctxEl("sources-list")) return;
-  // Files uploaded in this session but not yet reloaded from the sidecar are
-  // shown alongside the persisted ones, so a just-attached file appears
-  // immediately rather than after the next refresh.
-  const pending = state.pendingFiles
-    .filter((file) => file.status !== "error")
-    .map((file) => ({
-      file_id: file.id,
-      file_name: file.name,
-      file_size: file.size,
-      on_disk: true,
-      pending: file.status === "uploading",
-    }));
-  const persistedIds = new Set(contextState.sources.map((f) => f.file_id));
-  const items = [
-    ...contextState.sources,
-    ...pending.filter((f) => !f.file_id || !persistedIds.has(f.file_id)),
-  ];
-
-  // Ids that stopped existing (file deleted, thread reloaded) must not linger
-  // in the selection, or the count lies and a dead id rides into a turn.
-  const selectable = new Set(
-    contextState.sources
-      .filter((f) => f.on_disk !== false)
-      .map((f) => f.file_id)
-  );
-  for (const id of Array.from(contextState.selectedFileIDs)) {
-    if (!selectable.has(id)) contextState.selectedFileIDs.delete(id);
-  }
-
-  ctxEl("sources-list").innerHTML = "";
-  for (const file of items) {
-    const item = document.createElement("li");
-    item.className = "context-item" + (file.on_disk === false ? " is-missing" : "");
-
-    // Persisted, readable files can be re-attached to the next request. A
-    // fresh upload is already armed through the tray, and a file whose bytes
-    // are gone has nothing to attach — neither gets a checkbox.
-    const checkable = !file.pending && file.on_disk !== false && persistedIds.has(file.file_id);
-    if (checkable) {
-      const label = document.createElement("label");
-      label.className = "context-item-select";
-      const box = document.createElement("input");
-      box.type = "checkbox";
-      box.className = "source-select";
-      box.checked = contextState.selectedFileIDs.has(file.file_id);
-      box.addEventListener("change", () => {
-        if (box.checked) contextState.selectedFileIDs.add(file.file_id);
-        else contextState.selectedFileIDs.delete(file.file_id);
-        renderTaskContext();
-      });
-      const name = document.createElement("span");
-      name.className = "context-item-name";
-      name.textContent = file.file_name;
-      label.append(box, name);
-      item.appendChild(label);
-    } else {
-      const name = document.createElement("span");
-      name.className = "context-item-name";
-      name.textContent = file.file_name;
-      item.appendChild(name);
-    }
-
-    const meta = document.createElement("span");
-    meta.className = "context-item-meta";
-    meta.textContent = file.on_disk === false
-      // The row survives but the bytes do not, which is a different problem
-      // from "no attachments" and needs to be visible.
-      ? "Missing on disk"
-      : file.pending
-        ? "Uploading…"
-        : formatFileSize(file.file_size);
-
-    item.appendChild(meta);
-    ctxEl("sources-list").appendChild(item);
-  }
-
-  if (ctxEl("sources-empty")) ctxEl("sources-empty").hidden = items.length > 0;
-  if (ctxEl("sources-meta")) ctxEl("sources-meta").textContent = String(items.length);
-  if (ctxEl("sources-selected")) {
-    const chosen = contextState.selectedFileIDs.size;
-    ctxEl("sources-selected").hidden = chosen === 0;
-    ctxEl("sources-selected").textContent =
-      `${chosen} selected for the next request`;
-  }
-  if (ctxEl("context-count")) ctxEl("context-count").textContent = String(items.length);
-}
-
-// What the answer was actually grounded in. Until this existed the retrieval
-// step was invisible: the model answered from indexed documents and the user
-// had no way to tell that from the model inventing it.
-function renderRetrieved() {
-  if (!ctxEl("retrieved-list")) return;
-  const items = contextState.retrieved;
-  ctxEl("retrieved-list").innerHTML = "";
-  for (const source of items) {
-    const item = document.createElement("li");
-    item.className = `context-item is-${source.kind}`;
-
-    const name = document.createElement("span");
-    name.className = "context-item-name";
-    name.textContent = source.label;
-
-    const meta = document.createElement("span");
-    meta.className = "context-item-meta";
-    meta.textContent = formatRetrievalScore(source.score);
-
-    item.append(name, meta);
-
-    // The passage itself, not a summary of it — a summary would be a second
-    // thing that could be wrong about the thing being checked.
-    if (source.snippet) {
-      const snippet = document.createElement("p");
-      snippet.className = "context-item-snippet";
-      snippet.textContent = source.snippet;
-      item.appendChild(snippet);
-    }
-    ctxEl("retrieved-list").appendChild(item);
-  }
-  if (ctxEl("retrieved-empty")) ctxEl("retrieved-empty").hidden = items.length > 0;
-  if (ctxEl("retrieved-meta")) ctxEl("retrieved-meta").textContent = String(items.length);
-  // The whole section stands down when there is nothing retrieved: it is
-  // per-turn transient, and an empty module whose body explains its own
-  // emptiness costs more attention than it returns.
-  if (ctxEl("context-retrieved")) ctxEl("context-retrieved").hidden = items.length === 0;
-}
-
-// What the agent produced: the workspace listing, newest first. Until L2
-// this panel could only explain its own emptiness; now local tool-loop turns
-// put real files here.
-function renderDeliverables() {
-  if (!ctxEl("deliverables-list")) return;
-  const items = contextState.deliverables;
-  ctxEl("deliverables-list").innerHTML = "";
-  for (const file of items) {
-    const item = document.createElement("li");
-    item.className = "context-item";
-    const name = document.createElement("span");
-    name.className = "context-item-name";
-    name.textContent = file.path;
-    const meta = document.createElement("span");
-    meta.className = "context-item-meta";
-    meta.textContent = `${formatFileSize(file.size)} · ${formatMessageTime(file.modified_at)}`;
-    item.append(name, meta);
-    ctxEl("deliverables-list").appendChild(item);
-  }
-  if (ctxEl("deliverables-empty")) ctxEl("deliverables-empty").hidden = items.length > 0;
-  if (ctxEl("open-workspace-button")) {
-    // Offered only when there is something to open, and only when the bridge
-    // can actually open it — a button that silently fails is worse than none.
-    ctxEl("open-workspace-button").hidden =
-      items.length === 0 ||
-      typeof window.desktopBridge?.agent?.revealWorkspace !== "function";
-  }
-  if (ctxEl("deliverables-meta")) {
-    ctxEl("deliverables-meta").textContent = contextState.deliverablesTruncated
-      ? `${items.length}+`
-      : String(items.length);
-  }
-}
-
-function renderTaskContext() {
-  renderRunOverview();
-  renderSources();
-  renderRetrieved();
-  renderDeliverables();
-}
-
-// Reads what the tool loop produced in this thread's workspace. Failure
-// degrades to an empty panel — the conversation itself is unaffected.
-async function loadWorkspaceDeliverables(threadUUID) {
-  const agent = window.desktopBridge?.agent;
-  if (!threadUUID || !agent || typeof agent.listWorkspaceFiles !== "function") return;
-  try {
-    const result = parseDesktopBridgeResult(
-      await agent.listWorkspaceFiles(threadUUID),
-      "agent workspace result"
-    );
-    // The selection may have moved while this was in flight.
-    if (contextState.sourcesThreadUUID !== threadUUID) return;
-    if (result.ok && isRecord(result.data) && Array.isArray(result.data.items)) {
-      contextState.deliverables = result.data.items.filter(
-        (f) => isRecord(f) && typeof f.path === "string"
-      );
-      contextState.deliverablesTruncated = result.data.truncated === true;
-    }
-  } catch {
-    return;
-  }
-  renderTaskContext();
-}
-
-// Reads the attachments the sidecar has for this thread. Uploads persisted
-// before this route existed, but nothing could read them back, so reopening a
-// thread showed an empty Sources panel while the files were still on disk.
-async function loadThreadSources(threadUUID) {
-  contextState.sourcesThreadUUID = threadUUID;
-  contextState.sources = [];
-  // Provenance belongs to a turn, and the turn belongs to a thread. Carrying
-  // it across a switch would credit this thread's answer to another one's
-  // documents. The selection likewise: these ids name another thread's files.
-  contextState.retrieved = [];
-  contextState.toolActivity = [];
-  contextState.deliverables = [];
-  contextState.deliverablesTruncated = false;
-  contextState.lastTurnLog = null;
-  // Redundant with renderSources' pruning-to-current-sources, deliberately:
-  // either alone prevents one thread's ids riding into another's turn, and
-  // the negative test only fails when both are removed.
-  contextState.selectedFileIDs = new Set();
-  renderTaskContext();
-  void loadWorkspaceDeliverables(threadUUID);
-  if (!threadUUID) return;
-
-  const agent = desktopAgentBridge();
-  if (!agent || typeof agent.listThreadFiles !== "function") return;
-  try {
-    const result = await agent.listThreadFiles(threadUUID);
-    // A thread switch mid-flight must not paint the previous thread's files.
-    if (contextState.sourcesThreadUUID !== threadUUID) return;
-    if (result && result.ok && result.data && Array.isArray(result.data.items)) {
-      contextState.sources = result.data.items;
-    }
-  } catch {
-    // The panel degrades to session-only sources; the conversation itself is
-    // unaffected, so this must not surface as a turn error.
-  }
-  renderTaskContext();
-}
-
 buildStarterCards();
 
 // Paint the panel once on load. Without this it keeps whatever static markup
 // index.html shipped with — which looks like a rendered panel that is simply
 // empty, rather than one that never ran.
 renderTaskContext();
-
-// Filtering is local and instant: the thread list is already in memory, so
-// there is nothing to debounce and no request to make.
-const renameThreadButton = document.querySelector("#rename-thread-button");
 if (renameThreadButton) {
   renameThreadButton.addEventListener("click", () => {
     openRenameForm();
   });
 }
-const exportThreadButton = document.querySelector("#export-thread-button");
 if (exportThreadButton) {
   exportThreadButton.addEventListener("click", () => {
     void exportSelectedThread();
   });
 }
-const renameThreadForm = document.querySelector("#rename-thread-form");
 if (renameThreadForm) {
   renameThreadForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -6741,203 +2570,9 @@ if (renameThreadForm) {
     });
   });
 }
-const renameThreadCancel = document.querySelector("#rename-thread-cancel");
 if (renameThreadCancel) {
   renameThreadCancel.addEventListener("click", () => {
     closeRenameForm();
-  });
-}
-
-messageViewport.addEventListener("scroll", () => {
-  const wasSticky = viewportSticky;
-  viewportSticky = viewportNearBottom();
-  if (viewportSticky && !wasSticky) {
-    if (jumpLatestButton) jumpLatestButton.hidden = true;
-  }
-});
-if (jumpLatestButton) {
-  jumpLatestButton.addEventListener("click", () => {
-    scrollMessagesToEnd(true);
-  });
-}
-
-// --- Quick switcher (⌘K) ---------------------------------------------------
-// The sidebar is where conversations live; the switcher is how you reach one
-// without leaving the keyboard. Same data, same filter as the sidebar search.
-
-const quickSwitcher = document.querySelector("#quick-switcher");
-const quickSwitcherInput = document.querySelector("#quick-switcher-input");
-const quickSwitcherList = document.querySelector("#quick-switcher-list");
-let quickSwitcherIndex = 0;
-
-// The palette's action half: things you can DO from the keyboard, not just
-// places you can go. Context-aware — each command appears only when the app
-// would honour it, so the list never offers a dead end.
-function quickSwitcherCommands(query) {
-  const commands = [];
-  const current = state.threads.find(
-    (candidate) => candidate.uuid === state.selectedThreadUUID
-  );
-  const agent = window.desktopBridge?.agent;
-  // Gated by the SAME predicate the action itself checks: a command whose
-  // Enter would silently no-op is a dead end wearing a label. (Found live:
-  // during boot, before skills load, the weaker gate offered a New thread
-  // that went nowhere.)
-  if (canOpenNewThread()) {
-    commands.push({
-      kind: "command",
-      label: "New thread",
-      hint: "Start a conversation",
-      run: () => openNewThreadForm(),
-    });
-  }
-  if (current) {
-    commands.push({
-      kind: "command",
-      label: current.pinned ? "Unpin this conversation" : "Pin this conversation",
-      hint: current.name || "Untitled thread",
-      run: () => void toggleThreadPin(current),
-    });
-    if ((current.message_count || 0) > 0 && typeof agent?.exportThread === "function") {
-      commands.push({
-        kind: "command",
-        label: "Export as Markdown",
-        hint: current.name || "Untitled thread",
-        run: () => void exportSelectedThread(),
-      });
-    }
-  }
-  commands.push({
-    kind: "command",
-    label: "Open model settings",
-    hint: "Local route, protocol, API key",
-    run: () => void openModelSettings(),
-  });
-  // Appearance. Three named entries rather than one cycling toggle: a toggle
-  // that walks system → light → dark never tells you where it will land, and
-  // the palette is the one place in the app where you say what you want rather
-  // than press until it looks right. The active one says so instead of being
-  // hidden — a list that silently drops the current state reads as a bug.
-  for (const choice of THEME_CHOICES) {
-    commands.push({
-      kind: "command",
-      label: `Appearance: ${THEME_LABELS[choice]}`,
-      hint: choice === themeChoice ? "Current" : THEME_HINTS[choice],
-      run: () => setTheme(choice),
-    });
-  }
-  if (!query) return commands;
-  return commands.filter((command) => command.label.toLowerCase().includes(query));
-}
-
-function quickSwitcherCandidates() {
-  const query = (quickSwitcherInput?.value || "").trim().toLowerCase();
-  const threads = state.threads
-    .filter((thread) => threadMatchesQuery(thread, query))
-    .slice(0, 8)
-    .map((thread) => ({ kind: "thread", thread }));
-  return threads.concat(quickSwitcherCommands(query));
-}
-
-function renderQuickSwitcher() {
-  if (!quickSwitcherList) return;
-  const candidates = quickSwitcherCandidates();
-  if (quickSwitcherIndex >= candidates.length) quickSwitcherIndex = Math.max(0, candidates.length - 1);
-  quickSwitcherList.textContent = "";
-  if (candidates.length === 0) {
-    const empty = document.createElement("li");
-    empty.className = "quick-switcher-empty";
-    empty.textContent = "Nothing matches.";
-    quickSwitcherList.appendChild(empty);
-    return;
-  }
-  let commandsHeadingShown = false;
-  candidates.forEach((candidate, index) => {
-    if (candidate.kind === "command" && !commandsHeadingShown) {
-      commandsHeadingShown = true;
-      const heading = document.createElement("li");
-      heading.className = "quick-switcher-heading";
-      heading.textContent = "Actions";
-      quickSwitcherList.appendChild(heading);
-    }
-    const item = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    if (candidate.kind === "thread") {
-      button.className = "quick-switcher-item" + (index === quickSwitcherIndex ? " active" : "");
-      const title = document.createElement("strong");
-      title.textContent = candidate.thread.name || "Untitled thread";
-      const meta = document.createElement("span");
-      meta.textContent = `${candidate.thread.message_count || 0} messages`;
-      button.append(title, meta);
-    } else {
-      button.className = "quick-switcher-command" + (index === quickSwitcherIndex ? " active" : "");
-      const title = document.createElement("strong");
-      title.textContent = candidate.label;
-      const meta = document.createElement("span");
-      meta.textContent = candidate.hint;
-      button.append(title, meta);
-    }
-    button.addEventListener("click", () => {
-      commitQuickSwitcherChoice(candidate);
-    });
-    item.appendChild(button);
-    quickSwitcherList.appendChild(item);
-  });
-}
-
-function openQuickSwitcher() {
-  // Commands make the palette useful even before the first conversation
-  // exists, so an empty thread list no longer keeps it closed.
-  if (!quickSwitcher || quickSwitcherCandidates().length === 0) return;
-  quickSwitcherIndex = 0;
-  if (quickSwitcherInput) quickSwitcherInput.value = "";
-  quickSwitcher.hidden = false;
-  renderQuickSwitcher();
-  quickSwitcherInput?.focus();
-}
-
-function closeQuickSwitcher() {
-  if (quickSwitcher) quickSwitcher.hidden = true;
-}
-
-function commitQuickSwitcherChoice(candidate) {
-  closeQuickSwitcher();
-  if (candidate.kind === "command") {
-    candidate.run();
-    return;
-  }
-  selectThread(candidate.thread);
-}
-
-if (quickSwitcherInput) {
-  quickSwitcherInput.addEventListener("input", () => {
-    quickSwitcherIndex = 0;
-    renderQuickSwitcher();
-  });
-  quickSwitcherInput.addEventListener("keydown", (event) => {
-    const candidates = quickSwitcherCandidates();
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      quickSwitcherIndex = Math.min(quickSwitcherIndex + 1, Math.max(0, candidates.length - 1));
-      renderQuickSwitcher();
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      quickSwitcherIndex = Math.max(0, quickSwitcherIndex - 1);
-      renderQuickSwitcher();
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      const chosen = candidates[quickSwitcherIndex];
-      if (chosen) commitQuickSwitcherChoice(chosen);
-    } else if (event.key === "Escape") {
-      closeQuickSwitcher();
-    }
-  });
-}
-if (quickSwitcher) {
-  // Clicking the dimmed backdrop (not the panel) dismisses.
-  quickSwitcher.addEventListener("click", (event) => {
-    if (event.target === quickSwitcher) closeQuickSwitcher();
   });
 }
 
@@ -6963,8 +2598,6 @@ document.addEventListener("keydown", (event) => {
     }
   }
 });
-
-const openWorkspaceButton = document.querySelector("#open-workspace-button");
 if (openWorkspaceButton) {
   openWorkspaceButton.addEventListener("click", () => {
     const threadUUID = state.selectedThreadUUID;
@@ -6978,101 +2611,6 @@ if (openWorkspaceButton) {
     );
   });
 }
-
-// Content search: titles filter instantly in memory; message bodies live in
-// SQLite, so the sidecar answers those. Debounced so a fast typist asks
-// once, generation-guarded so a slow answer to an old query can never
-// overwrite the results of a newer one.
-let contentSearchTimer = null;
-let contentSearchGeneration = 0;
-
-function clearContentMatches() {
-  contentSearchGeneration += 1;
-  const panel = document.querySelector("#content-match-panel");
-  const list = document.querySelector("#content-match-list");
-  if (panel) panel.hidden = true;
-  if (list) list.textContent = "";
-}
-
-function parseSearchMatches(data) {
-  if (!isRecord(data) || !Array.isArray(data.items)) {
-    throw new Error("invalid search payload");
-  }
-  return data.items.filter(
-    (item) =>
-      isRecord(item) &&
-      isSafeLocalHistoryUUID(item.thread_uuid) &&
-      typeof item.snippet === "string" &&
-      item.snippet.length > 0 &&
-      (item.role === "you" || item.role === "assistant")
-  );
-}
-
-function renderContentMatches(matches) {
-  const panel = document.querySelector("#content-match-panel");
-  const list = document.querySelector("#content-match-list");
-  if (!panel || !list) return;
-  list.textContent = "";
-  if (matches.length === 0) {
-    panel.hidden = true;
-    return;
-  }
-  panel.hidden = false;
-  for (const match of matches) {
-    const item = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "content-match";
-    const title = document.createElement("strong");
-    title.textContent =
-      (isRecord(match) && typeof match.thread_name === "string" && match.thread_name) ||
-      "Untitled thread";
-    const snippet = document.createElement("span");
-    snippet.textContent = (match.role === "you" ? "You: " : "") + match.snippet;
-    button.append(title, snippet);
-    button.addEventListener("click", () => {
-      const thread = state.threads.find((candidate) => candidate.uuid === match.thread_uuid);
-      if (thread) selectThread(thread);
-    });
-    item.appendChild(button);
-    list.appendChild(item);
-  }
-}
-
-async function runContentSearch(query) {
-  const agent = window.desktopBridge?.agent;
-  if (typeof agent?.searchMessages !== "function") return;
-  const generation = ++contentSearchGeneration;
-  let matches;
-  try {
-    const result = parseDesktopBridgeResult(
-      await agent.searchMessages(query),
-      "search messages result"
-    );
-    if (!result.ok) return;
-    matches = parseSearchMatches(result.data);
-  } catch {
-    // Content search is an enhancement on top of the title filter; a failure
-    // degrades to exactly the behaviour the sidebar always had.
-    return;
-  }
-  if (generation !== contentSearchGeneration) return;
-  renderContentMatches(matches);
-}
-
-function scheduleContentSearch() {
-  if (contentSearchTimer) clearTimeout(contentSearchTimer);
-  const query = (state.threadQuery || "").trim();
-  if (query.length < 2) {
-    clearContentMatches();
-    return;
-  }
-  contentSearchTimer = setTimeout(() => {
-    void runContentSearch(query);
-  }, 250);
-}
-
-const threadSearchInput = document.querySelector("#thread-search");
 if (threadSearchInput) {
   threadSearchInput.addEventListener("input", () => {
     state.threadQuery = threadSearchInput.value;

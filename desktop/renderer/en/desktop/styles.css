@@ -1937,6 +1937,35 @@ textarea:focus-visible {
   box-shadow: 0 0 0 2px hsl(var(--ring) / 0.35);
 }
 
+/* The top of a windowed transcript. A long conversation mounts only its most
+   recent exchanges, and this is the rest of it — quiet, because it is a
+   boundary marker rather than an action anyone came here to take, and full
+   width because a centred pill in a reading column reads as the end of the
+   content rather than the edge of what is shown. */
+.transcript-earlier {
+  justify-self: center;
+  margin-bottom: 8px;
+  padding: 5px 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--card));
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.transcript-earlier:hover {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+.transcript-earlier:focus-visible {
+  outline: none;
+  border-color: hsl(var(--ring));
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.35);
+}
+
 /* Code chrome lives in a header strip above the <pre>, never inside it — a
    label or button inside the block becomes part of its selectable text. */
 .md-code-wrap {

@@ -1,0 +1,867 @@
+// The composer and the two forms that feed it: attachments, the send/stop
+// state machine, the new-thread draft, and the interrupted-turn recovery card.
+//
+// These are one module because they are one predicate. updateComposerState is
+// the single place that decides whether the app can accept input right now,
+// and the create form, the recovery card and the attachment chips are all
+// inputs to or consequences of that decision; splitting them produces two
+// pieces of code that disagree about whether the send button is enabled.
+import { fences } from "./fence.js";
+import {
+  agentMode,
+  attachmentChips,
+  chatInput,
+  composerStatus,
+  emptyDescription,
+  emptyNewThreadButton,
+  emptyTitle,
+  newThreadButton,
+  newThreadCancelButton,
+  newThreadError,
+  newThreadForm,
+  newThreadMode,
+  newThreadName,
+  newThreadSubmitButton,
+  refreshButton,
+  sendButton,
+  stopButton,
+  turnRecoveryCard,
+  turnRecoveryDescription,
+  turnRecoveryDismissButton,
+  turnRecoveryFeedback,
+  turnRecoveryPrompt,
+  turnRecoveryResumeButton,
+} from "./dom.js";
+import {
+  CANONICAL_V4_UUID,
+  hasExactKeys,
+  isNonNegativeInteger,
+  isParseableTimestamp,
+  isRecord,
+  isSafeAgentMode,
+  isSafeProtocolString,
+  isSessionChangedPayload,
+  isValidChatText,
+  isValidThreadName,
+  parseDesktopBridgeResult,
+} from "./protocol.js";
+import { selectThread } from "./transcript.js";
+import { renderQuickSwitcher, renderThreads } from "./threads.js";
+import { renderTaskContext } from "./context-panel.js";
+import {
+  SessionChangedError,
+  ThreadCreateFailure,
+  activeLocalAccount,
+  defaultLocalAccountLabel,
+  desktopAgentBridge,
+  desktopAgentCreateBridge,
+  handleSessionChanged,
+  renderComposerChips,
+  renderLocalAccountArea,
+  setStatus,
+  state,
+} from "./renderer.js";
+
+function parseCreatedThread(value, expectedDraft, created) {
+  if (
+    !hasExactKeys(value, [
+      "uuid",
+      "name",
+      "agent_mode",
+      "message_count",
+      "updated_at",
+      "cloud_sync_state",
+    ]) ||
+    value.uuid !== expectedDraft.threadUUID ||
+    (created && value.name !== expectedDraft.name) ||
+    (created && value.agent_mode !== expectedDraft.agentMode) ||
+    !isValidThreadName(value.name) ||
+    !isSafeAgentMode(value.agent_mode) ||
+    !state.allowedModes.includes(value.agent_mode) ||
+    !isNonNegativeInteger(value.message_count) ||
+    !isParseableTimestamp(value.updated_at) ||
+    // "local" = the signed-out local create branch (L3d). Two other copies
+    // of this set (both in the bridge lib) lagged the same way and silently
+    // broke every local create — keep all three in step.
+    (value.cloud_sync_state !== "synced" &&
+      value.cloud_sync_state !== "paused" &&
+      value.cloud_sync_state !== "local")
+  ) {
+    throw new Error("Malformed agent create thread result");
+  }
+  return {
+    uuid: value.uuid,
+    name: value.name,
+    agent_mode: value.agent_mode,
+    message_count: value.message_count,
+    updated_at: value.updated_at,
+    cloud_sync_state: value.cloud_sync_state,
+  };
+}
+
+function parseCreateThreadData(value, status, expectedDraft) {
+  if (
+    hasExactKeys(value, ["state", "created", "thread"]) &&
+    value.state === "ready" &&
+    typeof value.created === "boolean" &&
+    status === (value.created ? 201 : 200)
+  ) {
+    return {
+      state: "ready",
+      created: value.created,
+      thread: parseCreatedThread(value.thread, expectedDraft, value.created),
+    };
+  }
+  if (
+    status === 202 &&
+    hasExactKeys(value, ["state", "thread_uuid"]) &&
+    value.state === "pending_local_sync" &&
+    value.thread_uuid === expectedDraft.threadUUID
+  ) {
+    return {
+      state: "pending_local_sync",
+      threadUUID: value.thread_uuid,
+    };
+  }
+  throw new Error("Malformed agent create thread result");
+}
+
+// uploadThreadFile uploads one file to the selected thread via the typed bridge
+// and tracks it as a pending attachment (chip). Only "ready" attachments are
+// sent with the next turn (fileIDs); "uploading" is excluded, "error" flagged.
+//
+// Each upload carries its own fence — the entry object itself plus the session
+// generation — NOT a shared counter. A shared counter meant that attaching
+// several files at once invalidated every in-flight upload except the last:
+// their completions were dropped and the chips sat on "uploading" forever.
+export function uploadThreadFile(file) {
+  const agent = desktopAgentBridge();
+  if (!agent) {
+    setStatus("File upload unavailable", "error");
+    return;
+  }
+  const threadUUID = state.selectedThreadUUID;
+  if (!threadUUID) {
+    return;
+  }
+  const entry = {
+    id: 0,
+    name: file.name,
+    size: file.size,
+    status: "uploading",
+    // Kept for retry: a failed chip re-runs the same file against the thread
+    // it was originally attached to, even if the selection moved on.
+    threadUUID,
+    file,
+  };
+  state.pendingFiles.push(entry);
+  renderAttachments();
+  startPendingFileUpload(agent, entry);
+}
+
+// startPendingFileUpload runs (or re-runs) one tray entry's upload. The
+// completion is fenced per upload: it applies only while the entry is still in
+// the tray (not removed, not consumed by a sent turn) and the session has not
+// changed — the same condition isCurrentSelection expresses for turns, scoped
+// to what an upload can actually outlive.
+function startPendingFileUpload(agent, entry) {
+  const sessionGeneration = fences.session.snapshot();
+  const isLive = () =>
+    fences.session.isCurrent(sessionGeneration) &&
+    state.pendingFiles.includes(entry);
+  agent
+    .uploadThreadFile(entry.threadUUID, entry.file)
+    .then((result) => {
+      if (!isLive()) return;
+      if (
+        isRecord(result) &&
+        result.ok &&
+        result.data &&
+        typeof result.data.file_id === "number"
+      ) {
+        entry.id = result.data.file_id;
+        entry.status = "ready";
+      } else {
+        entry.status = "error";
+      }
+      renderAttachments();
+    })
+    .catch(() => {
+      // Without this, a rejected bridge call became an unhandled rejection
+      // and the chip froze on "uploading". A failed upload is a failed
+      // attachment: mark it and let the chip offer retry or removal.
+      if (!isLive()) return;
+      entry.status = "error";
+      renderAttachments();
+    });
+}
+
+function retryPendingFileUpload(entry) {
+  const agent = desktopAgentBridge();
+  if (!agent) {
+    setStatus("File upload unavailable", "error");
+    return;
+  }
+  if (!state.pendingFiles.includes(entry) || entry.status !== "error") return;
+  entry.status = "uploading";
+  renderAttachments();
+  startPendingFileUpload(agent, entry);
+}
+
+function removePendingFile(entry) {
+  state.pendingFiles = state.pendingFiles.filter((file) => file !== entry);
+  renderAttachments();
+}
+
+export function renderAttachments() {
+  if (!attachmentChips) return;
+  attachmentChips.textContent = "";
+  for (const file of state.pendingFiles) {
+    const chip = document.createElement("span");
+    chip.className = `attachment-chip ${file.status}`;
+    const label = document.createElement("span");
+    label.className = "attachment-chip-name";
+    label.textContent =
+      file.status === "uploading"
+        ? `${file.name}…`
+        : file.status === "error"
+          ? `${file.name} ✗`
+          : file.name;
+    chip.appendChild(label);
+    if (file.status === "error") {
+      // A failed upload is actionable, not terminal: run the same file again,
+      // or take the chip out of the tray.
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "attachment-chip-retry";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", () => {
+        retryPendingFileUpload(file);
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "attachment-chip-remove";
+      remove.textContent = "Remove";
+      remove.addEventListener("click", () => {
+        removePendingFile(file);
+      });
+      chip.append(retry, remove);
+    }
+    attachmentChips.appendChild(chip);
+  }
+  attachmentChips.hidden = state.pendingFiles.length === 0;
+  // The composer tray and the Sources panel show the same files; refreshing
+  // here keeps them from disagreeing after an upload completes or a turn
+  // clears the tray.
+  renderTaskContext();
+}
+
+export function selectedRecoverableTurn() {
+  return state.recoverableTurns.find(
+    (turn) => turn.thread_uuid === state.selectedThreadUUID
+  ) || null;
+}
+
+export function removeRecoverableTurn(turnUUID) {
+  state.recoverableTurns = state.recoverableTurns.filter(
+    (turn) => turn.turn_uuid !== turnUUID
+  );
+  state.recoveryFeedback = "";
+  state.recoveryFeedbackKind = "default";
+  renderThreads();
+  updateRecoveryState();
+}
+
+function recoveryPromptPreview(value) {
+  const characters = Array.from(value);
+  const preview = characters.slice(0, 120).join("");
+  return `Prompt: ${preview}${characters.length > 120 ? "…" : ""}`;
+}
+
+export function updateRecoveryState() {
+  const recoverable = selectedRecoverableTurn();
+  const visible = recoverable !== null;
+  const busy =
+    state.recoveryLoading || state.resumingTurn || state.dismissingRecovery;
+  turnRecoveryCard.hidden = !visible;
+  turnRecoveryCard.setAttribute("aria-busy", String(visible && busy));
+  turnRecoveryResumeButton.disabled =
+    !visible ||
+    busy ||
+    state.activeTurn !== null ||
+    state.recoveringSession;
+  turnRecoveryDismissButton.disabled =
+    !visible || busy || state.activeTurn !== null || state.recoveringSession;
+  turnRecoveryResumeButton.textContent = state.resumingTurn
+    ? "Resuming..."
+    : state.recoveryLoading
+      ? "Checking..."
+      : "Resume";
+  turnRecoveryDismissButton.textContent = state.dismissingRecovery
+    ? "Dismissing..."
+    : "Dismiss";
+  turnRecoveryDescription.textContent = state.resumingTurn
+    ? "Retrying the interrupted request safely."
+    : "Retry this interrupted response using the same request.";
+  turnRecoveryPrompt.textContent = recoverable
+    ? recoveryPromptPreview(recoverable.user_text)
+    : "";
+  turnRecoveryFeedback.textContent = state.recoveryFeedback;
+  turnRecoveryFeedback.classList.toggle(
+    "error",
+    state.recoveryFeedbackKind === "error"
+  );
+}
+
+export function updateComposerState() {
+  renderLocalAccountArea();
+  renderComposerChips();
+  // An open palette shows availability-gated commands; when availability
+  // changes under it (skills finish loading, a turn starts), the list must
+  // follow — otherwise it either hides a now-possible action or offers a
+  // now-impossible one.
+  const palette = document.querySelector("#quick-switcher");
+  if (palette && !palette.hidden) renderQuickSwitcher();
+  const authenticated = canUseAgent();
+  const hasThread = Boolean(state.selectedThreadUUID);
+  const hasMode = state.allowedModes.includes(state.selectedMode);
+  const active = state.activeTurn !== null;
+  const cancelConfirmationPending = state.cancelConfirmationTurnID !== null;
+  const recoverable = selectedRecoverableTurn();
+  const ready =
+    authenticated &&
+    hasThread &&
+    state.agentAvailable &&
+    !state.skillsLoading &&
+    !state.recoveryLoading &&
+    hasMode &&
+    !active &&
+    !cancelConfirmationPending &&
+    !recoverable &&
+    !state.createFormOpen &&
+    !state.recoveringSession;
+  agentMode.disabled = !ready;
+  // One allowed skill is not a choice; the composer status already names it.
+  // The selector earns its pixels back the day a second skill ships.
+  const singleSkill = state.allowedModes.length <= 1;
+  agentMode.hidden = singleSkill;
+  const modeLabel = document.querySelector("#agent-mode-label");
+  if (modeLabel) modeLabel.hidden = singleSkill;
+  // The chip keeps the mode visible when the selector has nothing to select.
+  const modeChip = document.querySelector("#mode-chip");
+  if (modeChip) {
+    const shown = singleSkill && authenticated && state.selectedMode !== "";
+    modeChip.hidden = !shown;
+    if (shown) modeChip.textContent = state.selectedMode.toUpperCase();
+  }
+  chatInput.disabled = !ready;
+  sendButton.disabled = !ready || !isValidChatText(chatInput.value);
+  stopButton.hidden = !active;
+  stopButton.disabled = !active || state.activeTurn?.stopRequested === true;
+
+  if (state.recoveringSession) {
+    composerStatus.textContent = "Your signed-in account changed. Select a thread again.";
+  } else if (!authenticated) {
+    composerStatus.textContent =
+      "Sign in, or choose a local model under Models, to start a conversation.";
+  } else if (!hasThread) {
+    composerStatus.textContent = isLocalOnlySession()
+      ? "Select or create a thread. It stays on this machine."
+      : "Select a synced thread to continue.";
+  } else if (!state.agentAvailable) {
+    composerStatus.textContent = "Agent streaming is unavailable in this Desktop build.";
+  } else if (state.skillsLoading) {
+    composerStatus.textContent = "Loading available skills...";
+  } else if (state.recoveryLoading) {
+    composerStatus.textContent = "Checking interrupted responses...";
+  } else if (!hasMode) {
+    composerStatus.textContent = "No Desktop skill is currently available.";
+  } else if (recoverable) {
+    composerStatus.textContent = state.resumingTurn
+      ? "Resuming the interrupted response..."
+      : "Resume or dismiss the interrupted response before sending another prompt.";
+  } else if (cancelConfirmationPending) {
+    composerStatus.textContent = "Confirming persistent cancellation...";
+  } else if (active) {
+    composerStatus.textContent = state.activeTurn.stopRequested
+      ? "Stopping this turn..."
+      : "WorkMax Agent is responding...";
+  } else if (isLocalOnlySession()) {
+    composerStatus.textContent = state.toolLoop
+      ? `${state.selectedMode.toUpperCase()} on your local model with tools. Signed out — nothing leaves this machine.`
+      : `${state.selectedMode.toUpperCase()} on your local model, chat only. Signed out — nothing leaves this machine.`;
+  } else if (state.skillsDegraded) {
+    composerStatus.textContent = `${state.selectedMode.toUpperCase()} is available; live skill details are offline.`;
+  } else {
+    composerStatus.textContent = `Continue with ${state.selectedMode.toUpperCase()}.`;
+  }
+  updateRecoveryState();
+  updateNewThreadState();
+}
+
+// Whether the agent can be driven at all right now.
+//
+// It used to be "is there a cloud session", which made the local route
+// unreachable: the sidecar has served unauthenticated turns since L3d, but the
+// renderer disabled its composer, hid the new-thread button and never even
+// loaded local threads, so the signed-out local-first configuration existed
+// only on the server side.
+export function canUseAgent() {
+  return state.auth?.state === "authenticated" || state.localRoute;
+}
+
+// Signed out and running locally. Worth naming because several messages have
+// to say something different in this state — "sign in" is not the answer to
+// anything here.
+export function isLocalOnlySession() {
+  return state.localRoute && state.auth?.state !== "authenticated";
+}
+
+function canGenerateThreadUUID() {
+  return typeof globalThis.crypto?.randomUUID === "function";
+}
+
+function generateThreadUUID() {
+  if (!canGenerateThreadUUID()) {
+    throw new Error("Secure thread identity generation is unavailable.");
+  }
+  const value = globalThis.crypto.randomUUID();
+  if (!CANONICAL_V4_UUID.test(value)) {
+    throw new Error("Secure thread identity generation returned an invalid value.");
+  }
+  return value;
+}
+
+export function canOpenNewThread() {
+  return (
+    canUseAgent() &&
+    state.agentAvailable &&
+    state.createAvailable &&
+    canGenerateThreadUUID() &&
+    !state.skillsLoading &&
+    state.allowedModes.length > 0 &&
+    !state.activeTurn &&
+    !state.creatingThread &&
+    !state.recoveringSession &&
+    !state.createFormOpen
+  );
+}
+
+// What a first-time user can actually do here. Three honest starters — each
+// is a prompt the local PPT agent can genuinely act on, not aspirational
+// marketing copy. Clicking one opens the same new-thread flow the button
+// does, and plants the prompt in the composer once the thread exists.
+const STARTER_PROMPTS = [
+  {
+    title: "Quarterly business review",
+    icon: "▤",
+    tone: "tone-blue",
+    prompt: "Turn my Q3 numbers into an 8-slide business review. Ask me for the figures you need first.",
+  },
+  {
+    title: "Product launch deck",
+    icon: "▶",
+    tone: "tone-violet",
+    prompt: "Outline a product launch deck, then draft speaker notes for each slide.",
+  },
+  {
+    title: "Brief from documents",
+    icon: "≡",
+    tone: "tone-green",
+    prompt: "Summarize the documents I attach into a one-page executive brief.",
+  },
+];
+
+export function buildStarterCards() {
+  const container = document.querySelector("#starter-prompts");
+  if (!container) return;
+  for (const starter of STARTER_PROMPTS) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "starter-card";
+    const icon = document.createElement("span");
+    icon.className = "starter-icon " + starter.tone;
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = starter.icon;
+    const title = document.createElement("strong");
+    title.textContent = starter.title;
+    const preview = document.createElement("span");
+    preview.className = "starter-preview";
+    preview.textContent = starter.prompt;
+    card.append(icon, title, preview);
+    card.addEventListener("click", () => {
+      state.starterPrompt = starter.prompt;
+      openNewThreadForm();
+    });
+    container.appendChild(card);
+  }
+}
+
+export function renderEmptyState() {
+  const authenticated = canUseAgent();
+  // First run, neither path chosen yet: the two ways of working are equal
+  // citizens shown side by side, not a sign-in wall with the local path
+  // buried in a settings button. 登录 = 本地模型 + 远程授权, at first sight.
+  const onboarding = document.querySelector("#onboarding-paths");
+  if (onboarding) onboarding.hidden = authenticated;
+  if (!authenticated) {
+    emptyTitle.textContent = "How do you want to work?";
+    emptyDescription.textContent =
+      "Both paths lead to the same app. You can sign in later, or switch models any time.";
+  } else {
+    // One question, Codex-style: the app is usable, so the headline invites
+    // work instead of describing machinery. The identity joins the question
+    // when it is a real name — "What should we make, Local?" is nobody.
+    const account = isLocalOnlySession() ? activeLocalAccount() : null;
+    emptyTitle.textContent =
+      account && account.name !== defaultLocalAccountLabel
+        ? "What should we make, " + account.name + "?"
+        : "What should we make today?";
+    if (isLocalOnlySession()) {
+      emptyDescription.textContent = state.toolLoop
+        ? "Runs on your local model with tools. Everything stays in this app's own database."
+        : "Runs on your local model. Everything stays in this app's own database.";
+    } else if (state.threads.length === 0 && !state.createAvailable) {
+      emptyDescription.textContent =
+        "This Desktop build can continue existing threads after they appear in local history.";
+    } else {
+      emptyDescription.textContent = "Pick a conversation on the left, or start fresh below.";
+    }
+  }
+  emptyNewThreadButton.hidden = !authenticated || !state.createAvailable;
+  const starters = document.querySelector("#starter-prompts");
+  if (starters) {
+    // Same conditions as the button they are a richer version of.
+    starters.hidden = emptyNewThreadButton.hidden;
+  }
+}
+
+export function setCreateFeedback(message, kind = "error") {
+  newThreadError.textContent = message;
+  newThreadError.hidden = message === "";
+  newThreadError.classList.toggle("pending", kind === "pending");
+}
+
+export function hasAttemptedCreateDraft() {
+  return state.createFormOpen && state.createDraft?.attempted === true;
+}
+
+function createFailureCode(value) {
+  if (
+    !isRecord(value) ||
+    typeof value.error !== "string" ||
+    !isSafeProtocolString(value.error, 128)
+  ) {
+    return "";
+  }
+  return value.error;
+}
+
+function classifyCreateThreadFailure(result) {
+  const code = createFailureCode(result.error);
+  if (result.status === 401 || code === "authentication_required") {
+    return new ThreadCreateFailure(
+      "Authentication is required. Cancel this draft, then sign in again.",
+      "Authentication is required before creating a thread.",
+      false
+    );
+  }
+  if (code === "thread_uuid_conflict") {
+    return new ThreadCreateFailure(
+      "This thread identity is already owned elsewhere. Cancel and start a new draft.",
+      "The generated thread identity cannot be used.",
+      false
+    );
+  }
+  if (code === "local_identity_conflict") {
+    return new ThreadCreateFailure(
+      "Local history has an identity conflict. Cancel this draft before refreshing.",
+      "Local history could not safely accept this thread.",
+      false
+    );
+  }
+  if (
+    result.status >= 500 &&
+    result.status <= 599 &&
+    isRecord(result.error) &&
+    result.error.retry_with_same_uuid === true
+  ) {
+    return new ThreadCreateFailure(
+      "This thread could not be completed. Retry keeps the same identity.",
+      "The presentation thread could not be completed.",
+      true
+    );
+  }
+  return new ThreadCreateFailure(
+    "Thread creation was rejected. Cancel this draft before continuing.",
+    "The presentation thread cannot be retried.",
+    false
+  );
+}
+
+export function updateNewThreadState() {
+  // canUseAgent, not the raw cloud-auth state: a signed-out session with a
+  // local route creates local threads. This was the one predicate left on
+  // the old check — the form would open (canOpenNewThread) but the submit
+  // stayed disabled forever, which the packaged-app smoke caught.
+  const authenticated = canUseAgent();
+  const hasMode = state.allowedModes.includes(newThreadMode.value);
+  const attempted = state.createDraft?.attempted === true;
+  const pending = state.createDraft?.pending === true;
+  const retryable = state.createDraft?.retryable === true;
+  const validName = isValidThreadName(newThreadName.value.trim());
+  const canSubmit =
+    state.createFormOpen &&
+    authenticated &&
+    state.agentAvailable &&
+    state.createAvailable &&
+    !state.skillsLoading &&
+    hasMode &&
+    validName &&
+    (!attempted || retryable) &&
+    !state.activeTurn &&
+    !state.creatingThread &&
+    !state.recoveringSession;
+
+  newThreadButton.disabled = !canOpenNewThread();
+  emptyNewThreadButton.disabled = !canOpenNewThread();
+  refreshButton.disabled =
+    state.creatingThread || state.recoveringSession || hasAttemptedCreateDraft();
+  refreshButton.title = hasAttemptedCreateDraft()
+    ? "Cancel or complete the current thread draft before refreshing"
+    : "Refresh local history";
+  newThreadButton.title = state.createAvailable
+    ? "Create a synced presentation thread"
+    : "Thread creation is unavailable in this Desktop build";
+  newThreadForm.hidden = !state.createFormOpen;
+  newThreadForm.setAttribute("aria-busy", String(state.creatingThread));
+  newThreadName.disabled = state.creatingThread || attempted;
+  newThreadMode.disabled = state.creatingThread || attempted || state.allowedModes.length === 0;
+  newThreadSubmitButton.disabled = !canSubmit;
+  newThreadCancelButton.disabled = false;
+  newThreadSubmitButton.textContent = state.creatingThread
+    ? "Creating..."
+    : pending
+      ? "Retry sync"
+      : attempted && retryable
+        ? "Retry"
+        : attempted
+          ? "Cannot retry"
+        : "Create";
+  renderEmptyState();
+}
+
+export function openNewThreadForm() {
+  if (!canOpenNewThread()) {
+    updateNewThreadState();
+    return;
+  }
+  let threadUUID;
+  try {
+    threadUUID = generateThreadUUID();
+  } catch {
+    setStatus("Secure thread identity generation is unavailable.", "error");
+    updateNewThreadState();
+    return;
+  }
+  const mode = state.allowedModes.includes(state.selectedMode)
+    ? state.selectedMode
+    : state.allowedModes[0];
+  fences.create.bump();
+  state.createFormOpen = true;
+  state.createDraft = {
+    threadUUID,
+    name: "Untitled presentation",
+    agentMode: mode,
+    attempted: false,
+    pending: false,
+    retryable: false,
+  };
+  newThreadName.value = state.createDraft.name;
+  newThreadMode.value = mode;
+  setCreateFeedback("");
+  updateComposerState();
+  newThreadName.focus();
+  if (typeof newThreadName.select === "function") {
+    newThreadName.select();
+  }
+}
+
+export function cancelNewThreadDraft(restoreFocus = true) {
+  // The starter's prompt belonged to the thread that was not created.
+  state.starterPrompt = null;
+  const wasAttempted = state.createDraft?.attempted === true;
+  fences.create.bump();
+  state.createFormOpen = false;
+  state.creatingThread = false;
+  state.createDraft = null;
+  newThreadName.value = "Untitled presentation";
+  setCreateFeedback("");
+  updateComposerState();
+  if (!restoreFocus) return;
+  setStatus(wasAttempted ? "Thread creation canceled. A late result will be ignored." : "New thread canceled.");
+  if (state.selectedThreadUUID && !chatInput.disabled) {
+    chatInput.focus();
+  } else {
+    newThreadButton.focus();
+  }
+}
+
+function isCurrentCreate(context) {
+  return (
+    fences.session.isCurrent(context.sessionGeneration) &&
+    fences.create.isCurrent(context.createGeneration) &&
+    context.threadUUID === state.createDraft?.threadUUID &&
+    state.createFormOpen
+  );
+}
+
+function upsertCreatedThread(thread) {
+  state.threads = [
+    thread,
+    ...state.threads.filter((candidate) => candidate.uuid !== thread.uuid),
+  ].sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
+}
+
+export async function submitNewThread(event) {
+  event.preventDefault();
+  if (state.creatingThread || !state.createFormOpen || !state.createDraft) {
+    return;
+  }
+  const agent = desktopAgentCreateBridge();
+  const name = newThreadName.value.trim();
+  const mode = newThreadMode.value;
+  if (
+    !canUseAgent() ||
+    !agent ||
+    !state.agentAvailable ||
+    state.skillsLoading ||
+    !isValidThreadName(name) ||
+    !state.allowedModes.includes(mode) ||
+    state.activeTurn ||
+    state.recoveringSession
+  ) {
+    setCreateFeedback("Enter a valid name and choose an available skill.");
+    updateNewThreadState();
+    return;
+  }
+  if (state.createDraft.attempted && state.createDraft.retryable !== true) {
+    updateNewThreadState();
+    return;
+  }
+
+  if (!state.createDraft.attempted) {
+    state.createDraft = {
+      ...state.createDraft,
+      name,
+      agentMode: mode,
+      attempted: true,
+      pending: false,
+      retryable: false,
+    };
+    newThreadName.value = name;
+  }
+  const draft = {
+    threadUUID: state.createDraft.threadUUID,
+    name: state.createDraft.name,
+    agentMode: state.createDraft.agentMode,
+  };
+  fences.create.bump();
+  const context = {
+    sessionGeneration: fences.session.snapshot(),
+    createGeneration: fences.create.snapshot(),
+    threadUUID: draft.threadUUID,
+  };
+  state.creatingThread = true;
+  setCreateFeedback("");
+  setStatus("Creating a synced presentation thread...");
+  updateComposerState();
+
+  try {
+    const result = parseDesktopBridgeResult(
+      await agent.createThread(draft),
+      "agent create thread result"
+    );
+    if (!isCurrentCreate(context)) return;
+    if (!result.ok) {
+      if (result.status === 409 && isSessionChangedPayload(result.error)) {
+        throw new SessionChangedError();
+      }
+      throw classifyCreateThreadFailure(result);
+    }
+    const data = parseCreateThreadData(result.data, result.status, draft);
+    if (!isCurrentCreate(context)) return;
+    if (data.state === "pending_local_sync") {
+      state.createDraft = {
+        ...state.createDraft,
+        pending: true,
+        retryable: true,
+      };
+      setCreateFeedback(
+        "The cloud thread is ready. Retry sync with the same identity, or cancel this draft.",
+        "pending"
+      );
+      setStatus("Thread created. Local history is still syncing.");
+      return;
+    }
+    if (data.thread.cloud_sync_state === "paused") {
+      throw new ThreadCreateFailure(
+        "This existing thread is paused and cannot be continued here. Cancel this draft before continuing.",
+        "The existing presentation thread is paused.",
+        false
+      );
+    }
+
+    upsertCreatedThread(data.thread);
+    state.creatingThread = false;
+    state.createFormOpen = false;
+    state.createDraft = null;
+    setCreateFeedback("");
+    renderThreads();
+    selectThread(data.thread);
+    if (state.starterPrompt) {
+      // The card's promise lands here: the thread exists, the words are in
+      // the box, and sending is still the user's decision.
+      chatInput.value = state.starterPrompt;
+      state.starterPrompt = null;
+    }
+    chatInput.focus();
+    updateComposerState();
+    setStatus(data.created ? "Thread created. Ready for the first prompt." : "Thread recovered. Ready for the first prompt.");
+  } catch (error) {
+    if (error instanceof SessionChangedError) {
+      await handleSessionChanged();
+      return;
+    }
+    if (!isCurrentCreate(context)) return;
+    const failure = error instanceof ThreadCreateFailure
+      ? error
+      : new ThreadCreateFailure(
+          "This thread could not be completed. Retry keeps the same identity, or cancel this draft.",
+          "The presentation thread could not be completed.",
+          true
+        );
+    state.createDraft = {
+      ...state.createDraft,
+      pending: false,
+      retryable: failure.retryable,
+    };
+    setCreateFeedback(failure.feedback);
+    setStatus(failure.statusMessage, "error");
+  } finally {
+    if (isCurrentCreate(context)) {
+      state.creatingThread = false;
+      updateComposerState();
+    }
+  }
+}
+
+// Files arrive however the user's hands bring them: the picker, a drop onto
+// the conversation, or a paste. All three land in the same upload path, so
+// the chips, the Sources panel, and the send-time union behave identically.
+export function attachDroppedFiles(files) {
+  if (!state.selectedThreadUUID || !canUseAgent()) return;
+  for (const file of Array.from(files || [])) {
+    uploadThreadFile(file);
+  }
+}
