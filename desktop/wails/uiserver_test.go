@@ -53,6 +53,63 @@ func TestUIProxyBlocksPrivilegedLoginRoutes(t *testing.T) {
 	}
 }
 
+// The model gateway is how a local agent subprocess reaches an official model
+// — it spends the account's membership on a request nobody in the page
+// approved. The renderer must not be able to name it under any spelling, so
+// the whole subtree is refused here rather than route by route.
+func TestUIProxyBlocksTheModelGatewaySubtree(t *testing.T) {
+	reached := false
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		_, _ = io.WriteString(w, "reached the sidecar: "+r.URL.Path)
+	}))
+	defer sidecar.Close()
+	port := sidecarPortOf(t, sidecar.URL)
+
+	const cap = "test-capability"
+	handler := UIHandler(fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("ok")}}, cap, port, "tok")
+
+	for _, p := range []string{
+		"/" + cap + "/api/model-gateway/anthropic/v1/messages",
+		"/" + cap + "/api/model-gateway/anthropic/messages",
+		"/" + cap + "/api/model-gateway/openai/v1/chat/completions",
+		"/" + cap + "/api/model-gateway/openai/chat/completions",
+		// A spelling nobody registered is refused too: the subtree is the
+		// boundary, not the list of paths that happen to exist today.
+		"/" + cap + "/api/model-gateway/anything/at/all",
+	} {
+		req := httptest.NewRequest(http.MethodPost, p, strings.NewReader("{}"))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s = %d, want 403 (body: %s)", p, rec.Code, rec.Body.String())
+		}
+	}
+	for _, p := range []string{
+		"/" + cap + "/api/model-gateway/./anthropic/v1/messages",
+		"/" + cap + "/api/agent/../model-gateway/openai/v1/chat/completions",
+	} {
+		req := httptest.NewRequest(http.MethodPost, p, strings.NewReader("{}"))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code == http.StatusOK || rec.Code/100 == 3 {
+			t.Errorf("%s = %d, want a refusal (not OK, not a redirect)", p, rec.Code)
+		}
+	}
+	if reached {
+		t.Fatalf("a renderer request reached the model gateway")
+	}
+
+	// The neighbouring path must still work: this is a subtree, not a prefix
+	// match on the first characters.
+	req := httptest.NewRequest(http.MethodGet, "/"+cap+"/api/model-gateways-not-ours", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("an unrelated path was blocked: %d", rec.Code)
+	}
+}
+
 func TestUIProxyForwardsOrdinaryRoutesAndStripsBrowserHeaders(t *testing.T) {
 	var gotToken, gotOrigin, gotPath string
 	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

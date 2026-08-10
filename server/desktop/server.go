@@ -134,6 +134,13 @@ type ServerConfig struct {
 	// interactive mode). Nil → the approve endpoint returns 503.
 	Approvals *agentruntime.ApprovalBroker
 
+	// ModelGateway owns the in-memory loopback credential the local agent
+	// subprocesses use to reach an official model through this sidecar. Nil →
+	// the /model-gateway/* routes are registered but refuse everything, and
+	// the profile reader has no gateway to point an official turn at. Never
+	// nil in production: Bootstrap mints one per process.
+	ModelGateway *ModelGateway
+
 	// LocalFiles persists file attachments uploaded via
 	// POST /agent/threads/:uuid/files to local disk + w_workagent_thread_file,
 	// for use as model context in local turns (L3b). Nil → upload route returns 503.
@@ -187,6 +194,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("listen on 127.0.0.1:0: %w", err)
 	}
 
+	// The gateway can only publish a usable base URL once the port exists, and
+	// the server is the only thing that knows it. Doing it here rather than at
+	// the call site means a caller cannot wire a gateway that silently answers
+	// with an unaddressable endpoint.
+	cfg.ModelGateway.SetPort(listener.Addr().(*net.TCPAddr).Port)
+
 	authContext, authCancel := context.WithCancel(context.Background())
 	s := &Server{
 		cfg:          cfg,
@@ -210,7 +223,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	// credential on every registered route. This preserves token-first
 	// behavior for Gin redirects, unknown paths, and wrong methods while the
 	// per-route table becomes the auditable source for route policy.
-	router.Use(auth.RequireLocalToken(cfg.LocalToken))
+	router.Use(sidecarPerimeter(cfg.LocalToken))
 	if err := registerCurrentSidecarRoutes(router, s, cfg.LocalToken); err != nil {
 		authCancel()
 		_ = listener.Close()
@@ -227,6 +240,31 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	return s, nil
+}
+
+// sidecarPerimeter is the whole-port credential check.
+//
+// It is the local token for everything the renderer can reach, which is
+// everything except the model gateway. The gateway's callers are local agent
+// subprocesses speaking a provider's wire protocol; they have no way to carry
+// X-Local-Token, and handing the renderer's credential to a third-party binary
+// to work around that would be a far worse trade than exempting two exact
+// paths that then enforce their own credential.
+//
+// The exemption is by exact path from the policy table. Every other path,
+// including anything else under /model-gateway/, still meets the local token
+// here first — so the "unknown paths and wrong methods need a credential"
+// property the perimeter was built for is unchanged everywhere it applied.
+func sidecarPerimeter(localToken string) gin.HandlerFunc {
+	requireLocalToken := auth.RequireLocalToken(localToken)
+	exempt := modelGatewayCredentialPaths(currentSidecarRoutePolicies)
+	return func(c *gin.Context) {
+		if _, ok := exempt[c.Request.URL.Path]; ok {
+			c.Next()
+			return
+		}
+		requireLocalToken(c)
+	}
 }
 
 // Port returns the OS-assigned port the listener bound to. Safe to
@@ -250,6 +288,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.authCancel != nil {
 		s.authCancel()
 	}
+	// Retire the loopback credential before the drain: a subprocess mid-turn
+	// must not keep an official-model stream alive past the point where this
+	// sidecar stopped accepting anything else.
+	s.cfg.ModelGateway.Shutdown()
 	cancelAuth := func() {
 		var cancelGroup sync.WaitGroup
 		if s.cfg.OAuthFlow != nil {

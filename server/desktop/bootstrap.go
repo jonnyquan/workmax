@@ -332,8 +332,24 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 	// hands (local account switch, connect/disconnect an account) without the
 	// sidecar restarting.
 	turnIdentityUID := func() uint64 { return resolveIdentityFrom(tokenStore, dbRes.DB).UID }
+
+	// The loopback model gateway. Minted per process, in memory only: it is
+	// what lets a local tool loop run on an official model without any cloud
+	// credential being written into a subprocess environment or onto disk.
+	// NewServer publishes the port once the listener is bound.
+	modelGateway, err := NewModelGateway()
+	if err != nil {
+		return nil, fmt.Errorf("model gateway: %w", err)
+	}
+	unwind = append(unwind, modelGateway.Shutdown)
+
 	modelProfileReader := func() *LocalModelProfileReader {
-		return &LocalModelProfileReader{Store: modelSettings, UID: turnIdentityUID}
+		return &LocalModelProfileReader{
+			Store:      modelSettings,
+			UID:        turnIdentityUID,
+			Gateway:    modelGateway,
+			CloudBound: func() bool { return resolveIdentityFrom(tokenStore, dbRes.DB).IsCloud() },
+		}
 	}
 
 	// Local file attachment store (L3b): persists uploads under
@@ -459,6 +475,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 		BackupPath:       dbRes.BackupPath,
 		IntegrityCheck:   dbRes.IntegrityCheck,
 		ModelSettings:    modelSettings,
+		ModelGateway:     modelGateway,
 		LocalInference:   localInference,
 		LocalAgent:       localAgent,
 		PiAgent:          piAgent,

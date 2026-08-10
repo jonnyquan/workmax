@@ -411,6 +411,50 @@ func TestModelsJSON_EmptyKeyGetsPlaceholder(t *testing.T) {
 	}
 }
 
+// The official-model path reaches pi as an ordinary endpoint: the sidecar's
+// own loopback gateway, addressed with the in-memory gateway token as the
+// "API key". Pinned here because pi is the one runtime that writes its
+// credential to disk — if the provider file ever stopped being rebuilt from
+// the turn's input, a rotated-away token would keep being replayed.
+func TestModelsJSON_CarriesTheLoopbackGatewayEndpoint(t *testing.T) {
+	rt, spec, _ := newTestRuntime(t, frames(promptOK, `{"type":"agent_settled"}`), nil)
+	in := turnInput()
+	in.BaseURL = "http://127.0.0.1:51999/model-gateway/openai"
+	in.APIKey = "loopback-gateway-token"
+	in.ModelID = "work-pro"
+	if err := rt.RunTurn(context.Background(), in, (&captured{}).emit); err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(spec.Env["PI_CODING_AGENT_DIR"], "models.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Providers struct {
+			WorkMax struct {
+				BaseURL string `json:"baseUrl"`
+				APIKey  string `json:"apiKey"`
+				Models  []struct {
+					ID string `json:"id"`
+				} `json:"models"`
+			} `json:"workmax"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("models.json parse: %v (%s)", err, raw)
+	}
+	provider := doc.Providers.WorkMax
+	if provider.BaseURL != in.BaseURL || provider.APIKey != in.APIKey ||
+		len(provider.Models) != 1 || provider.Models[0].ID != in.ModelID {
+		t.Fatalf("models.json = %s", raw)
+	}
+	// pi appends /chat/completions to the configured base, which is why the
+	// gateway registers the unversioned spelling alongside the /v1 one.
+	if strings.HasSuffix(provider.BaseURL, "/chat/completions") {
+		t.Fatalf("the base URL must stay a base: %s", provider.BaseURL)
+	}
+}
+
 // The first emit failure aborts the turn: a dead SSE writer means the client
 // is gone.
 func TestRunTurn_EmitErrorAborts(t *testing.T) {

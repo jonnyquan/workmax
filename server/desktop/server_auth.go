@@ -375,6 +375,12 @@ func (s *Server) handleAuthLogout(c *gin.Context) {
 	if s.cfg.LoginCoordinator != nil {
 		s.cfg.LoginCoordinator.Cancel()
 	}
+	// Retire the model gateway credential in the same breath, and before the
+	// revoke round trip: a local agent subprocess started while signed in
+	// holds an "API key" for this sidecar, and logout must mean it stops
+	// working now — including for the turn currently streaming — rather than
+	// whenever that subprocess happens to exit.
+	s.rotateModelGatewayToken("logout")
 
 	// 2–4. Pre-fence, best-effort revoke, and local clear coordinate with the
 	// same refresh gate as proactive and 401-driven rotation. The pre-fence

@@ -24,6 +24,38 @@ type SidecarCredentialPolicy string
 
 const (
 	SidecarCredentialLocalToken SidecarCredentialPolicy = "local-token"
+	// SidecarCredentialGatewayToken is the model-gateway credential: an
+	// in-memory, per-process random string the sidecar hands to the local
+	// agent subprocesses it starts, and to nobody else.
+	//
+	// It exists because those callers cannot present the local token. They are
+	// somebody else's binary (the claude CLI, pi) speaking a provider's wire
+	// protocol, so the only credential slot they have is that provider's own
+	// auth header — and the renderer's token has no business travelling inside
+	// a subprocess environment. Routes with this credential are therefore
+	// NEVER renderer-reachable: the shell's proxy refuses the path, and the
+	// boundary manifest records that as policy rather than as an accident of
+	// the renderer not knowing the URL.
+	SidecarCredentialGatewayToken SidecarCredentialPolicy = "gateway-token"
+)
+
+// SidecarCredentialScheme names how a credential travels on the wire. It is
+// empty for the local token (always X-Local-Token) and explicit for the
+// gateway, where the header is dictated by the protocol the caller speaks.
+type SidecarCredentialScheme string
+
+const (
+	SidecarCredentialSchemeAnthropicAPIKey SidecarCredentialScheme = "x-api-key"
+	SidecarCredentialSchemeBearer          SidecarCredentialScheme = "authorization-bearer"
+)
+
+// SidecarRendererAccess records whether the renderer may reach a route. It is
+// empty (allowed) for the renderer's own API and "forbidden" for the gateway,
+// which is the one thing on this port the page must never be able to name.
+type SidecarRendererAccess string
+
+const (
+	SidecarRendererForbidden SidecarRendererAccess = "forbidden"
 )
 
 // SidecarOriginPolicy controls browser Origin headers on loopback requests.
@@ -61,11 +93,13 @@ type SidecarRequestPolicy struct {
 // renderer-to-sidecar route. Method and Path are also used to register the Gin
 // route, so the policy cannot silently drift from the runtime route table.
 type SidecarRoutePolicy struct {
-	ID            string                  `json:"id"`
-	Method        string                  `json:"method"`
-	Path          string                  `json:"path"`
-	Credential    SidecarCredentialPolicy `json:"credential"`
-	RequestPolicy SidecarRequestPolicy    `json:"requestPolicy"`
+	ID               string                  `json:"id"`
+	Method           string                  `json:"method"`
+	Path             string                  `json:"path"`
+	Credential       SidecarCredentialPolicy `json:"credential"`
+	CredentialScheme SidecarCredentialScheme `json:"credentialScheme,omitempty"`
+	RendererAccess   SidecarRendererAccess   `json:"rendererAccess,omitempty"`
+	RequestPolicy    SidecarRequestPolicy    `json:"requestPolicy"`
 }
 
 const (
@@ -127,6 +161,35 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	newCurrentSidecarRoutePolicy("agent.thread-unpin", http.MethodDelete, "/agent/threads/:uuid/pin", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-cloud-sync", http.MethodPut, "/agent/threads/:uuid/cloud-sync", SidecarBodyRequired, maxThreadCloudSyncBodyBytes, "application/json"),
 	newCurrentSidecarRoutePolicy("settings.model-catalog.get", http.MethodGet, "/settings/model-catalog", SidecarBodyForbidden, 0),
+
+	// The model gateway. Two protocols, two path spellings each, because the
+	// clients disagree about whether the version segment belongs to the base
+	// URL they were configured with: the claude CLI appends /v1/messages to
+	// ANTHROPIC_BASE_URL while this repo's own L1 adapter appends /messages,
+	// and the OpenAI-shaped clients split the same way. Registering both
+	// spellings lets one base string serve every caller — the alternative is a
+	// per-engine URL rule that is wrong the first time a client changes its
+	// mind, and wrong silently, as a 404 in the middle of a turn.
+	newModelGatewayRoutePolicy(
+		"model-gateway.anthropic.messages",
+		"/model-gateway/anthropic/v1/messages",
+		SidecarCredentialSchemeAnthropicAPIKey,
+	),
+	newModelGatewayRoutePolicy(
+		"model-gateway.anthropic.messages-unversioned",
+		"/model-gateway/anthropic/messages",
+		SidecarCredentialSchemeAnthropicAPIKey,
+	),
+	newModelGatewayRoutePolicy(
+		"model-gateway.openai.chat-completions",
+		"/model-gateway/openai/v1/chat/completions",
+		SidecarCredentialSchemeBearer,
+	),
+	newModelGatewayRoutePolicy(
+		"model-gateway.openai.chat-completions-unversioned",
+		"/model-gateway/openai/chat/completions",
+		SidecarCredentialSchemeBearer,
+	),
 }
 
 func newCurrentSidecarRoutePolicy(
@@ -168,6 +231,45 @@ func newCurrentSidecarRoutePolicy(
 	}
 }
 
+// newModelGatewayRoutePolicy declares one gateway route: gateway-token
+// credential, renderer forbidden, a JSON body bounded by the tool-loop cap.
+func newModelGatewayRoutePolicy(id, path string, scheme SidecarCredentialScheme) SidecarRoutePolicy {
+	return SidecarRoutePolicy{
+		ID:               id,
+		Method:           http.MethodPost,
+		Path:             path,
+		Credential:       SidecarCredentialGatewayToken,
+		CredentialScheme: scheme,
+		RendererAccess:   SidecarRendererForbidden,
+		RequestPolicy: SidecarRequestPolicy{
+			Origin:            SidecarOriginAbsent,
+			Body:              SidecarBodyRequired,
+			ContentTypes:      []string{"application/json"},
+			MaxBodyBytes:      maxModelGatewayBodyBytes,
+			BodyTooLargeError: "model gateway request body too large",
+		},
+	}
+}
+
+// modelGatewayCredentialPaths is the exact set of paths the whole-port local
+// token perimeter does not apply to.
+//
+// It is built from the policy table rather than written out, so a gateway
+// route that is added without a credential declaration cannot become an
+// unauthenticated path by omission. The exemption is by exact path: anything
+// else under /model-gateway/ still meets the local token first and is refused
+// there, which keeps the perimeter's "unknown paths need a credential"
+// property intact everywhere it was ever true.
+func modelGatewayCredentialPaths(policies []SidecarRoutePolicy) map[string]struct{} {
+	paths := make(map[string]struct{})
+	for _, policy := range policies {
+		if policy.Credential == SidecarCredentialGatewayToken {
+			paths[policy.Path] = struct{}{}
+		}
+	}
+	return paths
+}
+
 // CurrentSidecarRoutePolicies returns a defensive copy for diagnostics,
 // contract tests, and future generated bridge clients.
 func CurrentSidecarRoutePolicies() []SidecarRoutePolicy {
@@ -205,7 +307,31 @@ func validateSidecarRoutePolicies(policies []SidecarRoutePolicy) error {
 		if !strings.HasPrefix(policy.Path, "/") {
 			return fmt.Errorf("sidecar route %q path must be absolute", policy.ID)
 		}
-		if policy.Credential != SidecarCredentialLocalToken {
+		switch policy.Credential {
+		case SidecarCredentialLocalToken:
+			if policy.CredentialScheme != "" {
+				return fmt.Errorf("sidecar route %q must not redeclare the local token scheme", policy.ID)
+			}
+			if policy.RendererAccess != "" {
+				return fmt.Errorf("sidecar route %q is the renderer's own API and must not restrict it", policy.ID)
+			}
+		case SidecarCredentialGatewayToken:
+			switch policy.CredentialScheme {
+			case SidecarCredentialSchemeAnthropicAPIKey, SidecarCredentialSchemeBearer:
+			default:
+				return fmt.Errorf("sidecar route %q has unsupported credential scheme %q", policy.ID, policy.CredentialScheme)
+			}
+			// A gateway route the renderer could call would be a way for the
+			// page to spend the account's membership without any of the
+			// checks the agent routes apply. Declaring it here is what lets
+			// the boundary manifest and the shell's proxy enforce it.
+			if policy.RendererAccess != SidecarRendererForbidden {
+				return fmt.Errorf("sidecar route %q must be forbidden to the renderer", policy.ID)
+			}
+			if !strings.HasPrefix(policy.Path, "/model-gateway/") {
+				return fmt.Errorf("sidecar route %q must live under /model-gateway/", policy.ID)
+			}
+		default:
 			return fmt.Errorf("sidecar route %q has unsupported credential policy %q", policy.ID, policy.Credential)
 		}
 		if policy.RequestPolicy.Origin != SidecarOriginAbsent {
@@ -258,7 +384,7 @@ func registerCurrentSidecarRoutes(router *gin.Engine, server *Server, localToken
 		if !ok {
 			return fmt.Errorf("sidecar route %q has no handler", policy.ID)
 		}
-		handlers, err := sidecarRouteHandlers(policy, localToken, handler)
+		handlers, err := sidecarRouteHandlers(policy, localToken, server.cfg.ModelGateway, handler)
 		if err != nil {
 			return err
 		}
@@ -328,6 +454,10 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handleSetThreadCloudSync, true
 	case "settings.model-catalog.get":
 		return s.handleModelCatalog, true
+	case "model-gateway.anthropic.messages", "model-gateway.anthropic.messages-unversioned":
+		return s.handleModelGatewayAnthropicMessages, true
+	case "model-gateway.openai.chat-completions", "model-gateway.openai.chat-completions-unversioned":
+		return s.handleModelGatewayOpenAIChatCompletions, true
 	case "agent.thread-file-upload":
 		return s.handleUploadThreadFile, true
 	case "agent.skills.catalog":
@@ -370,12 +500,15 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 func sidecarRouteHandlers(
 	policy SidecarRoutePolicy,
 	localToken string,
+	gateway *ModelGateway,
 	handler gin.HandlerFunc,
 ) ([]gin.HandlerFunc, error) {
 	var credentialHandler gin.HandlerFunc
 	switch policy.Credential {
 	case SidecarCredentialLocalToken:
 		credentialHandler = auth.RequireLocalToken(localToken)
+	case SidecarCredentialGatewayToken:
+		credentialHandler = requireModelGatewayToken(policy, gateway)
 	default:
 		return nil, fmt.Errorf("sidecar route %q has unsupported credential policy %q", policy.ID, policy.Credential)
 	}
@@ -384,6 +517,51 @@ func sidecarRouteHandlers(
 		requireSidecarRequestPolicy(policy),
 		handler,
 	}, nil
+}
+
+// requireModelGatewayToken checks the loopback credential in the header slot
+// the caller's protocol dictates, and in that slot only.
+//
+// Accepting either header on either route would be friendlier and wrong: the
+// point of naming the scheme in the policy is that "which credential does this
+// route take, and where does it live" has one answer a reviewer can read. A
+// gateway that has not been wired (or has been shut down) refuses everything —
+// the failure to make available must never be a failure to authenticate.
+func requireModelGatewayToken(policy SidecarRoutePolicy, gateway *ModelGateway) gin.HandlerFunc {
+	scheme := policy.CredentialScheme
+	protocol := modelGatewayAnthropic
+	if scheme == SidecarCredentialSchemeBearer {
+		protocol = modelGatewayOpenAI
+	}
+	return func(c *gin.Context) {
+		if gateway == nil {
+			writeModelGatewayError(c, protocol, http.StatusServiceUnavailable,
+				modelGatewayErrorAPIError, modelGatewayUnavailableMessage)
+			return
+		}
+		var presented string
+		switch scheme {
+		case SidecarCredentialSchemeAnthropicAPIKey:
+			values := c.Request.Header.Values("X-Api-Key")
+			if len(values) == 1 {
+				presented = values[0]
+			}
+		case SidecarCredentialSchemeBearer:
+			values := c.Request.Header.Values("Authorization")
+			if len(values) == 1 {
+				presented = strings.TrimPrefix(values[0], "Bearer ")
+				if presented == values[0] {
+					presented = ""
+				}
+			}
+		}
+		if !gateway.Matches(presented) {
+			writeModelGatewayError(c, protocol, http.StatusUnauthorized,
+				modelGatewayErrorAuthentication, modelGatewayCredentialMessage)
+			return
+		}
+		c.Next()
+	}
 }
 
 func requireSidecarRequestPolicy(policy SidecarRoutePolicy) gin.HandlerFunc {

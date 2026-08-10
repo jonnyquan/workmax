@@ -39,6 +39,16 @@ const (
 	// keys and no endpoints. Same Desktop OAuth Bearer as /api/desktop/sync/*.
 	CloudRouteModelsList = "/api/desktop/models"
 
+	// CloudRouteModelGatewayAnthropic / CloudRouteModelGatewayOpenAI are the
+	// official-model inference endpoints the sidecar's own loopback gateway
+	// forwards to, so a local tool loop can run on an official model without
+	// any cloud credential reaching this machine. Same Desktop OAuth Bearer as
+	// /api/desktop/models; the request body's model must be a catalog modelId,
+	// and entitlement is re-checked per request (403 when the membership does
+	// not cover it).
+	CloudRouteModelGatewayAnthropic = "/api/desktop/model-gateway/anthropic/v1/messages"
+	CloudRouteModelGatewayOpenAI    = "/api/desktop/model-gateway/openai/v1/chat/completions"
+
 	CloudRouteSkillsList  = "/api/work-agent/skills"
 	CloudRouteChatAgent   = "/api/work-agent/chat/agent"
 	CloudRouteAgentThread = "/api/desktop/agent/threads/:uuid"
@@ -68,6 +78,8 @@ var currentCloudRouteSpecs = []CloudRouteSpec{
 	newCloudRouteSpec("desktop.sync.threads", http.MethodGet, CloudRouteSyncThreads),
 	newCloudRouteSpec("desktop.sync.messages", http.MethodGet, CloudRouteSyncMessages),
 	newCloudRouteSpec("desktop.models", http.MethodGet, CloudRouteModelsList),
+	newCloudRouteSpec("desktop.model-gateway.anthropic", http.MethodPost, CloudRouteModelGatewayAnthropic),
+	newCloudRouteSpec("desktop.model-gateway.openai", http.MethodPost, CloudRouteModelGatewayOpenAI),
 	newCloudRouteSpec("agent.skills", http.MethodGet, CloudRouteSkillsList),
 	newCloudRouteSpec("agent.chat", http.MethodPost, CloudRouteChatAgent),
 	newCloudRouteSpec("desktop.agent.thread-put", http.MethodPut, CloudRouteAgentThread),

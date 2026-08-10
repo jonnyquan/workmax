@@ -146,6 +146,13 @@ type workspaceRooter interface{ WorkspaceRoot() string }
 func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloudproxy.SSEWriter) (err error) {
 	_, baseURL, modelID, apiKey, perr := e.profile.LocalInferenceProfile()
 	if perr != nil {
+		// "Not signed in", "no official model chosen" and "gateway not ready"
+		// are the resolver's to explain — the tool loop cannot improve on
+		// them, and wrapping them in a generic message would bury the one
+		// sentence the user can act on.
+		if pe, typed := localinference.ProfileProxyError(perr); typed {
+			return emitProxyError(dst, pe)
+		}
 		return emitProxyError(dst, cloudproxy.ProxyError{
 			Kind:      cloudproxy.KindServiceUnavailable,
 			Message:   "无法读取本地模型配置",

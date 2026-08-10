@@ -846,6 +846,74 @@
         "contentTypes": [],
         "maxBodyBytes": 0
       }
+    },
+    {
+      "id": "model-gateway.anthropic.messages",
+      "method": "POST",
+      "path": "/model-gateway/anthropic/v1/messages",
+      "credential": "gateway-token",
+      "credentialScheme": "x-api-key",
+      "rendererAccess": "forbidden",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 8388608,
+        "bodyTooLargeError": "model gateway request body too large"
+      }
+    },
+    {
+      "id": "model-gateway.anthropic.messages-unversioned",
+      "method": "POST",
+      "path": "/model-gateway/anthropic/messages",
+      "credential": "gateway-token",
+      "credentialScheme": "x-api-key",
+      "rendererAccess": "forbidden",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 8388608,
+        "bodyTooLargeError": "model gateway request body too large"
+      }
+    },
+    {
+      "id": "model-gateway.openai.chat-completions",
+      "method": "POST",
+      "path": "/model-gateway/openai/v1/chat/completions",
+      "credential": "gateway-token",
+      "credentialScheme": "authorization-bearer",
+      "rendererAccess": "forbidden",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 8388608,
+        "bodyTooLargeError": "model gateway request body too large"
+      }
+    },
+    {
+      "id": "model-gateway.openai.chat-completions-unversioned",
+      "method": "POST",
+      "path": "/model-gateway/openai/chat/completions",
+      "credential": "gateway-token",
+      "credentialScheme": "authorization-bearer",
+      "rendererAccess": "forbidden",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 8388608,
+        "bodyTooLargeError": "model gateway request body too large"
+      }
     }
   ],
   "cloudRoutes": [
@@ -895,6 +963,22 @@
       "id": "desktop.models",
       "method": "GET",
       "path": "/api/desktop/models",
+      "surface": "desktop-resource",
+      "status": "current",
+      "inventorySource": "sidecar-cloud-proxy"
+    },
+    {
+      "id": "desktop.model-gateway.anthropic",
+      "method": "POST",
+      "path": "/api/desktop/model-gateway/anthropic/v1/messages",
+      "surface": "desktop-resource",
+      "status": "current",
+      "inventorySource": "sidecar-cloud-proxy"
+    },
+    {
+      "id": "desktop.model-gateway.openai",
+      "method": "POST",
+      "path": "/api/desktop/model-gateway/openai/v1/chat/completions",
       "surface": "desktop-resource",
       "status": "current",
       "inventorySource": "sidecar-cloud-proxy"
@@ -1062,6 +1146,17 @@
             "privilegedSidecarPaths",
             "/auth/login-transaction",
             "/auth/login-transaction/password"
+          ]
+        }
+      },
+      {
+        "id": "model-gateway-refused-server-side",
+        "why": "The model gateway spends the account's membership on behalf of a local agent subprocess. A page that could name it would be able to bill the user directly, skipping every check the agent routes apply — so the whole subtree is refused in the proxy, where the renderer cannot reach around it.",
+        "evidence": {
+          "file": "desktop/wails/uiserver.go",
+          "contains": [
+            "privilegedSidecarPrefixes",
+            "/model-gateway/"
           ]
         }
       },

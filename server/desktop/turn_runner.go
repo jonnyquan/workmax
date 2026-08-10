@@ -95,10 +95,35 @@ func (s *Server) shouldUseLocalRoute() bool {
 type LocalModelProfileReader struct {
 	Store *LocalModelSettingsStore
 	UID   func() uint64
+
+	// Gateway is the sidecar's own loopback model gateway. It is what a local
+	// turn runs against when the user chose an official model instead of
+	// standing up an endpoint of their own. Nil → official-model local turns
+	// fail with an explicit error rather than falling back to anything.
+	Gateway *ModelGateway
+
+	// CloudBound reports whether a WorkMax account is connected right now.
+	// Asked at turn time, not at wiring time: a machine can be signed out
+	// between two turns, and the honest answer then is "this turn cannot run",
+	// not "run it on something else".
+	CloudBound func() bool
 }
 
 // LocalInferenceProfile 实现 local_inference.ProfileReader：合并 SQLite 里的
 // 非密钥字段与 Keychain 里的 API key。
+//
+// It answers one question — what endpoint does a local turn talk to — and
+// there are now two ways for it to be answered:
+//
+//   - the user stood up an endpoint of their own (base_url filled): unchanged,
+//     their URL and their key, exactly as before;
+//   - the user chose an official model instead (base_url empty): the sidecar's
+//     loopback gateway, the model they picked from the cloud catalog, and the
+//     in-memory gateway token as the "API key".
+//
+// The second branch never silently becomes the first, and neither ever
+// silently becomes the cloud agent route: every reason the official path
+// cannot run is a typed ProfileError the engines surface verbatim.
 func (r *LocalModelProfileReader) LocalInferenceProfile() (protocol, baseURL, modelID, apiKey string, err error) {
 	uid := localSingleUserUID
 	if r.UID != nil {
@@ -108,11 +133,47 @@ func (r *LocalModelProfileReader) LocalInferenceProfile() (protocol, baseURL, mo
 	if err != nil {
 		return "", "", "", "", err
 	}
-	key, err := r.Store.LoadAPIKey(uid)
-	if err != nil {
-		return "", "", "", "", err
+	if dto.Local.BaseURL != "" {
+		// The user's own endpoint. Its key is theirs, from their Keychain slot.
+		key, keyErr := r.Store.LoadAPIKey(uid)
+		if keyErr != nil {
+			return "", "", "", "", keyErr
+		}
+		return dto.Local.Protocol, dto.Local.BaseURL, dto.Local.ModelID, key, nil
 	}
-	return dto.Local.Protocol, dto.Local.BaseURL, dto.Local.ModelID, key, nil
+	return r.officialModelProfile(dto)
+}
+
+// officialModelProfile resolves the loopback-gateway triple, or explains why
+// it cannot. The order of the checks is the order the user can act on them.
+func (r *LocalModelProfileReader) officialModelProfile(dto LocalModelSettingsDTO) (string, string, string, string, error) {
+	if r.CloudBound == nil || !r.CloudBound() {
+		return "", "", "", "", &localinference.ProfileError{
+			Kind:    cloudproxy.KindAuthRequired,
+			Message: modelGatewayUnboundMessage,
+		}
+	}
+	if dto.OfficialModelID == "" {
+		return "", "", "", "", &localinference.ProfileError{
+			Kind:    cloudproxy.KindBadRequest,
+			Message: modelGatewayNoModelMessage,
+		}
+	}
+	// The protocol still decides which engine runs the turn (the claude tool
+	// loop or pi) and therefore which wire shape the gateway must speak, so it
+	// remains required even when the endpoint behind it is ours.
+	base := ""
+	if r.Gateway != nil {
+		base = r.Gateway.BaseURLFor(dto.Local.Protocol)
+	}
+	if base == "" {
+		return "", "", "", "", &localinference.ProfileError{
+			Kind:      cloudproxy.KindServiceUnavailable,
+			Message:   modelGatewayUnavailableMessage,
+			Retryable: false,
+		}
+	}
+	return dto.Local.Protocol, base, dto.OfficialModelID, r.Gateway.Token(), nil
 }
 
 // 编译期断言：*LocalModelProfileReader 实现 local_inference.ProfileReader。

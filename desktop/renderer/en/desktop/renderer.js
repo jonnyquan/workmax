@@ -453,11 +453,21 @@ function updateModelProtocolHint() {
   if (modelBaseURL && info) modelBaseURL.placeholder = info.placeholder;
 }
 
+// The official model picker belongs to BOTH routes now, and that is not a
+// cosmetic change.
+//
+// Running here and running on an official model used to be the same choice
+// asked once. They are two questions: where the turn executes (this machine,
+// with a workspace the tools write into — or the cloud agent) and which model
+// answers it (yours, or the one your membership pays for). Leaving Base URL
+// empty on the local route is how you say "run here, on the official model" —
+// the sidecar points the tool loop at its own loopback gateway, so no cloud
+// credential is ever handed to the subprocess.
 function updateModelLocalFieldsVisibility() {
   if (!modelPreferredRoute || !modelLocalFields) return;
   const local = modelPreferredRoute.value === "local";
   modelLocalFields.hidden = !local;
-  if (modelOfficialFields) modelOfficialFields.hidden = local;
+  if (modelOfficialFields) modelOfficialFields.hidden = false;
   updateModelProtocolHint();
 }
 
@@ -672,7 +682,10 @@ async function submitModelSettings(event) {
   const preferred = modelPreferredRoute.value;
   /** @type {{ preferred_route: string, official_model_id?: string, local?: Record<string, unknown> }} */
   const body = { preferred_route: preferred };
-  if (preferred === "official" && modelOfficialID && !modelOfficialID.disabled) {
+  // Sent on either route: on the official route it is the model the cloud
+  // agent answers with, and on the local route it is what the tool loop runs
+  // when no endpoint of the user's own is filled in.
+  if (modelOfficialID && !modelOfficialID.disabled) {
     const chosen = modelOfficialID.value;
     const item = modelCatalogState.items.find((entry) => entry.modelId === chosen);
     if (chosen !== "" && !(item && item.permissions.includes("use"))) {

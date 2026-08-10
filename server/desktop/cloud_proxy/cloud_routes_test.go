@@ -58,6 +58,8 @@ func TestAllCloudRoutes_CoversConstants(t *testing.T) {
 		CloudRouteSyncThreads,
 		CloudRouteSyncMessages,
 		CloudRouteModelsList,
+		CloudRouteModelGatewayAnthropic,
+		CloudRouteModelGatewayOpenAI,
 		CloudRouteSkillsList,
 		CloudRouteChatAgent,
 		CloudRouteAgentThread,

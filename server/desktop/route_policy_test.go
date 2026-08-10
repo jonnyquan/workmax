@@ -44,7 +44,8 @@ func TestCurrentSidecarRoutePoliciesMatchDesktopBoundaryManifest(t *testing.T) {
 			t.Errorf("manifest route %q is missing from runtime policy table", want.ID)
 			continue
 		}
-		if got.Method != want.Method || got.Path != want.Path || got.Credential != want.Credential {
+		if got.Method != want.Method || got.Path != want.Path || got.Credential != want.Credential ||
+			got.CredentialScheme != want.CredentialScheme || got.RendererAccess != want.RendererAccess {
 			t.Errorf("route %q identity/credential: got %+v, want %+v", want.ID, got, want)
 		}
 		if got.RequestPolicy.Origin != want.RequestPolicy.Origin ||
@@ -72,7 +73,7 @@ func TestCurrentSidecarRoutePoliciesReturnsDefensiveCopy(t *testing.T) {
 }
 
 func TestSidecarRoutePoliciesRejectBrowserOriginOnEveryRoute(t *testing.T) {
-	baseURL, token := bootRoutePolicyServer(t)
+	baseURL, token, gateway := bootRoutePolicyServer(t)
 	for _, policy := range CurrentSidecarRoutePolicies() {
 		policy := policy
 		t.Run(policy.ID, func(t *testing.T) {
@@ -85,7 +86,17 @@ func TestSidecarRoutePoliciesRejectBrowserOriginOnEveryRoute(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			req.Header.Set("X-Local-Token", token)
+			// Each route gets the credential it actually takes, so the Origin
+			// rule is what is being measured rather than the credential check
+			// firing first.
+			switch policy.CredentialScheme {
+			case SidecarCredentialSchemeAnthropicAPIKey:
+				req.Header.Set("x-api-key", gateway.Token())
+			case SidecarCredentialSchemeBearer:
+				req.Header.Set("Authorization", "Bearer "+gateway.Token())
+			default:
+				req.Header.Set("X-Local-Token", token)
+			}
 			req.Header.Set("Origin", "https://attacker.example")
 			if body != "" {
 				req.Header.Set("Content-Type", "application/json")
@@ -104,7 +115,7 @@ func TestSidecarRoutePoliciesRejectBrowserOriginOnEveryRoute(t *testing.T) {
 }
 
 func TestSidecarDoesNotRedirectPrivilegedPathLookalikes(t *testing.T) {
-	baseURL, token := bootRoutePolicyServer(t)
+	baseURL, token, _ := bootRoutePolicyServer(t)
 	client := &http.Client{
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return errors.New("sidecar path redirect must not occur")
@@ -132,7 +143,7 @@ func TestSidecarDoesNotRedirectPrivilegedPathLookalikes(t *testing.T) {
 }
 
 func TestSidecarRouteRequestPolicyEnforcement(t *testing.T) {
-	baseURL, token := bootRoutePolicyServer(t)
+	baseURL, token, _ := bootRoutePolicyServer(t)
 	tests := []struct {
 		name         string
 		method       string
@@ -290,13 +301,18 @@ func TestSidecarRouteRequestPolicyEnforcement(t *testing.T) {
 	}
 }
 
-func bootRoutePolicyServer(t *testing.T) (baseURL string, token string) {
+func bootRoutePolicyServer(t *testing.T) (baseURL string, token string, gateway *ModelGateway) {
 	t.Helper()
 	const localToken = "route-policy-token"
+	gateway, err := NewModelGateway()
+	if err != nil {
+		t.Fatalf("NewModelGateway: %v", err)
+	}
 	srv, err := NewServer(ServerConfig{
 		SidecarVersion: "route-policy-test",
 		LocalToken:     localToken,
 		DB:             openServerTestDB(t),
+		ModelGateway:   gateway,
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -307,5 +323,5 @@ func bootRoutePolicyServer(t *testing.T) (baseURL string, token string) {
 		defer cancel()
 		_ = srv.Shutdown(ctx)
 	})
-	return "http://" + srv.listener.Addr().String(), localToken
+	return "http://" + srv.listener.Addr().String(), localToken, gateway
 }

@@ -288,12 +288,36 @@ var privilegedSidecarPaths = map[string]struct{}{
 	"/auth/login-transaction/password": {},
 }
 
+// privilegedSidecarPrefixes are whole subtrees the renderer must not reach.
+//
+// The model gateway is one: it is the loopback endpoint the local agent
+// subprocesses use to run a turn on an official model, authenticated by a
+// credential the page has no way to hold and no business holding. Left
+// reachable, it would be a way for anything rendered into the page to spend
+// the account's membership directly, skipping every check the agent routes
+// apply on the way to a turn.
+//
+// A prefix rather than an enumeration, deliberately: the sidecar registers
+// several spellings of each gateway path because different provider clients
+// disagree about where the version segment goes, and a list here would have to
+// be kept in step with that. "Nothing under /model-gateway/" cannot fall out
+// of step.
+var privilegedSidecarPrefixes = []string{"/model-gateway/"}
+
 // isPrivilegedSidecarPath reports whether a proxied path is off limits. The
 // comparison is on the cleaned path so "/auth/./login-transaction" and
 // "/auth/foo/../login-transaction" cannot slip past.
 func isPrivilegedSidecarPath(p string) bool {
-	_, blocked := privilegedSidecarPaths[path.Clean("/"+strings.TrimPrefix(p, "/"))]
-	return blocked
+	cleaned := path.Clean("/" + strings.TrimPrefix(p, "/"))
+	if _, blocked := privilegedSidecarPaths[cleaned]; blocked {
+		return true
+	}
+	for _, prefix := range privilegedSidecarPrefixes {
+		if strings.HasPrefix(cleaned+"/", prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // newSidecarProxyAt reverse-proxies prefix/* to the sidecar on loopback,

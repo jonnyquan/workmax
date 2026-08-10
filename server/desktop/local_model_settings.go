@@ -202,12 +202,27 @@ func (s *LocalModelSettingsStore) Put(uid uint64, in LocalModelSettingsPut) (Loc
 		modelID = profile.ModelID
 	}
 
-	if route == ModelRouteLocal || (protocol != "" || baseURL != "" || modelID != "") {
+	switch {
+	case route == ModelRouteLocal && baseURL == "" && modelID == "":
+		// Run the turn on this machine, on an official model. There is no
+		// endpoint to validate because the endpoint is the sidecar's own
+		// loopback gateway — but the protocol is still required, because it
+		// decides which local engine runs (the claude tool loop or pi) and
+		// therefore which wire shape the gateway is asked to speak.
+		//
+		// This is what makes "local execution, official model" expressible
+		// without a third preference: an empty local endpoint on the local
+		// route means the user did not bring their own, so the official model
+		// they picked from the catalog is what runs.
+		if err := validateLocalProtocol(protocol); err != nil {
+			return LocalModelSettingsDTO{}, err
+		}
+	case route == ModelRouteLocal || protocol != "" || baseURL != "" || modelID != "":
 		if err := validateLocalProfile(protocol, baseURL, modelID); err != nil {
 			return LocalModelSettingsDTO{}, err
 		}
-	} else {
-		// Official with empty local profile is allowed.
+	default:
+		// Official route with empty local profile is allowed.
 		protocol, baseURL, modelID = "", "", ""
 	}
 
@@ -463,11 +478,18 @@ func dtoFrom(profile machineLocalProfile, pref identityModelPreference, keyConfi
 	}
 }
 
-func validateLocalProfile(protocol, baseURL, modelID string) error {
+func validateLocalProtocol(protocol string) error {
 	switch protocol {
 	case LocalProtocolOpenAICompatible, LocalProtocolAnthropicCompatible:
+		return nil
 	default:
 		return fmt.Errorf("local.protocol must be %q or %q", LocalProtocolOpenAICompatible, LocalProtocolAnthropicCompatible)
+	}
+}
+
+func validateLocalProfile(protocol, baseURL, modelID string) error {
+	if err := validateLocalProtocol(protocol); err != nil {
+		return err
 	}
 	if err := validateLocalBaseURL(baseURL); err != nil {
 		return err

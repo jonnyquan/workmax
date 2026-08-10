@@ -143,6 +143,10 @@ func (s *Server) handleLoginTransactionPassword(c *gin.Context) {
 		writeLocalLoginCoordinatorError(c, snapshot, err)
 		return
 	}
+	// A completed login is a session change too. Rotating here means a
+	// subprocess started under the previous account cannot keep spending the
+	// new one's membership through a credential it already holds.
+	s.rotateModelGatewayToken("login")
 	writeLocalLoginSnapshot(c, http.StatusOK, snapshot)
 }
 

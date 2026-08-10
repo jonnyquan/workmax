@@ -69,9 +69,35 @@ const loopbackExpected = assertUnique(
 );
 assertUnique(manifest.loopbackRoutes, (route) => route.id, "loopback route ids");
 
+// Two credential classes live on this port, and the difference is the whole
+// point of declaring one: local-token is the renderer's own API, gateway-token
+// is the model gateway, whose callers are local agent subprocesses that cannot
+// carry the renderer's credential and must never be handed it. A gateway route
+// is therefore renderer-forbidden by policy, refused by the shell's proxy, and
+// absent from the typed bridge — all three checked below.
+const gatewayCredentialSchemes = new Set(["x-api-key", "authorization-bearer"]);
+const gatewayRouteIDs = new Set(
+  manifest.loopbackRoutes
+    .filter((route) => route.credential === "gateway-token")
+    .map((route) => route.id)
+);
 for (const route of manifest.loopbackRoutes) {
-  if (route.credential !== "local-token") {
+  if (route.credential === "gateway-token") {
+    if (!gatewayCredentialSchemes.has(route.credentialScheme)) {
+      throw new Error(`model gateway route ${route.id} must declare how its credential travels`);
+    }
+    if (route.rendererAccess !== "forbidden") {
+      throw new Error(`model gateway route ${route.id} must be forbidden to the renderer`);
+    }
+    if (!route.path.startsWith("/model-gateway/")) {
+      throw new Error(`model gateway route ${route.id} must live under /model-gateway/`);
+    }
+  } else if (route.credential !== "local-token") {
     throw new Error(`loopback route ${route.id} must use local-token credential policy`);
+  } else if (route.credentialScheme !== undefined || route.rendererAccess !== undefined) {
+    throw new Error(
+      `loopback route ${route.id} is the renderer's own API and must not redeclare its credential`
+    );
   }
   const policy = route.requestPolicy;
   if (!policy || policy.origin !== "absent") {
@@ -127,6 +153,20 @@ for (const match of routePolicySource.matchAll(
   const [, id, methodName, path] = match;
   const method = methodName.toUpperCase();
   const identity = `${method} ${path}`;
+  loopbackActual.add(identity);
+  if (loopbackActualIDs.has(id)) {
+    throw new Error(`sidecar route policy source contains duplicate id ${id}`);
+  }
+  loopbackActualIDs.set(id, identity);
+}
+// The gateway routes are declared by their own constructor — the method is not
+// a parameter because there is only one method a model endpoint takes — so
+// they are read with a second pattern rather than by loosening the first.
+for (const match of routePolicySource.matchAll(
+  /newModelGatewayRoutePolicy\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*SidecarCredentialScheme(\w+)\s*,?\s*\)/gu
+)) {
+  const [, id, path] = match;
+  const identity = `POST ${path}`;
   loopbackActual.add(identity);
   if (loopbackActualIDs.has(id)) {
     throw new Error(`sidecar route policy source contains duplicate id ${id}`);
@@ -810,7 +850,38 @@ const classifiedRouteIDs = new Set([
   ...privilegedRouteIDs,
   ...deferredRouteIDs,
 ]);
-assertSameSet("typed bridge route classification", new Set(loopbackByID.keys()), classifiedRouteIDs);
+// Every route the renderer may reach must be classified by the typed bridge —
+// exposed, privileged, or deliberately deferred. The gateway routes are not on
+// that list and must never appear on it: "the bridge happens not to call it"
+// is not a boundary, so they are excluded from the classification set here and
+// asserted absent from every bridge surface below.
+for (const routeId of gatewayRouteIDs) {
+  if (classifiedRouteIDs.has(routeId)) {
+    throw new Error(`model gateway route must not be reachable through the renderer bridge: ${routeId}`);
+  }
+}
+const rendererReachableRouteIDs = new Set(
+  [...loopbackByID.keys()].filter((routeId) => !gatewayRouteIDs.has(routeId))
+);
+assertSameSet("typed bridge route classification", rendererReachableRouteIDs, classifiedRouteIDs);
+if (
+  // The shell refuses the whole subtree, so a renderer that learned a gateway
+  // path could still not reach it. Pinned here because the refusal is the only
+  // thing standing between "the page does not know the URL" and a boundary.
+  !uiServerSource.includes("privilegedSidecarPrefixes") ||
+  !uiServerSource.includes('"/model-gateway/"')
+) {
+  throw new Error("the Wails proxy must refuse the model gateway subtree");
+}
+for (const [label, source] of [
+  ["renderer shim", shimSource],
+  ["typed bridge", typedBridgeSource],
+  ["bundled Renderer", rendererSource],
+]) {
+  if (source.includes("/model-gateway/")) {
+    throw new Error(`${label} must not name a model gateway route`);
+  }
+}
 assertUnique(
   typedBridge.unsupportedNamespaces,
   (entry) => entry.namespace,

@@ -160,6 +160,11 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	//    直接 emit proxy_error 并返回——不触碰 w_workagent_message。
 	protocol, baseURL, modelID, apiKey, perr := e.profile.LocalInferenceProfile()
 	if perr != nil {
+		// A resolver that already knows what to tell the user says so; only an
+		// unclassified failure gets the generic message.
+		if pe, typed := ProfileProxyError(perr); typed {
+			return emitProxyError(dst, pe)
+		}
 		return emitProxyError(dst, cloudproxy.ProxyError{
 			Kind:      cloudproxy.KindServiceUnavailable,
 			Message:   "无法读取本地模型配置",
