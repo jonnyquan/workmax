@@ -42,13 +42,30 @@ func TestDarwinKeychainWriteUsesPromptStdinWithoutSecretArgv(t *testing.T) {
 		}
 	}
 
+	// security(1)'s prompt mode reads the value TWICE ("password data for new
+	// item", then "retype password for new item"). Feeding it once makes the
+	// two disagree, and the real CLI then stores an EMPTY password and exits
+	// 0 — silent credential loss, measured on macOS 26. The stdin shape is
+	// therefore part of the contract, not an implementation detail.
 	stdin := readFakeKeychainCapture(t, captureDir, "add-generic-password.stdin")
-	wantStdin := append(append([]byte(nil), secret...), '\n')
+	wantStdin := []byte(string(secret) + "\n" + string(secret) + "\n")
 	if !bytes.Equal(stdin, wantStdin) {
-		t.Fatalf("add stdin = %q, want prompt value plus newline", stdin)
+		t.Fatalf("add stdin = %q, want the prompt value twice, each newline-terminated", stdin)
 	}
 	if got := readFakeKeychainCapture(t, captureDir, "delete-generic-password.stdin"); len(got) != 0 {
 		t.Fatalf("delete unexpectedly received stdin: %q", got)
+	}
+}
+
+// A newline in the value cannot survive prompt mode: security(1) would take
+// the first line as the whole password. Refusing beats truncating in silence.
+func TestDarwinKeychainWriteRefusesNewlineInValue(t *testing.T) {
+	keychain, captureDir := newFakeDarwinKeychain(t, time.Second)
+	if err := keychain.Write(KeychainService, KeychainAccount, []byte("line-one\nline-two")); err == nil {
+		t.Fatal("Write accepted a value containing a newline")
+	}
+	if _, err := os.Stat(filepath.Join(captureDir, "add-generic-password.stdin")); !os.IsNotExist(err) {
+		t.Fatalf("add ran despite the refused value (stat err = %v)", err)
 	}
 }
 

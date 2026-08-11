@@ -72,15 +72,33 @@ func (k *DarwinKeychain) Write(service, account string, value []byte) error {
 	}
 	// A final -w without an argv value selects security(1)'s documented
 	// password-prompt mode. Feed that prompt over stdin so the serialized
-	// TokenPair never appears in the process list. The trailing newline is the
-	// prompt terminator and is not part of the stored value.
+	// TokenPair never appears in the process list.
+	//
+	// The prompt is TWO reads, not one: "password data for new item:" then
+	// "retype password for new item:". Sending the value once made them
+	// mismatch, and security(1) then created the item with an EMPTY password
+	// and exited 0 — a silent, total credential loss that Read reported back
+	// as a present-but-empty entry (measured on macOS 26 via the pi L2 smoke:
+	// the user's configured api_key never reached the model endpoint, and
+	// api_key_configured still answered true). So the value goes twice.
+	//
+	// A value containing a newline cannot survive prompt mode at all — the
+	// first line would be taken as the whole password — so it is refused here
+	// rather than silently truncated. Every caller's payload (JSON token
+	// pairs, API keys) is newline-free by construction.
+	if bytes.ContainsAny(value, "\n\r") {
+		return errors.New("keychain write: value must not contain a newline")
+	}
 	cmd := exec.CommandContext(ctx, k.cmd(),
 		"add-generic-password",
 		"-s", service,
 		"-a", account,
 		"-w",
 	)
-	cmd.Stdin = io.MultiReader(bytes.NewReader(value), strings.NewReader("\n"))
+	cmd.Stdin = io.MultiReader(
+		bytes.NewReader(value), strings.NewReader("\n"),
+		bytes.NewReader(value), strings.NewReader("\n"),
+	)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	err := cmd.Run()

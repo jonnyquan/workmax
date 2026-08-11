@@ -186,11 +186,18 @@ func TestPermissionsExtension_Golden(t *testing.T) {
 	}
 	for _, needle := range []string{
 		`"workmax-approval:"`,
+		`"workmax-blocked:"`,
 		`"allow_once"`, `"allow_session"`, `"allow_always"`, `"deny"`,
 		`"write"`, `"edit"`,
 		"block: true",
 		`pi.on("tool_call"`,
 		"ctx.ui.select",
+		// The reason codes the Go side renders. A rename on one side only is
+		// how a denial silently becomes the generic sentence.
+		`"traversal"`, `"sensitive"`, `"outside"`,
+		// The guard reads the workspace the sidecar hands it, not only the
+		// one Node reports after resolving symlinks.
+		"WORKMAX_PI_WORKSPACE",
 	} {
 		if !strings.Contains(src, needle) {
 			t.Errorf("embedded extension missing %s", needle)
@@ -483,5 +490,56 @@ func TestRunTurn_NilApprovals_KeepsLegacyBehavior(t *testing.T) {
 	}
 	if len(uiResponses(t, proc)) != 0 {
 		t.Errorf("stdin = %q, ui requests must be ignored without approvals", proc.stdin.String())
+	}
+}
+
+// A path-guard block never reaches the approval flow — the extension refuses
+// it on its own — but it MUST reach the user as a denial with the reason. The
+// hole this closes was measured end to end: a write to a path outside the
+// workspace came back to the renderer as a bare failed result, indis-
+// tinguishable from a disk error, while the same call on the claude engine
+// says "blocked — 路径在工作区之外".
+func TestRunTurn_Approval_GuardBlockNarratesReason(t *testing.T) {
+	rt, _, proc := newTestRuntime(t, frames(
+		promptOK,
+		`{"type":"extension_ui_request","id":"ui-b","method":"select","title":"workmax-blocked:write:escape.txt:outside","options":["ack"]}`,
+		`{"type":"extension_ui_request","id":"ui-u","method":"select","title":"workmax-blocked:edit:x.txt:brand-new-code","options":["ack"]}`,
+		`{"type":"agent_settled"}`,
+	), nil)
+	in := turnInput()
+	in.Approvals = piApprovalConfig(agentruntime.NewApprovalBroker(), &[]string{}, time.Second)
+	sink := newEventChanSink()
+	if err := rt.RunTurn(context.Background(), in, sink.emit); err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+
+	var denials []agentruntime.ToolEvent
+	for _, ev := range sink.events {
+		if ev.Kind == agentruntime.EventToolDenied {
+			denials = append(denials, ev.Tool)
+		}
+		if ev.Kind == agentruntime.EventApprovalReq {
+			t.Error("a guard block must not raise an approval card")
+		}
+	}
+	if len(denials) != 2 {
+		t.Fatalf("tool_denied events = %d, want 2 (%+v)", len(denials), denials)
+	}
+	if denials[0].Name != "Write" || denials[0].Target != "escape.txt" || denials[0].Reason != "路径在工作区之外" {
+		t.Errorf("first denial = %+v", denials[0])
+	}
+	// An unknown reason code (a newer extension against this sidecar) still
+	// denies, with the generic sentence rather than a leaked identifier.
+	if denials[1].Name != "Edit" || denials[1].Reason != pathGuardFallbackReason {
+		t.Errorf("unknown-code denial = %+v", denials[1])
+	}
+
+	// The extension is released either way: an unanswered dialog blocks pi's
+	// tool loop forever, and this one is not waiting on a human.
+	res := uiResponses(t, proc)
+	for _, id := range []string{"ui-b", "ui-u"} {
+		if r := res[id]; r == nil || r["cancelled"] != true {
+			t.Errorf("%s response = %v, want cancelled:true", id, r)
+		}
 	}
 }

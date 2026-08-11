@@ -103,6 +103,68 @@ Expected: 31 checks pass. What they cover:
 a CLI or a sidecar: the preflight, the skip gate, the approve payload's shell
 quoting, and the scripted endpoint's directive rules.
 
+## 1c. L2 Tool Loop on the Pi Runtime
+
+The second runtime is a different binary speaking a different protocol
+(`pi --mode rpc`, JSONL over stdio) against `openai_compatible` endpoints, so
+it gets its own smoke rather than a flag on the claude one. Same shape: a
+scripted OpenAI-compatible endpoint (`pi-smoke-upstream.mjs`) stands in for the
+model, and nothing leaves the machine.
+
+```bash
+WORKMAX_TEST_PI_BIN=/path/to/pi ./desktop/scripts/smoke-l2-pi.sh
+```
+
+Verified against pi 0.84.1 (darwin-arm64, the official release tarball). It
+owns its own sidecar (isolated data dir, both approval modes, and a
+`PI_CODING_AGENT_DIR` under that dir so the user's `~/.pi` is never touched)
+and prints one `ok`/`FAIL` line per claim. One thing is NOT isolated: the
+local-model API key lives in the login Keychain under a fixed service name
+keyed by uid, so a run overwrites whatever key that identity had stored — the
+same caveat as `smoke-l2-approvals.sh`. Re-enter it in Settings afterwards. `--skip-timeout` drops the case that
+waits out the 120s approval timeout; `--keep` keeps the data dir and per-turn
+`.sse` captures. Without a pi binary it prints "skipping" and exits 0.
+
+Expected: 85 checks pass (79 with `--skip-timeout`). What they cover:
+
+- the launch contract, read off a wrapper that records what it was handed:
+  `--mode rpc`, the session file and dir, `--provider workmax`, the tool
+  profile, `-na -nc -e`, the `PI_OFFLINE`/`PI_TELEMETRY`/`PI_SKIP_VERSION_CHECK`
+  trio, `PI_CODING_AGENT_DIR`, `WORKMAX_PI_WORKSPACE`, and the thread workspace
+  as cwd — plus the user's configured API key actually reaching the endpoint;
+- `text_delta` and `reasoning_delta` both stream, and the turn reaches `done`;
+- a non-JSON stdout line and a frame type this sidecar has never seen are
+  tolerated silently rather than killing the turn;
+- the completion criterion is `agent_settled`, not the prompt response: every
+  turn above only reaches `done` because the pump waited for it;
+- one call carries ONE tool name across `tool_use`, `approval_request`,
+  `tool_denied` and `tool_result`, so the renderer can fold a question and a
+  denial into the step they belong to;
+- `tool_execution_end` closes the step even though pi cannot name the file:
+  two calls in one assistant message produce two announcements, two questions
+  and two targetless results, which the renderer pairs oldest-open-first;
+- the four decisions over the same `POST /agent/turns/:uuid/approve` route the
+  renderer's card uses; `allow_always` leaves one
+  `w_desktop_agent_permission_rule` row under the SHARED (Claude) tool name,
+  which is what lets a grant given on either engine silence the other;
+- session continuity: the session file path is stored on the thread, the next
+  turn resumes into the same file, and a failed turn clears the ref;
+- read-only tools never ask; a tool outside the profile does not execute
+  (pi's `--tools` is a real restriction, unlike the claude CLI's
+  `WithAllowedTools`); a write outside the workspace is refused outright and
+  narrated with its reason;
+- failure paths, each as one typed `proxy_error`: an endpoint that refuses, a
+  subprocess that dies before settling (with its stderr tail), a rejected
+  prompt (`bad_request`), an unreachable endpoint;
+- with `WORKMAX_L2_APPROVALS` unset — the shipping default — the loop runs the
+  read-only profile: a write does not land, reads still run, and the approve
+  endpoint answers 503.
+
+`desktop/scripts/smoke-l2-pi.test.sh` covers the harness itself without a pi
+binary or a sidecar: the preflight, the skip gate, the approve payload's shell
+quoting, `grep -e` for dash-leading patterns, and the scripted endpoint's
+directive, streaming-split, two-call and refusal rules.
+
 Optional authenticated additions:
 
 ```bash

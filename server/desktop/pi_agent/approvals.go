@@ -46,6 +46,24 @@ const permissionsExtensionFile = "workmax-permissions.ts"
 // "workmax-approval:<tool>:<target basename>" in the title.
 const approvalTitlePrefix = "workmax-approval:"
 
+// blockedTitlePrefix marks the extension's OWN refusals — the path guard,
+// which blocks without asking anyone. The envelope is
+// "workmax-blocked:<tool>:<target>:<reason code>"; this side narrates it as
+// the same tool_denied frame the Claude engine emits for its guard, so the
+// user is told why instead of watching a call report "failed".
+const blockedTitlePrefix = "workmax-blocked:"
+
+// pathGuardReasons renders the extension's reason codes for the user. An
+// unknown code (a newer extension against an older sidecar) falls back to the
+// generic sentence rather than leaking a bare identifier.
+var pathGuardReasons = map[string]string{
+	"traversal": "路径包含目录穿越",
+	"sensitive": "路径涉及敏感文件",
+	"outside":   "路径在工作区之外",
+}
+
+const pathGuardFallbackReason = "路径未通过本地循环的安全检查"
+
 // approvalToolProfile is the approval-mode tool allowlist: the read surface
 // plus the write surface the extension gates. Bash stays out, as on the
 // Claude engine.
@@ -55,6 +73,13 @@ const approvalToolProfile = "read,grep,find,ls,write,edit"
 // the Claude names ("Write", "Edit") that ApprovalConfig's sets and the grant
 // bookkeeping use — the two engines must draw on the same always/session
 // grants, so the shared vocabulary is Claude's.
+//
+// EVERY frame about a call goes through it, not only the approval question.
+// Measured on the real thing: with the raw pi name on tool_use/tool_result and
+// the normalized one on approval_request/tool_denied, the renderer's fold
+// keyed on (name, target) missed every time — the question drew a card of its
+// own instead of asking on the row it was about, and a denial drew a second
+// row for a call that ran zero times. One call must carry one name.
 func claudeToolName(pi string) string {
 	if pi == "" {
 		return ""
@@ -72,6 +97,9 @@ func (p *framePump) handleUIRequest(ctx context.Context, f *piFrame) error {
 	case "select":
 		if strings.HasPrefix(f.Title, approvalTitlePrefix) {
 			return p.handleApprovalSelect(ctx, f)
+		}
+		if strings.HasPrefix(f.Title, blockedTitlePrefix) {
+			return p.handleGuardBlock(ctx, f)
 		}
 		return p.respond(ctx, map[string]any{
 			"type": "extension_ui_response", "id": f.ID, "cancelled": true,
@@ -92,8 +120,12 @@ func (p *framePump) handleUIRequest(ctx context.Context, f *piFrame) error {
 
 // handleApprovalSelect runs one workmax-approval envelope through the shared
 // flow and answers pi with the decision. Blocking this pump goroutine while
-// Await waits is deliberate: pi itself is blocked on our answer, and tool_call
-// handlers are preflighted sequentially, so nothing else needs the stream.
+// Await waits is deliberate — but not because pi asks one question at a time.
+// Measured: an assistant message carrying two write calls raises BOTH ui
+// requests before either is answered, so the second frame sits in the pipe
+// while this one waits. Blocking is what serializes them, which is the shape
+// the user wants anyway (one card at a time, in call order); pi makes no
+// progress on either until it is answered, so nothing is lost by not reading.
 func (p *framePump) handleApprovalSelect(ctx context.Context, f *piFrame) error {
 	rest := strings.TrimPrefix(f.Title, approvalTitlePrefix)
 	piTool, target, _ := strings.Cut(rest, ":")
@@ -107,6 +139,31 @@ func (p *framePump) handleApprovalSelect(ctx context.Context, f *piFrame) error 
 	}
 	return p.respond(ctx, map[string]any{
 		"type": "extension_ui_response", "id": f.ID, "value": value,
+	})
+}
+
+// handleGuardBlock narrates one path-guard refusal and releases the
+// extension. The decision was already made inside the extension — nothing here
+// can change it — so this asks nobody and only puts the reason on the stream
+// before answering, in that order: the extension returns its block the moment
+// it is answered, and a denial the user never saw explained is a call that
+// reads as broken rather than refused.
+func (p *framePump) handleGuardBlock(ctx context.Context, f *piFrame) error {
+	rest := strings.TrimPrefix(f.Title, blockedTitlePrefix)
+	piTool, rest, _ := strings.Cut(rest, ":")
+	target, code, _ := strings.Cut(rest, ":")
+	reason, ok := pathGuardReasons[code]
+	if !ok {
+		reason = pathGuardFallbackReason
+	}
+	// Best-effort, like every other denial narration: the refusal already
+	// holds whether or not the client is still listening.
+	_ = p.emit(agentruntime.Event{
+		Kind: agentruntime.EventToolDenied,
+		Tool: agentruntime.ToolEvent{Name: claudeToolName(piTool), Target: target, Reason: reason},
+	})
+	return p.respond(ctx, map[string]any{
+		"type": "extension_ui_response", "id": f.ID, "cancelled": true,
 	})
 }
 

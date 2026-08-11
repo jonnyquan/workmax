@@ -176,6 +176,13 @@ func (r *Runtime) RunTurn(ctx context.Context, in agentruntime.TurnInput, emit a
 			"PI_TELEMETRY":          "0",
 			"PI_SKIP_VERSION_CHECK": "1",
 			"PI_CODING_AGENT_DIR":   piHome,
+			// The workspace as THIS side spells it. The extension's path guard
+			// needs the sidecar's own string, not only the one Node reports:
+			// process.cwd() resolves symlinks and this does not, so a data dir
+			// under a linked path (macOS /tmp, $TMPDIR) gave the guard a root
+			// that matched nothing and it refused every write into the thread's
+			// own workspace.
+			"WORKMAX_PI_WORKSPACE": in.Workspace,
 		},
 		Dir: in.Workspace,
 	}, func(line string) {
@@ -417,14 +424,14 @@ func (p *framePump) dispatch(ctx context.Context, line []byte) (bool, error) {
 			}
 			return false, emit(agentruntime.Event{
 				Kind: agentruntime.EventToolUse,
-				Tool: agentruntime.ToolEvent{Name: ev.ToolCall.Name, Target: toolTarget(ev.ToolCall.Arguments)},
+				Tool: agentruntime.ToolEvent{Name: claudeToolName(ev.ToolCall.Name), Target: toolTarget(ev.ToolCall.Arguments)},
 			})
 		}
 		return false, nil
 	case "tool_execution_end":
 		return false, emit(agentruntime.Event{
 			Kind: agentruntime.EventToolResult,
-			Tool: agentruntime.ToolEvent{Name: f.ToolName, IsError: f.IsError},
+			Tool: agentruntime.ToolEvent{Name: claudeToolName(f.ToolName), IsError: f.IsError},
 		})
 	case "message_end":
 		var end assistantMessage

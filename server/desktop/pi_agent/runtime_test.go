@@ -157,11 +157,16 @@ func TestRunTurn_NormalTurn(t *testing.T) {
 	if !strings.HasSuffix(ref, ".jsonl") || !strings.Contains(ref, "pi_sessions") {
 		t.Errorf("session ref = %q, want a fresh .jsonl under pi_sessions", ref)
 	}
-	if tool := sink.events[4].Tool; tool.Name != "read" || tool.Target != "notes.md" {
-		t.Errorf("tool_use = %+v, want read · notes.md", tool)
+	// Both ends of the call carry the SHARED tool vocabulary (Claude's), not
+	// pi's native lowercase: the renderer folds an approval question and a
+	// denial into the step they belong to by matching (name, target), and a
+	// call whose announcement says "read" while its question says "Read" is a
+	// call the fold can never find.
+	if tool := sink.events[4].Tool; tool.Name != "Read" || tool.Target != "notes.md" {
+		t.Errorf("tool_use = %+v, want Read · notes.md", tool)
 	}
-	if tool := sink.events[5].Tool; tool.Name != "read" || tool.IsError {
-		t.Errorf("tool_result = %+v", tool)
+	if tool := sink.events[5].Tool; tool.Name != "Read" || tool.IsError {
+		t.Errorf("tool_result = %+v, want Read", tool)
 	}
 
 	// The prompt went down stdin as one JSONL command, and stdin was closed
@@ -196,6 +201,13 @@ func TestRunTurn_NormalTurn(t *testing.T) {
 		if spec.Env[k] != v {
 			t.Errorf("env %s = %q, want %q", k, spec.Env[k], v)
 		}
+	}
+	// The extension's path guard is told the workspace in THIS side's
+	// spelling. Node resolves symlinks and this does not, so a guard that
+	// knew only process.cwd() refused every write into the thread's own
+	// workspace whenever the data dir sat under a link.
+	if spec.Env["WORKMAX_PI_WORKSPACE"] != "/tmp/ws/thread_x" {
+		t.Errorf("env WORKMAX_PI_WORKSPACE = %q, want the turn workspace", spec.Env["WORKMAX_PI_WORKSPACE"])
 	}
 
 	// models.json landed in the pi home the env points at, carrying the
