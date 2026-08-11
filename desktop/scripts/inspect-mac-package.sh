@@ -141,23 +141,18 @@ if [ "$require_renderer" -eq 1 ]; then
   # never the reason a build fails — and so never noticed when it breaks.
 
   # CSP is the renderer's primary containment control on a shell with no
-  # cancellable navigation hook, so its presence is verified in the artifact,
-  # not just in the repository.
-  grep -Fq 'http-equiv="Content-Security-Policy"' "$renderer/index.html" || \
-    fail "bundled index.html does not declare a Content-Security-Policy"
-  # Every source in connect-src is checked individually. An earlier version of
-  # this used a negative lookahead, which grep -E does not support — with
-  # stderr discarded it silently matched nothing and waved everything through.
-  connect_src="$(grep -oE "connect-src[^;\"]*" "$renderer/index.html" | head -1 | sed 's/^connect-src//')"
-  [ -n "$connect_src" ] || fail "bundled index.html does not restrict connect-src"
-  for source in $connect_src; do
-    case "$source" in
-      "'self'"|"'none'"|http://127.0.0.1|http://127.0.0.1:*|http://localhost|http://localhost:*) ;;
-      *) fail "bundled index.html allows a non-loopback connect-src source: $source" ;;
-    esac
-  done
-  grep -Fq "'unsafe-inline'" "$renderer/index.html" && \
-    fail "bundled index.html grants an inline exemption in its CSP"
+  # cancellable navigation hook, and the served header is its single source of
+  # truth (desktop/wails/uiserver.go). A document that also carried a meta CSP
+  # is what this used to demand — until the two drifted apart and the webview
+  # was enforcing an intersection neither file stated. So the artifact is now
+  # checked for the opposite: no meta policy may reappear here and quietly
+  # narrow, or appear to widen, what the header grants.
+  grep -Fq 'http-equiv="Content-Security-Policy"' "$renderer/index.html" && \
+    fail "bundled index.html declares a meta Content-Security-Policy; the served header is the only policy"
+  # The header itself is pinned by check-bundled-renderer.sh (parsed out of
+  # uiserver.go) and by the boundary manifest's containment-headers guarantee.
+  # What is left to check here is that the packaged document cannot reach off
+  # the machine on its own, whatever the policy says.
 
   # A packaged renderer must not LOAD anything off the machine. An anchor to a
   # remote page is different in kind — the shell hands those to the system

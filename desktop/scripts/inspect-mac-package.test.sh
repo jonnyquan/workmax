@@ -53,9 +53,12 @@ make_app() {
   mkdir -p "$app/Contents/MacOS" "$renderer/lib"
   printf '#!/bin/sh\n# 0.1.0-p1-ea\nexit 0\n' > "$app/Contents/MacOS/WorkMax Desktop"
   chmod +x "$app/Contents/MacOS/WorkMax Desktop"
-  cp "$RENDERER_SRC/index.html" "$RENDERER_SRC/styles.css" "$RENDERER_SRC/renderer.js" \
-     "$RENDERER_SRC/shim.js" "$renderer/"
-  cp "$RENDERER_SRC/lib/desktop-bridge.js" "$renderer/lib/"
+  # Copy whatever the shipping renderer actually consists of, rather than a
+  # hand-kept list: the module split grew this from five files to fourteen,
+  # and a fixture that lags the real directory fails every check for the one
+  # reason that has nothing to do with what is being tested.
+  ( cd "$RENDERER_SRC" && find . -type f -print0 ) | \
+    ( cd "$RENDERER_SRC" && xargs -0 -I{} sh -c 'mkdir -p "$1/$(dirname "$2")" && cp "$2" "$1/$2"' _ "$renderer" {} )
   printf 'icnsfake icon bytes\n' > "$app/Contents/Resources/icon.icns"
   cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -119,23 +122,21 @@ rm "$app/Contents/Resources/renderer/en/desktop/shim.js"
 expect_fail "rejects a renderer missing the shim that installs its bridge" "missing or has an empty shim.js" \
   "$INSPECT" --require-bundled-renderer "$app"
 
-# CSP is the primary containment control on a shell with no cancellable
-# navigation hook, so it is verified in the artifact rather than trusted from
-# the repository.
-app="$(make_app remote-connect-src)"
-sed -i '' 's|connect-src http://127\.0\.0\.1:\*|connect-src https://evil.example|' \
+# CSP lives in the served header now, and a second copy in the document is
+# what let the two drift apart. Both directions of that mistake are the same
+# artifact-level failure, so one case covers it: a meta policy that reappears
+# is rejected whether it would narrow or widen the header.
+app="$(make_app meta-csp)"
+sed -i '' 's|<head>|<head><meta http-equiv="Content-Security-Policy" content="default-src '"'"'self'"'"'">|' \
   "$app/Contents/Resources/renderer/en/desktop/index.html"
-expect_fail "rejects a non-loopback connect-src" "non-loopback connect-src source" \
-  "$INSPECT" --require-bundled-renderer "$app"
-
-app="$(make_app inline-csp)"
-sed -i '' "s|script-src 'self'|script-src 'self' 'unsafe-inline'|" \
-  "$app/Contents/Resources/renderer/en/desktop/index.html"
-expect_fail "rejects an inline exemption in the packaged CSP" "grants an inline exemption" \
+expect_fail "rejects a meta CSP reappearing in the packaged document" "declares a meta Content-Security-Policy" \
   "$INSPECT" --require-bundled-renderer "$app"
 
 app="$(make_app remote-script)"
-sed -i '' 's|<script src="./renderer.js">|<script src="https://cdn.example/r.js">|' \
+# Append a remote script rather than rewriting an existing tag: the entry
+# script became type="module" during the split and the old pattern silently
+# stopped matching, which turned this case into a no-op that still passed.
+sed -i '' 's|</body>|<script src="https://cdn.example/r.js"></script></body>|' \
   "$app/Contents/Resources/renderer/en/desktop/index.html"
 expect_fail "rejects a remotely loaded script" "loads a remote resource via src=" \
   "$INSPECT" --require-bundled-renderer "$app"
