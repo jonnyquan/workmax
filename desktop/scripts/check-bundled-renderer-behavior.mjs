@@ -118,6 +118,44 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   }
 }
 
+// --- The context column folds when there is no run to describe ---------------
+//
+// This stub does not evaluate CSS, so the rule that collapses the third column
+// cannot be observed the way a hidden attribute can. It is pinned as text
+// instead, because the alternative — nothing — is how "the panel shows Run
+// overview 0/4 over four Waiting rows on a screen with no conversation" came
+// back once already. The selector is derived from #thread-panel[hidden], which
+// five call sites in three modules already maintain; a class toggled next to
+// each of them is the drift this avoids.
+{
+  assert.match(
+    rendererCSS,
+    /\.shell:has\(#thread-panel\[hidden\]\)\s*\.context-panel\s*\{\s*display:\s*none;/u,
+    "with no conversation selected the context column must fold away, not draw an empty scaffold",
+  );
+  assert.match(
+    rendererCSS,
+    /\.shell:has\(#thread-panel\[hidden\]\)\s*\{\s*grid-template-columns:\s*var\(--rail\) minmax\(0, 1fr\);/u,
+    "and the shell must become a two-column grid when it does, or the column leaves a gap",
+  );
+  // The narrow-window fold sets the rail width through --rail rather than a
+  // second grid-template-columns: the :has() rule above outranks a bare
+  // .shell, so a competing declaration there would silently lose and leave a
+  // 300px rail on a 1000px window.
+  assert.doesNotMatch(
+    rendererCSS,
+    /@media \(max-width: 980px\) \{\s*\.shell \{\s*grid-template-columns/u,
+    "the narrow-window rails must be set via --rail, not a lower-specificity grid declaration",
+  );
+}
+
+// The conversation list keeps itself fresh: every mutation repaints it, and the
+// one state where asking again is the answer is an error, which offers Retry on
+// the status strip and calls the same refresh(). A bare ↻ next to the list
+// heading was a control with no label and no job.
+assert.doesNotMatch(rendererHTML, /id=["']refresh-button["']/u);
+assert.doesNotMatch(rendererSource, /refreshButton/u);
+
 assert.match(rendererHTML, /id=["']source-code-link["']/u);
 assert.match(rendererHTML, /href=["']https:\/\/github\.com\/jonnyquan\/workmax["']/u);
 assert.match(rendererHTML, /Source code\s*·\s*AGPL-3\.0/u);
@@ -4713,6 +4751,13 @@ async function testComposerAccountChipSkipsTheDefaultIdentity() {
   const { bridge, desktopBridge } = localModeBridge({ localRoute: true, accounts });
   const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
+  // The subtitle carries where the turn runs, which is the fact the permanent
+  // status block used to carry. One line, on the identity it describes.
+  assert.equal(
+    document.byId.get("local-account-hint").textContent,
+    "Local model · this machine",
+    "the local route is ambient state, so it belongs next to the identity",
+  );
   const threadButton = walk(
     document.byId.get("thread-list"),
     (node) => node.classList?.contains("thread-button"),
@@ -4756,6 +4801,19 @@ async function testLocalIdentityIsNamedWithoutAnyModel() {
     "you are someone on this machine before you connect anything",
   );
   assert.equal(document.byId.get("local-account-name").textContent, "Ming");
+  // The second line describes the identity's situation. It used to read
+  // "Switch" — a verb where a description goes, which made the row parse as a
+  // person called "Ming Switch".
+  assert.equal(
+    document.byId.get("local-account-hint").textContent,
+    "This machine only",
+    "the subtitle states what this identity is connected to, never what to do to it",
+  );
+  assert.equal(
+    document.byId.get("local-account-row").getAttribute("aria-expanded"),
+    "false",
+    "the row is what opens the identity popover, so it has to say whether it is open",
+  );
 
   document.byId.get("local-account-row").click();
   await settle();
@@ -4779,6 +4837,11 @@ async function testLocalIdentityIsNamedWithoutAnyModel() {
     (node) => node.classList?.contains("local-account-item"),
   ).map((node) => node.textContent);
   assert.equal(switcherNames.length, 2, "both local identities are switchable without any model");
+  assert.equal(
+    document.byId.get("local-account-row").getAttribute("aria-expanded"),
+    "true",
+    "and it says so once the popover is open",
+  );
 }
 
 // Connected: the same row, now stating what it is bound to — and offering the
@@ -4829,6 +4892,11 @@ async function testConnectedAccountIsShownAsABindingOnTheLocalIdentity() {
     false,
     "a connected account does not erase who you are on this machine",
   );
+  assert.equal(
+    document.byId.get("local-account-hint").textContent,
+    "Connected to WorkMax",
+    "bound is a state of this identity, and the row is where that state is stated",
+  );
   document.byId.get("local-account-row").click();
   await settle();
   assert.match(
@@ -4868,6 +4936,21 @@ async function testConnectedAccountIsShownAsABindingOnTheLocalIdentity() {
 
 async function testSignedOutLocalRouteCanDriveTheAgent() {
   const { bridge, desktopBridge } = localModeBridge({ localRoute: true });
+  // A login bridge that answers "nobody is signing in", which is the shape a
+  // real signed-out boot has. Without it restoreLoginTransaction reports a
+  // missing service and the status strip below would be measuring the fixture.
+  desktopBridge.auth = {
+    async beginLogin() { return { state: "awaiting_password" }; },
+    async loginStatus() { return { state: "idle" }; },
+    async submitLoginPassword() { throw new Error("not exercised"); },
+    async cancelLogin() { return { state: "idle" }; },
+  };
+  // What a source build really reports: the shim spells the absence of a
+  // version stamp "unknown", which is truthy, which put "sidecar unknown ·
+  // app unknown" at the foot of the rail on every dev build — the exact
+  // sentence the code above it says it exists to avoid.
+  bridge.sidecarVersion = "unknown";
+  bridge.appVersion = "unknown";
   const { document, ns } = await runRenderer(bridge, desktopBridge);
 
   assert.match(
@@ -4879,6 +4962,28 @@ async function testSignedOutLocalRouteCanDriveTheAgent() {
     document.byId.get("local-account-connect").hidden,
     false,
     "signing in must still be offered — local mode is a way to work, not a replacement",
+  );
+  // Where the turn runs is ambient state, so it moved to the identity row's
+  // subtitle (asserted with an identity present, below). What it left behind
+  // matters just as much: the status strip used to open with a permanent
+  // "Local model route. No account connected — history stays on this machine.",
+  // reserving a paragraph of the rail for a fact that never changes while you
+  // work — and teaching the reader to stop looking at the one place errors
+  // appear.
+  assert.equal(
+    document.byId.get("status-card").textContent,
+    "",
+    "nothing permanent may sit on the status strip: it is for what just happened",
+  );
+  assert.equal(
+    document.byId.get("status-bar").hidden,
+    true,
+    "an empty strip takes no space: setStatus hides the bar when the line is empty",
+  );
+  assert.equal(
+    document.byId.get("runtime-label").hidden,
+    true,
+    'an unstamped build must say nothing, not "sidecar unknown · app unknown"',
   );
 
   const threadButton = walk(
@@ -6896,7 +7001,6 @@ async function testCreateRetriesKeepUUIDAndAcceptCurrentReplayRow() {
   assert.match(document.byId.get("new-thread-error").textContent, /same identity/i);
   assert.doesNotMatch(document.byId.get("status-card").textContent, /create-private-secret/);
   assert.equal(ns.state.createDraft.threadUUID, newUUID);
-  assert.equal(document.byId.get("refresh-button").disabled, true);
 
   const firstDraft = ({ ...ns.state.createDraft });
   await ns.refresh();
@@ -6924,7 +7028,6 @@ async function testCreateRetriesKeepUUIDAndAcceptCurrentReplayRow() {
   assert.equal(document.byId.get("new-thread-submit-button").textContent, "Retry sync");
   assert.match(document.byId.get("new-thread-error").textContent, /cloud thread is ready/i);
   assert.equal(ns.state.createDraft.threadUUID, newUUID);
-  assert.equal(document.byId.get("refresh-button").disabled, true);
   await ns.refresh();
   await settle();
   assert.equal(ns.state.createDraft.threadUUID, newUUID);
@@ -7022,7 +7125,6 @@ async function testPermanentCreateFailuresDoNotOfferSameIdentityRetry() {
     );
     assert.equal(document.byId.get("new-thread-submit-button").disabled, true);
     assert.equal(document.byId.get("new-thread-submit-button").textContent, "Cannot retry");
-    assert.equal(document.byId.get("refresh-button").disabled, true);
 
     document.byId.get("new-thread-form").submit();
     await settle();
@@ -7040,7 +7142,6 @@ async function testPermanentCreateFailuresDoNotOfferSameIdentityRetry() {
     document.byId.get("new-thread-cancel-button").click();
     assert.equal(document.byId.get("new-thread-form").hidden, true);
     assert.equal(ns.state.createDraft, null);
-    assert.equal(document.byId.get("refresh-button").disabled, false);
   }
 }
 
@@ -7097,7 +7198,6 @@ async function testPausedCreateReplayRequiresExplicitCancel() {
   assert.equal(ns.state.createDraft.retryable, false);
   assert.equal(document.byId.get("new-thread-form").hidden, false);
   assert.equal(document.byId.get("new-thread-submit-button").disabled, true);
-  assert.equal(document.byId.get("refresh-button").disabled, true);
   assert.match(document.byId.get("new-thread-error").textContent, /paused.*cancel/i);
   assert.doesNotMatch(document.byId.get("thread-list").textContent, /Paused cloud title/);
 
@@ -7108,7 +7208,6 @@ async function testPausedCreateReplayRequiresExplicitCancel() {
   document.byId.get("new-thread-cancel-button").click();
   assert.equal(document.byId.get("new-thread-form").hidden, true);
   assert.equal(ns.state.createDraft, null);
-  assert.equal(document.byId.get("refresh-button").disabled, false);
 }
 
 async function testCreateEscapeFencesLateCompletion() {

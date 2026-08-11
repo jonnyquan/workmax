@@ -69,7 +69,6 @@ import {
   onboardingSignin,
   openWorkspaceButton,
   quickSwitcher,
-  refreshButton,
   renameThreadButton,
   renameThreadCancel,
   renameThreadForm,
@@ -1020,16 +1019,26 @@ export function renderLocalAccountArea() {
     localAccountAvatar.textContent = Array.from(active.name)[0].toUpperCase();
   }
   if (localAccountHint) {
-    // The row names the machine's identity; the hint says what that identity
-    // is currently connected to, so a bound session never reads as "you are
-    // this local account and nothing else is going on".
+    // The row names the machine's identity; the second line says what that
+    // identity's situation IS, never what you could do to it. It read
+    // "Switch" before, which made "Local / Switch" parse as a two-word name
+    // and left the app with no line anywhere saying where work was running.
+    // That line used to be a permanent block above this row on the status
+    // strip — "Local model route. No account connected — history stays on
+    // this machine." — reserving a paragraph of the rail for a fact that
+    // never changes while you work. It is one line here instead, and the
+    // promise it carried is still stated in full where a promise belongs:
+    // Settings › Account, the onboarding card, and the composer's own hint.
     localAccountHint.textContent =
-      state.cloudBinding?.state === "bound"
-        ? "Connected"
-        : state.cloudBinding?.state === "expired"
-          ? "Reconnect"
-          : "Switch";
+      effectiveCloudBinding().state === "bound"
+        ? "Connected to WorkMax"
+        : effectiveCloudBinding().state === "expired"
+          ? "Sign-in expired"
+          : state.localRoute
+            ? "Local model · this machine"
+            : "This machine only";
   }
+  localAccountRow.setAttribute("aria-expanded", String(state.localAccountPanelOpen === true));
   localAccountPanel.hidden = !state.localAccountPanelOpen;
   if (!state.localAccountPanelOpen) return;
   if (!localAccountListEl) return;
@@ -2368,9 +2377,21 @@ async function stopActiveTurn() {
 // because two paths write it (boot, and the login machinery landing on idle)
 // and they used to disagree — one described a usable local workbench, the
 // other a sign-in wall.
+//
+// A local route says nothing here. The status strip is for what just happened
+// and what to do about it; "you are on a local model and nothing leaves this
+// machine" is neither — it is true from launch to quit, and a strip that opens
+// with a permanent sentence is a strip nobody reads afterwards. It is the
+// identity row's subtitle now (renderLocalAccountArea), one line, next to the
+// identity it describes. The empty string is what hides the strip: setStatus
+// hides the bar when the line is empty.
+//
+// The other two branches stay, because they are not ambient — with no route
+// and no account you cannot send anything, so naming the two ways out is the
+// most useful thing the app can say.
 function signedOutStatusMessage(authState = state.auth?.state) {
   if (state.localRoute) {
-    return "Local model route. No account connected — history stays on this machine.";
+    return "";
   }
   if (authState === "expired") {
     return "The connected account needs signing in again. Your local work is still here.";
@@ -2707,9 +2728,15 @@ export async function refresh() {
   // A source build stamps no version, and "sidecar unknown · app unknown"
   // reads as a fault rather than as the absence of a number. Say nothing
   // instead: the line earns its space only when it carries one.
+  //
+  // "unknown" is the absence, spelled. The shim defaults both fields to that
+  // literal when the document carries no version dataset, so a truthiness test
+  // alone let the sentence this comment forbids onto the screen of every
+  // source build — which is what a screenshot of the rail showed.
+  const stamped = (value) => (value && value !== "unknown" ? value : "");
   const versions = [
-    api.sidecarVersion ? `sidecar ${api.sidecarVersion}` : "",
-    api.appVersion ? `app ${api.appVersion}` : "",
+    stamped(api.sidecarVersion) ? `sidecar ${api.sidecarVersion}` : "",
+    stamped(api.appVersion) ? `app ${api.appVersion}` : "",
   ].filter(Boolean);
   runtimeLabel.textContent = versions.join(" · ");
   runtimeLabel.hidden = versions.length === 0;
@@ -2772,9 +2799,8 @@ export async function refresh() {
   }
 }
 
-refreshButton.addEventListener("click", () => {
-  void refresh();
-});
+// Retry on the status line is the only control that reloads local history by
+// hand, and it appears only where reloading is plausibly the answer: an error.
 if (statusRetryButton) {
   statusRetryButton.addEventListener("click", () => {
     void refresh();

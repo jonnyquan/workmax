@@ -22,7 +22,6 @@ import {
   newThreadMode,
   newThreadName,
   newThreadSubmitButton,
-  refreshButton,
   sendButton,
   stopButton,
   turnRecoveryCard,
@@ -640,11 +639,10 @@ export function updateNewThreadState() {
 
   newThreadButton.disabled = !canOpenNewThread();
   emptyNewThreadButton.disabled = !canOpenNewThread();
-  refreshButton.disabled =
-    state.creatingThread || state.recoveringSession || hasAttemptedCreateDraft();
-  refreshButton.title = hasAttemptedCreateDraft()
-    ? "Cancel or complete the current thread draft before refreshing"
-    : "Refresh local history";
+  // No refresh control to disable here any more: refresh() still refuses
+  // while an attempted draft is open — hasAttemptedCreateDraft() is checked
+  // inside it, and says so on the status line — but the guard no longer has
+  // a button to grey out.
   newThreadButton.title = state.createAvailable
     ? "Create a synced presentation thread"
     : "Thread creation is unavailable in this Desktop build";

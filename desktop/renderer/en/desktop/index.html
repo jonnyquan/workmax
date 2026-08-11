@@ -211,18 +211,17 @@
               aria-label="Search conversations"
             />
           </div>
+          <!-- A label and the one action. There used to be a bare ↻ between
+               them: no label, and nothing it could tell you that the list did
+               not already know. Every mutation this app makes — create,
+               rename, delete — updates the list in place, and the one case
+               where a reload is genuinely the answer (the sidecar did not
+               answer) already offers Retry on the status line, which calls the
+               same refresh(). An unlabelled glyph for a job nobody has is how
+               a toolbar starts collecting them. -->
           <div class="thread-toolbar">
             <span class="rail-label">Conversations</span>
-            <span class="thread-toolbar-actions">
-              <button
-                id="refresh-button"
-                class="ghost icon-button"
-                type="button"
-                aria-label="Refresh conversations"
-                title="Refresh conversations"
-              >↻</button>
-              <button id="new-thread-button" type="button" disabled>New</button>
-            </span>
+            <button id="new-thread-button" type="button" disabled>New</button>
           </div>
         </div>
 
@@ -301,13 +300,29 @@
             </form>
           </div>
 
+          <!-- Who you are here, what that identity is connected to, and the
+               way to change it. The second line used to read "Switch", which
+               is a verb sitting where a description goes: "Local / Switch"
+               parses as a name before it parses as an action, and the row was
+               already clickable in its entirety, so the word was labelling a
+               control that did not exist. The subtitle now carries the state —
+               connected, expired, local route — and the chevron carries the
+               fact that the row opens something. The gear stays outside the
+               row because it opens Settings, which is not switching identity. -->
           <div class="identity-row">
-            <button id="local-account-row" class="local-account-row" type="button" hidden>
+            <button
+              id="local-account-row"
+              class="local-account-row"
+              type="button"
+              aria-expanded="false"
+              hidden
+            >
               <span id="local-account-avatar" class="local-account-avatar">L</span>
               <span class="local-account-text">
                 <span id="local-account-name" class="local-account-name">Local</span>
-                <span id="local-account-hint" class="local-account-hint">Switch</span>
+                <span id="local-account-hint" class="local-account-hint">On this machine</span>
               </span>
+              <span class="local-account-chevron" aria-hidden="true">›</span>
             </button>
             <button
               id="settings-button"

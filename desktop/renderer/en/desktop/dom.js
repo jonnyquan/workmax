@@ -31,7 +31,10 @@ export const localAccountSwitchNote = document.querySelector("#local-account-swi
 export const localAccountCreateForm = document.querySelector("#local-account-create-form");
 export const localAccountNameInput = document.querySelector("#local-account-name-input");
 export const runtimeLabel = document.querySelector("#runtime-label");
-export const refreshButton = document.querySelector("#refresh-button");
+// There is no refresh handle here on purpose. Reloading local history is not
+// something the user has to ask for — every mutation repaints the list, and
+// the one state where asking again is the answer is an error, which offers
+// Retry on the status line and calls the same refresh().
 // Settings is a modal, not a column. A route, a protocol and an API key used
 // to live between the conversation list and the account row; the rail is
 // navigation, and this is the door out of it.

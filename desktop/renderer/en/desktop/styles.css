@@ -498,11 +498,41 @@ textarea::placeholder {
   overflow: hidden;
 }
 
+/* The third column is a projection of a run — which steps have happened, what
+   the agent was given, what it produced. With no conversation selected there
+   is no run, and it was still drawing the entire scaffold: "Task context 0",
+   "Run overview 0/4" above four rows reading Waiting / None attached / Waiting
+   / None yet, then three more sections each with a 0 beside it. Nine numbers
+   and four steps about nothing, next to a screen whose whole message is "pick
+   a conversation". So it folds away until there is something to project, and
+   the welcome screen gets the 300px back.
+
+   Folding rather than emptying, because this column ALREADY folds — the query
+   below does it whenever the window cannot afford three columns — and an empty
+   version would be a second way for the same column to say "not now". The
+   collapsed grid is the same two-column grid in both cases.
+
+   Derived from #thread-panel[hidden] with :has() rather than a class toggled
+   in JS: five call sites already set that attribute, and a sixth line in each
+   is a drift waiting to happen. The panel's visibility is a consequence of the
+   selection, not a thing maintained alongside it. */
+.shell:has(#thread-panel[hidden]) {
+  grid-template-columns: var(--rail) minmax(0, 1fr);
+}
+
+.shell:has(#thread-panel[hidden]) .context-panel {
+  display: none;
+}
+
 /* Below this the third column costs more than it explains, so it folds away
-   rather than squeezing the conversation. */
+   rather than squeezing the conversation. The rail width is moved onto .shell
+   as a variable so the :has() rule above narrows with it — a second
+   grid-template-columns here would lose to that rule's specificity and leave
+   a 300px rail on a 1000px window. */
 @media (max-width: 1180px) {
   .shell {
-    grid-template-columns: 272px minmax(0, 1fr);
+    --rail: 272px;
+    grid-template-columns: var(--rail) minmax(0, 1fr);
   }
   .context-panel {
     display: none;
@@ -511,7 +541,7 @@ textarea::placeholder {
 
 @media (max-width: 980px) {
   .shell {
-    grid-template-columns: 256px minmax(0, 1fr);
+    --rail: 256px;
   }
 }
 
@@ -582,12 +612,6 @@ textarea::placeholder {
   justify-content: space-between;
   gap: var(--sp-2);
   padding-bottom: var(--sp-2);
-}
-
-.thread-toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
 }
 
 /* An inline form in the rail. It is the only card-like thing in this column,
@@ -861,10 +885,13 @@ textarea::placeholder {
   color: hsl(var(--destructive));
 }
 
+/* Two controls, two jobs: the row opens the identity, the gear opens Settings.
+   They were 4px apart, close enough that the chevron and the gear read as one
+   cluster of glyphs belonging to whichever you noticed first. */
 .identity-row {
   display: flex;
   align-items: center;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
 }
 
 .local-account-row {
@@ -900,6 +927,9 @@ textarea::placeholder {
 
 .local-account-text {
   display: grid;
+  /* Takes the slack so the chevron lands on the right edge of the row rather
+     than trailing the name. */
+  flex: 1;
   min-width: 0;
   gap: 1px;
 }
@@ -913,9 +943,27 @@ textarea::placeholder {
 }
 
 .local-account-hint {
+  overflow: hidden;
   color: hsl(var(--muted-foreground));
   font-size: var(--fs-micro);
   font-weight: var(--fw-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The only thing on the row that says "this opens". It replaces the word
+   "Switch" sitting in the subtitle slot, where it read as part of the name and
+   competed with the gear beside it for "the control on this row". Quiet by
+   default and only as loud as the row it belongs to. */
+.local-account-chevron {
+  flex: none;
+  color: hsl(var(--muted-foreground) / 0.7);
+  font-size: var(--fs-base);
+  line-height: 1;
+}
+
+.local-account-row:hover:not(:disabled) .local-account-chevron {
+  color: hsl(var(--foreground));
 }
 
 .sidebar-footer {
