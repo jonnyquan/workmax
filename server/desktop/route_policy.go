@@ -109,6 +109,8 @@ const (
 	maxManualSyncBodyBytes     = 4 << 10
 	// maxModelSettingsBodyBytes also defined for handlers; keep policy in sync.
 	maxModelSettingsPolicyBodyBytes = 8 << 10
+	// maxAppearanceSettingsBodyBytes also defined for handlers; keep in sync.
+	maxAppearanceSettingsPolicyBodyBytes = 1 << 10
 
 	maxThreadFileUploadBodyBytes = 50 << 20 // 50 MiB, aligned with cloud workagent upload cap
 )
@@ -151,6 +153,12 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	newCurrentSidecarRoutePolicy("system.trigger-sync", http.MethodPost, "/system/trigger-sync", SidecarBodyOptional, maxManualSyncBodyBytes, "application/json"),
 	newCurrentSidecarRoutePolicy("settings.model-route.get", http.MethodGet, "/settings/model-route", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("settings.model-route.put", http.MethodPut, "/settings/model-route", SidecarBodyRequired, maxModelSettingsPolicyBodyBytes, "application/json"),
+	// The appearance preference. Machine-scoped (migration 0010), so no
+	// identity travels on either verb. The GET is read by the shell while it
+	// serves index.html — the renderer never calls it, because by the time the
+	// renderer runs the answer is already on <html>.
+	newCurrentSidecarRoutePolicy("settings.appearance.get", http.MethodGet, "/settings/appearance", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("settings.appearance.put", http.MethodPut, "/settings/appearance", SidecarBodyRequired, maxAppearanceSettingsPolicyBodyBytes, "application/json"),
 	newCurrentSidecarRoutePolicy("agent.thread-file-upload", http.MethodPost, "/agent/threads/:uuid/files", SidecarBodyRequired, maxThreadFileUploadBodyBytes, "multipart/form-data"),
 	newCurrentSidecarRoutePolicy("agent.thread-file-list", http.MethodGet, "/agent/threads/:uuid/files", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-workspace-list", http.MethodGet, "/agent/threads/:uuid/workspace", SidecarBodyForbidden, 0),
@@ -236,6 +244,8 @@ func newCurrentSidecarRoutePolicy(
 		bodyTooLargeError = "renderer log body too large"
 	case "settings.model-route.put":
 		bodyTooLargeError = "model settings body too large"
+	case "settings.appearance.put":
+		bodyTooLargeError = "appearance settings body too large"
 	case "agent.thread-cloud-sync":
 		bodyTooLargeError = "cloud sync request body too large"
 	}
@@ -517,6 +527,10 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handleGetModelRoute, true
 	case "settings.model-route.put":
 		return s.handlePutModelRoute, true
+	case "settings.appearance.get":
+		return s.handleGetAppearance, true
+	case "settings.appearance.put":
+		return s.handlePutAppearance, true
 	default:
 		return nil, false
 	}

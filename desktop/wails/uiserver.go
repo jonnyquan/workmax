@@ -3,8 +3,11 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,6 +16,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -115,7 +119,10 @@ func UIHandlerWithOpener(renderer fs.FS, capability string, sidecarPort int, sid
 	inner.Handle(apiPrefix, newSidecarProxyAt(apiPrefix, sidecarPort, sidecarToken))
 	inner.Handle(base+uiLoginPrefix, newLoginGate(base+uiLoginPrefix, sidecarPort, sidecarToken))
 	inner.Handle(base+uiOpenExternalPath, newOpenExternalHandler(open))
-	inner.Handle(base+"/", securityHeaders(http.StripPrefix(base, http.FileServer(http.FS(renderer)))))
+	inner.Handle(base+"/", securityHeaders(withAppearance(
+		base, renderer, sidecarPort, sidecarToken,
+		http.StripPrefix(base, http.FileServer(http.FS(renderer))),
+	)))
 
 	outer := http.NewServeMux()
 	// Anything not under the capability is answered as if nothing is here —
@@ -191,6 +198,128 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// --- Appearance --------------------------------------------------------------
+//
+// The theme has to be right in the FIRST frame, and the renderer cannot make
+// that promise on its own.
+//
+// The preference used to live in the renderer's localStorage, where it never
+// survived a relaunch: localStorage is keyed by origin, and this origin's port
+// is minted fresh every launch (newUIServer binds 127.0.0.1:0), so every start
+// read an empty store. Moving the value into the sidecar fixes persistence but
+// introduces a round trip the renderer cannot afford — an async read after
+// first paint is a light window that turns dark, on every single launch.
+//
+// The usual answer, a tiny inline <script> in <head>, is not available: the UI
+// origin serves script-src 'self' with no inline exemption, and that
+// concession is not being reopened for a colour scheme. So the answer is the
+// one place that already knows the theme before the page exists — the server
+// that hands over index.html. It asks the sidecar, writes data-theme onto
+// <html>, and the document arrives already correct. No script, no flash, and
+// nothing for the renderer to do but read the attribute it was given.
+//
+// Everything here fails open to "follow the system": a sidecar that does not
+// answer, a value that is not one of the three states, or markup without the
+// anchor below all serve the file unchanged. A wrong theme for one launch is a
+// bad day; a window that will not open because the theme could not be read is
+// a worse one.
+const (
+	appearanceAnchor  = `<html lang="en">`
+	appearanceTimeout = 2 * time.Second
+)
+
+// withAppearance serves the app document with the stored appearance already
+// applied, and delegates every other asset untouched.
+func withAppearance(base string, renderer fs.FS, sidecarPort int, sidecarToken string, next http.Handler) http.Handler {
+	client := &http.Client{Timeout: appearanceTimeout}
+	sidecar := fmt.Sprintf("http://127.0.0.1:%d/settings/appearance", sidecarPort)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path != base+"/" && r.URL.Path != base+"/index.html" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		document, err := fs.ReadFile(renderer, "index.html")
+		if err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		document = applyAppearance(document, readAppearance(r.Context(), client, sidecar, sidecarToken))
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// Never cached: the document now carries a preference that changes,
+		// and a cached copy is a stale theme on the next launch.
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Length", strconv.Itoa(len(document)))
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodHead {
+			return
+		}
+		_, _ = w.Write(document)
+	})
+}
+
+// readAppearance asks the sidecar which theme this machine chose. It answers
+// "" for anything it is not certain about, which the caller treats as "follow
+// the system".
+func readAppearance(ctx context.Context, client *http.Client, url, token string) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("X-Local-Token", token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
+	if err != nil {
+		return ""
+	}
+	var payload struct {
+		Appearance string `json:"appearance"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	// The whitelist is repeated here rather than trusted from the sidecar,
+	// because this is the step that turns a stored string into markup.
+	switch payload.Appearance {
+	case "light", "dark":
+		return payload.Appearance
+	default:
+		return ""
+	}
+}
+
+// applyAppearance writes data-theme onto <html>. "system" — and every failure
+// upstream of it — leaves the document exactly as it was shipped, which is
+// what the stylesheet's media query already answers correctly.
+func applyAppearance(document []byte, appearance string) []byte {
+	if appearance != "light" && appearance != "dark" {
+		return document
+	}
+	anchor := []byte(appearanceAnchor)
+	index := bytes.Index(document, anchor)
+	if index < 0 {
+		return document
+	}
+	replacement := []byte(`<html lang="en" data-theme="` + appearance + `">`)
+	out := make([]byte, 0, len(document)+len(replacement)-len(anchor))
+	out = append(out, document[:index]...)
+	out = append(out, replacement...)
+	out = append(out, document[index+len(anchor):]...)
+	return out
 }
 
 // uiLoginPrefix is the renderer's only way to drive the password login. It is

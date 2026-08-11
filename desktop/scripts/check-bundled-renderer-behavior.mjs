@@ -30,7 +30,7 @@ const rendererDir = process.env.WORKMAX_BUNDLED_RENDERER_DIR
   : path.join(repoRoot, "desktop/renderer/en/desktop");
 const rendererPath = path.join(rendererDir, "renderer.js");
 // The entry module and every module it pulls in. The discipline checks below
-// (no innerHTML, no console, one localStorage key) run over the concatenation
+// (no innerHTML, no console, no web storage) run over the concatenation
 // of all of them, because "the renderer does not do X" has to keep meaning the
 // whole renderer after the split, not just the file that used to be all of it.
 const RENDERER_MODULES = [
@@ -167,34 +167,25 @@ assert.doesNotMatch(
   rendererSource,
   /\/api\/v1\/desktop\/identity\/login-transactions|transaction_secret|transactionSecret|exchange_token|exchangeToken|DesktopLogin|DesktopExchange|authorization_code|redirect_location/u
 );
-assert.doesNotMatch(rendererSource, /sessionStorage|indexedDB|console\./u);
-// localStorage is allowed for exactly one thing: the appearance preference.
-// It is reached only through globalThis (the bare identifier throws where the
-// API is absent, which is every non-browser host this file is loaded in), and
-// only ever under one key. Both halves are pinned here, because "we only use
-// storage for the theme" is a claim that decays the moment nobody checks it.
+assert.doesNotMatch(rendererSource, /console\./u);
+// The renderer keeps nothing in web storage, in any spelling.
+//
+// The appearance preference was the last holdout and it is gone: localStorage
+// is scoped to an origin, this app's UI origin binds a fresh port every launch,
+// so the theme was being written to a store no later launch could read. It
+// lives in SQLite behind the sidecar now, and the document arrives with
+// data-theme already on <html>. Nothing else may drift back in here — the
+// sidecar is the only thing on this machine whose identity survives a restart.
 {
   // Comment lines are excluded: the rule is about what the code does, not
   // about whether a comment may name the thing it explains.
   const codeLines = rendererSource
     .split("\n")
     .filter((line) => !/^\s*(?:\/\/|\/\*|\*)/u.test(line));
-  const storageUses = codeLines.flatMap((line) =>
-    [...line.matchAll(/(.{0,11})localStorage/gu)].map((m) => m[1]),
+  const storageUses = codeLines.filter((line) =>
+    /\b(?:localStorage|sessionStorage|indexedDB)\b/u.test(line),
   );
-  assert.equal(storageUses.length, 1, "the appearance preference is the only localStorage use");
-  assert.ok(
-    storageUses[0].endsWith("globalThis."),
-    `localStorage must be reached through globalThis, got "${storageUses[0]}localStorage"`,
-  );
-  const storageKeys = codeLines.flatMap((line) =>
-    [...line.matchAll(/\.(?:get|set|remove)Item\(([^,)]+)/gu)].map((m) => m[1].trim()),
-  );
-  assert.deepEqual(
-    [...new Set(storageKeys)],
-    ["THEME_STORAGE_KEY"],
-    "localStorage must hold the appearance preference and nothing else",
-  );
+  assert.deepEqual(storageUses, [], "the renderer must keep no state in web storage");
 }
 // The Markdown renderer and the syntax highlighter both build DOM out of
 // createElement and createTextNode, which is what makes "model output cannot
@@ -447,27 +438,6 @@ class FakeElement {
   }
 }
 
-// A localStorage stand-in. Not installed by default: the renderer has to work
-// where the API is missing (and does — the appearance preference simply stops
-// persisting), and most tests run in exactly that shape to keep it honest.
-class FakeStorage {
-  constructor(seed = {}) {
-    this.values = new Map(Object.entries(seed));
-  }
-
-  getItem(key) {
-    return this.values.has(key) ? this.values.get(key) : null;
-  }
-
-  setItem(key, value) {
-    this.values.set(key, String(value));
-  }
-
-  removeItem(key) {
-    this.values.delete(key);
-  }
-}
-
 // The element set is derived from index.html rather than listed here.
 //
 // It used to be a hardcoded array, and it drifted: twenty elements added by
@@ -501,8 +471,9 @@ class FakeDocument {
   constructor(rendererHtml) {
     this.byId = new Map();
     this.listeners = new Map();
-    // <html>. The appearance preference is an attribute on it, set before
-    // anything else in renderer.js runs, so it has to exist from the start.
+    // <html>. The appearance preference is an attribute on it — written by the
+    // shell into the served markup, before a single line of renderer.js runs —
+    // so it has to exist, and be settable, from the start.
     this.documentElement = new FakeElement("html");
     // Operation counters, for the performance gate: a per-token selector walk
     // or full-text reset is invisible to a correctness assertion and shows up
@@ -699,6 +670,10 @@ function walk(node, predicate, out = []) {
 
 async function runRenderer(mockBridge, mockDesktopBridge, options = {}) {
   const document = new FakeDocument(rendererHTML);
+  // What the shell wrote into <html> before the page was handed over. Absent
+  // by default, which is what "follow the system" looks like on the wire —
+  // and what every other test in this file runs against.
+  if (options.theme) document.documentElement.setAttribute("data-theme", options.theme);
   let uuidSequence = 0;
   const crypto = {
     randomUUID() {
@@ -4069,6 +4044,39 @@ async function testLocalAccountSwitcherSwitchesAndReloads() {
   );
 }
 
+// The gear sits inside the identity row, so "open the switcher, then decide
+// you wanted Settings" is a normal path rather than a corner case. The popover
+// lives in the sidebar, which the modal's backdrop covers without closing — it
+// was left stranded under the scrim, visible and unclickable, which reads as a
+// stuck menu rather than as a layer that has been dismissed.
+async function testOpeningSettingsDismissesTheIdentityPopover() {
+  const { bridge, desktopBridge } = localModeBridge({
+    localRoute: true,
+    accounts: [{ id: 1, name: "Local", active: true }],
+  });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  document.byId.get("local-account-row").click();
+  await settle();
+  assert.equal(document.byId.get("local-account-panel").hidden, false, "the switcher is open");
+
+  document.byId.get("settings-button").click();
+  await settle();
+
+  assert.equal(document.byId.get("settings-overlay").hidden, false, "settings opened");
+  assert.equal(
+    document.byId.get("local-account-panel").hidden,
+    true,
+    "the identity popover must not survive under the settings backdrop",
+  );
+  assert.equal(
+    document.byId.get("local-account-row").getAttribute("aria-expanded"),
+    "false",
+    "the row that opened it has to stop claiming it is expanded",
+  );
+}
+
 async function testLocalAccountCreateDoesNotSwitch() {
   const accounts = [{ id: 1, name: "Local", active: true }];
   const { bridge, desktopBridge, accountCalls } = localModeBridge({
@@ -7388,9 +7396,26 @@ async function testCreateRejectsForeignUUIDAndMode() {
 // The cascade itself is checked against styles.css at the top of this file.
 // What is checked here is the hook: which attribute lands on <html>, when, and
 // what survives a relaunch.
+//
+// "Survives a relaunch" changed shape and is the whole point of the exercise.
+// The preference used to be written to localStorage, which is scoped to an
+// origin — and this app's UI origin binds a new port on every launch, so the
+// theme was written to a store no later launch could ever read. It now goes to
+// the sidecar through settings.putAppearance, and comes back on the NEXT
+// launch as data-theme on the served <html>, which is what the `theme` option
+// below stands for. There is no read path in the renderer at all: a page that
+// asked would be a page that repaints.
 async function testAppearanceIsThreeStateAndPersisted() {
-  const storage = new FakeStorage();
-  const { document, ns } = await runRenderer(undefined, undefined, { storage });
+  const saved = [];
+  const appearanceBridge = () => ({
+    settings: {
+      async putAppearance(choice) {
+        saved.push(choice);
+        return typedSuccess({ appearance: choice, updated_at: "2026-08-11T00:00:00Z" });
+      },
+    },
+  });
+  const { document } = await runRenderer(undefined, appearanceBridge());
 
   // Default is "follow the system", expressed as the ABSENCE of the attribute
   // rather than data-theme="system": the media query already is the system
@@ -7432,11 +7457,11 @@ async function testAppearanceIsThreeStateAndPersisted() {
   runCommand("Appearance: dark");
   assert.equal(document.documentElement.getAttribute("data-theme"), "dark");
   assert.equal(document.byId.get("quick-switcher").hidden, true, "choosing closes the palette");
-  assert.equal(
-    storage.getItem("workmax.desktop.appearance"),
-    "dark",
-    "the choice has to outlive the window",
-  );
+  // The window changes at once; the write follows without anything waiting on
+  // it. Both halves matter: a switch that hesitated on a database would be a
+  // worse switch than the one that used to forget.
+  await settle();
+  assert.deepEqual(saved, ["dark"], "the choice has to be handed to the sidecar to outlive the window");
 
   openPalette();
   assert.ok(
@@ -7453,31 +7478,49 @@ async function testAppearanceIsThreeStateAndPersisted() {
     null,
     "going back to the system removes the attribute rather than setting a third value",
   );
-  assert.equal(storage.getItem("workmax.desktop.appearance"), "system");
+  await settle();
+  assert.deepEqual(saved, ["dark", "light", "system"], "every state is written, including the default");
 
-  // A relaunch: the preference is read and applied by the first statement in
-  // renderer.js, before any DOM work, which is what keeps the wrong theme from
-  // being painted for a frame.
-  const relaunched = await runRenderer(undefined, undefined, {
-    storage: new FakeStorage({ "workmax.desktop.appearance": "dark" }),
-  });
+  // A relaunch. The document arrives already dark — the shell resolved the
+  // stored preference while serving index.html — and the renderer's job is to
+  // agree with it rather than to go and ask, which is what keeps a light frame
+  // from ever being painted.
+  const relaunched = await runRenderer(undefined, appearanceBridge(), { theme: "dark" });
   assert.equal(relaunched.document.documentElement.getAttribute("data-theme"), "dark");
+  relaunched.document.dispatchKey({ key: "k", metaKey: true });
+  assert.ok(
+    walk(
+      relaunched.document.byId.get("quick-switcher-list"),
+      (node) => node.classList?.contains("quick-switcher-command"),
+    )
+      .map((node) => node.textContent)
+      .some((entry) => entry.startsWith("Appearance: dark") && entry.includes("Current")),
+    "a relaunched window knows which appearance it is showing",
+  );
 
-  // Anything else in the slot is somebody else's data or a corrupted write.
-  const garbage = await runRenderer(undefined, undefined, {
-    storage: new FakeStorage({ "workmax.desktop.appearance": "<script>" }),
-  });
+  // Anything else in the attribute is a shell that has drifted or markup that
+  // was tampered with; it means "no opinion", never a third state on the page.
+  const garbage = await runRenderer(undefined, appearanceBridge(), { theme: "<script>" });
   assert.equal(
     garbage.document.documentElement.getAttribute("data-theme"),
     null,
-    "an unrecognised stored value falls back to the system, never onto the page",
+    "an unrecognised served value falls back to the system, never onto the page",
   );
 
-  // And with no storage at all — a locked-down webview — the app still runs and
-  // simply forgets. Every other test in this file runs in that shape; this is
-  // the one that says so on purpose.
-  const noStorage = await runRenderer(undefined);
-  assert.equal(noStorage.document.documentElement.getAttribute("data-theme"), null);
+  // And against a shell with no appearance route at all, the app still
+  // switches — it just will not remember. Every other test in this file runs
+  // in that shape; this is the one that says so on purpose.
+  const noBridge = await runRenderer(undefined);
+  assert.equal(noBridge.document.documentElement.getAttribute("data-theme"), null);
+  noBridge.document.dispatchKey({ key: "k", metaKey: true });
+  walk(
+    noBridge.document.byId.get("quick-switcher-list"),
+    (node) => node.classList?.contains("quick-switcher-command"),
+  )
+    .find((node) => node.textContent.startsWith("Appearance: dark"))
+    .click();
+  await settle();
+  assert.equal(noBridge.document.documentElement.getAttribute("data-theme"), "dark");
 }
 
 // --- Syntax highlighting -----------------------------------------------------
@@ -8170,6 +8213,7 @@ await testMessageActionsAbsentWithoutAClipboard();
 await testStreamedAnswerGainsActionsWhenReconcileFails();
 await testSignedOutLocalRouteCanDriveTheAgent();
 await testLocalAccountSwitcherSwitchesAndReloads();
+await testOpeningSettingsDismissesTheIdentityPopover();
 await testLocalAccountCreateDoesNotSwitch();
 await testLocalAccountRenameIsALabelChange();
 await testLocalAccountDeleteIsArmedAndScoped();

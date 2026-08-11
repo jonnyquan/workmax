@@ -114,6 +114,12 @@ type ServerConfig struct {
 	// returns 503; production Main always wires a store.
 	ModelSettings *LocalModelSettingsStore
 
+	// UIPreferences owns the machine's display preferences — today, the
+	// appearance choice. Nil → /settings/appearance returns 503 and the shell
+	// serves index.html with no data-theme, i.e. follow the system; production
+	// Main always wires a store.
+	UIPreferences *UIPreferenceStore
+
 	// LocalInference runs agent turns against the user-configured local model
 	// when preferred_route=local (L1). Nil → local route is never selected
 	// (shouldUseLocalRoute returns false); production Main wires the engine.

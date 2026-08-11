@@ -197,6 +197,24 @@ export interface ModelRouteSettingsPut {
 }
 
 /**
+ * The three appearance states. "system" is the default and is expressed in the
+ * document as the absence of data-theme, never as a third attribute value.
+ */
+export type AppearanceChoice = "system" | "light" | "dark";
+
+/**
+ * The machine's appearance preference. Machine-scoped rather than
+ * per-identity: it describes this screen, not who is signed in. There is
+ * deliberately no `getAppearance` here — the shell resolves the preference
+ * while serving index.html and writes it onto <html>, so the page starts with
+ * the answer instead of fetching it and repainting.
+ */
+export interface AppearanceSettings {
+  appearance: AppearanceChoice;
+  updated_at: string;
+}
+
+/**
  * One official model as the cloud describes it. Metadata only — no key, no
  * endpoint. An empty `permissions` means visible but not usable at this tier.
  */
@@ -657,6 +675,9 @@ export interface DesktopBridge {
       input: ModelRouteSettingsPut
     ) => Promise<DesktopBridgeResult<ModelRouteSettings>>;
     getModelCatalog: () => Promise<DesktopBridgeResult<ModelCatalog>>;
+    putAppearance: (
+      choice: AppearanceChoice
+    ) => Promise<DesktopBridgeResult<AppearanceSettings>>;
   };
 }
 
@@ -984,6 +1005,14 @@ const ROUTES = {
     "json",
     "application/json"
   ),
+  settingsPutAppearance: defineTypedRoute(
+    "settings.putAppearance",
+    "settings.appearance.put",
+    "PUT",
+    "/settings/appearance",
+    "json",
+    "application/json"
+  ),
   agentUploadThreadFile: defineTypedRoute(
     "agent.uploadThreadFile",
     "agent.thread-file-upload",
@@ -1008,6 +1037,7 @@ const JSON_BODY_LIMITS = {
   "agent.startTurn": 1 << 20,
   "system.writeLog": 65_536,
   "settings.putModelRoute": 8 << 10,
+  "settings.putAppearance": 1 << 10,
   "agent.setThreadCloudSync": 512,
 } as const;
 
@@ -1295,6 +1325,20 @@ export function createDesktopBridge(
         );
         return validateModelCatalogResult(result);
       },
+      putAppearance: async (choice) => {
+        if (choice !== "system" && choice !== "light" && choice !== "dark") {
+          throw new TypeError(
+            'settings.putAppearance choice must be "system", "light" or "dark"'
+          );
+        }
+        const result = await execute<unknown>(
+          deps,
+          ROUTES.settingsPutAppearance,
+          undefined,
+          { appearance: choice }
+        );
+        return validateAppearanceSettingsResult(result);
+      },
     },
   };
 }
@@ -1360,7 +1404,12 @@ function buildCapabilities(): DesktopBridgeCapabilities {
       },
       settings: {
         supported: true,
-        methods: ["getModelRoute", "putModelRoute", "getModelCatalog"],
+        methods: [
+          "getModelRoute",
+          "putModelRoute",
+          "getModelCatalog",
+          "putAppearance",
+        ],
       },
       artifact: {
         supported: false,
@@ -1560,6 +1609,47 @@ function validateModelRouteSettingsResult(
       },
       updated_at: record.updated_at as string,
     },
+  };
+}
+
+// The stored appearance comes back so a caller can tell "saved" from "saved
+// something else". Parsed as strictly as every other response: the value ends
+// up as an attribute on <html>, and a payload nobody checked is exactly how a
+// closed vocabulary stops being closed.
+function validateAppearanceSettingsResult(
+  result: DesktopBridgeResult<unknown>
+): DesktopBridgeResult<AppearanceSettings> {
+  if (!result.ok) {
+    return result;
+  }
+  const data = result.data;
+  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+    throw new TypeError("settings appearance response is malformed");
+  }
+  const record = data as Record<string, unknown>;
+  assertExactKeys(
+    record,
+    ["appearance", "updated_at"],
+    "settings appearance response"
+  );
+  const appearance = record.appearance;
+  if (
+    appearance !== "system" &&
+    appearance !== "light" &&
+    appearance !== "dark"
+  ) {
+    throw new TypeError("settings appearance value is malformed");
+  }
+  if (
+    typeof record.updated_at !== "string" ||
+    record.updated_at === "" ||
+    Number.isNaN(Date.parse(record.updated_at))
+  ) {
+    throw new TypeError("settings appearance updated_at is malformed");
+  }
+  return {
+    ...result,
+    data: { appearance, updated_at: record.updated_at as string },
   };
 }
 

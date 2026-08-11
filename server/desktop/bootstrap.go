@@ -327,6 +327,10 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 	// API key in the same Keychain backend as OAuth tokens (separate account).
 	modelSettings := NewLocalModelSettingsStore(dbRes.DB, keychain)
 
+	// Display preferences for this machine. Small, non-secret, and read once
+	// per launch by the shell before the window paints.
+	uiPreferences := NewUIPreferenceStore(dbRes.DB)
+
 	// Whose settings? The same answer every HTTP handler gets, resolved at the
 	// moment an engine asks rather than frozen at boot — a machine can change
 	// hands (local account switch, connect/disconnect an account) without the
@@ -475,6 +479,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 		BackupPath:       dbRes.BackupPath,
 		IntegrityCheck:   dbRes.IntegrityCheck,
 		ModelSettings:    modelSettings,
+		UIPreferences:    uiPreferences,
 		ModelGateway:     modelGateway,
 		LocalInference:   localInference,
 		LocalAgent:       localAgent,

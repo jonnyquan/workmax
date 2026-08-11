@@ -175,20 +175,20 @@ import {
 // palette and the cascade that resolves the three live in styles.css; all this
 // code does is put the attribute the cascade keys on onto <html>.
 //
-// It runs at the top of this file, and this file is the last parser-blocking
-// script in <body>, so the attribute is set before the first paint — no flash
-// of the wrong theme. It cannot be an inline <script> in <head>, which is where
-// this normally goes: the shell's CSP grants no 'unsafe-inline' for scripts,
-// and that concession is not being reopened for a colour scheme.
+// The starting value is NOT read here — it is already on the page. The shell
+// resolves the stored preference while it serves index.html and writes
+// data-theme onto <html> itself (desktop/wails/uiserver.go, withAppearance),
+// so the document is painted right the first time instead of being corrected
+// a round trip later. All this file does on boot is agree with what it was
+// handed, which is why the theme cannot flash: there is no moment at which the
+// page has a different opinion from the document it arrived as.
 //
-// This is the renderer's only use of localStorage, and the reason it is the
-// right home for exactly this one thing: it is a device-local display
-// preference — worthless to an attacker, meaningless on another machine, and
-// needed synchronously on the first line of the first script, before any bridge
-// exists to ask the sidecar. Everything the app actually knows (threads,
-// accounts, drafts, tokens) stays in SQLite behind the sidecar or in memory, on
-// purpose, and none of it should follow this precedent.
-const THEME_STORAGE_KEY = "workmax.desktop.appearance";
+// It used to be kept in localStorage, and that never once worked. localStorage
+// is scoped to an origin — scheme, host AND port — and the UI origin binds an
+// ephemeral port on every launch, so each start was a new origin reading an
+// empty store. The preference was written faithfully and could never be read
+// back. It lives in SQLite behind the sidecar now, like everything else this
+// app remembers, and the renderer holds no storage of its own at all.
 export const THEME_CHOICES = ["system", "light", "dark"];
 export const THEME_LABELS = {
   system: "match system",
@@ -202,25 +202,12 @@ export const THEME_HINTS = {
 };
 export let themeChoice = "system";
 
-// Absent in the behaviour suite's bare VM, and a locked-down webview can throw
-// on the property itself rather than return null. Either way the app runs; it
-// just forgets the choice between launches.
-function themeStore() {
-  try {
-    const store = globalThis.localStorage;
-    return store && typeof store.getItem === "function" ? store : null;
-  } catch {
-    return null;
-  }
-}
-
-function readStoredTheme() {
-  try {
-    const stored = themeStore()?.getItem(THEME_STORAGE_KEY);
-    return THEME_CHOICES.includes(stored) ? stored : "system";
-  } catch {
-    return "system";
-  }
+// What the document already says. Anything unrecognised is treated as "no
+// opinion" rather than trusted onto the page a second time.
+function readAppliedTheme() {
+  const root = document.documentElement;
+  const applied = root ? root.getAttribute("data-theme") : null;
+  return THEME_CHOICES.includes(applied) ? applied : "system";
 }
 
 function applyTheme(choice) {
@@ -237,10 +224,28 @@ function applyTheme(choice) {
 export function setTheme(choice) {
   applyTheme(choice);
   renderAppearanceChoice();
+  void persistTheme(themeChoice);
+}
+
+// The window changes immediately and the write follows. Nothing waits on the
+// sidecar to repaint: a theme that hesitates while a database is written would
+// be a worse switch than the one that used to forget.
+async function persistTheme(choice) {
+  const settings = window.desktopBridge?.settings;
+  // A shell too old to have the route is not an error the user can act on —
+  // the app still switches, it just will not remember. Saying so on every
+  // click would be noise about a build they are not running.
+  if (!isRecord(settings) || typeof settings.putAppearance !== "function") return;
   try {
-    themeStore()?.setItem(THEME_STORAGE_KEY, themeChoice);
+    const result = parseDesktopBridgeResult(
+      await settings.putAppearance(choice),
+      "settings.putAppearance"
+    );
+    if (!result.ok) throw new Error("appearance not saved");
   } catch {
-    // A full or locked store must not take the window down over a colour.
+    // A failure here is silent by nature — the window already looks right, and
+    // the surprise lands on the next launch. Better to say it now.
+    setStatus("Appearance changed for now, but it could not be saved.", "error");
   }
 }
 
@@ -260,7 +265,7 @@ function renderAppearanceChoice() {
   }
 }
 
-applyTheme(readStoredTheme());
+applyTheme(readAppliedTheme());
 
 export const state = {
   auth: null,
@@ -675,6 +680,16 @@ function fillModelSettingsForm(settings) {
 // model section fills itself in — or says why it cannot — once it is on screen.
 export function openSettingsPanel() {
   if (!settingsOverlay) return;
+  // The identity popover is dismissed on the way in. It lives in the sidebar,
+  // which the modal's backdrop covers but does not close, so leaving it open
+  // stranded a menu under the scrim: visible, greyed, and unclickable. The
+  // gear sits right next to the row that opens it, so this is a normal way to
+  // arrive here rather than a corner case.
+  if (state.localAccountPanelOpen) {
+    state.localAccountPanelOpen = false;
+    state.localAccountRenamingID = null;
+    renderLocalAccountArea();
+  }
   settingsOverlay.hidden = false;
   renderAppearanceChoice();
   renderLocalAccountBinding();

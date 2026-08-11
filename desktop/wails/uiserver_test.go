@@ -311,3 +311,109 @@ func TestOpenExternalIsReachableOnlyUnderTheCapability(t *testing.T) {
 		t.Fatalf("capability-bearing /open-external = %d, want 200", rec.Code)
 	}
 }
+
+// The appearance preference is resolved HERE, while index.html is served, and
+// not by the page after it has painted.
+//
+// This is the fix for a preference that never once persisted: it used to live
+// in the renderer's localStorage, which is scoped to an origin, and this
+// origin's port is minted per launch — so every start read an empty store.
+// Moving it to the sidecar is only half the answer; the other half is that the
+// page must not have to ask, because an async read after first paint is a
+// light window that turns dark on every launch. script-src 'self' rules out
+// the usual inline <script> in <head>, so the shell writes the attribute into
+// the markup it hands over.
+func TestUIIndexCarriesTheStoredAppearance(t *testing.T) {
+	const document = "<!doctype html>\n<html lang=\"en\">\n  <head></head>\n</html>\n"
+	var asked []string
+	appearance := `{"appearance":"dark","updated_at":"2026-08-11T00:00:00Z"}`
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.Method+" "+r.URL.Path+" token="+r.Header.Get("X-Local-Token"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, appearance)
+	}))
+	defer sidecar.Close()
+
+	const cap = "test-capability"
+	handler := UIHandler(fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte(document)}},
+		cap, sidecarPortOf(t, sidecar.URL), "secret-token")
+
+	serve := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+
+	rec := serve("/" + cap + "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `<html lang="en" data-theme="dark">`) {
+		t.Fatalf("served document did not carry the stored theme:\n%s", rec.Body.String())
+	}
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("Cache-Control = %q; a cached document is a stale theme next launch", rec.Header().Get("Cache-Control"))
+	}
+	// Containment is unchanged: the document still goes out through the same
+	// header middleware as every other asset.
+	if !strings.Contains(rec.Header().Get("Content-Security-Policy"), "script-src 'self'") {
+		t.Error("the injected document must still carry the CSP")
+	}
+	if len(asked) != 1 || asked[0] != "GET /settings/appearance token=secret-token" {
+		t.Fatalf("sidecar traffic = %v; the shell must read the preference with its own token", asked)
+	}
+
+	// /index.html is the same document and must not be answered differently.
+	if !strings.Contains(serve("/"+cap+"/index.html").Body.String(), `data-theme="dark"`) {
+		t.Error("the explicit index path must carry the theme too")
+	}
+
+	// "system" is the absence of the attribute, never a third value.
+	appearance = `{"appearance":"system","updated_at":"2026-08-11T00:00:00Z"}`
+	if body := serve("/" + cap + "/").Body.String(); body != document {
+		t.Fatalf("system must serve the document untouched, got:\n%s", body)
+	}
+
+	// A value the shell does not recognise is not written into markup.
+	appearance = `{"appearance":"dark\" onload=\"alert(1)"}`
+	if body := serve("/" + cap + "/"); strings.Contains(body.Body.String(), "onload") {
+		t.Fatalf("an unrecognised value reached the markup:\n%s", body.Body.String())
+	}
+}
+
+// The window has to open even when the preference cannot be read. A theme is
+// not worth a blank window.
+func TestUIIndexFallsBackToTheSystemAppearance(t *testing.T) {
+	const document = "<!doctype html>\n<html lang=\"en\">\n</html>\n"
+	const cap = "test-capability"
+	// Port 1: nothing is listening, so the read fails immediately.
+	handler := UIHandler(fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte(document)}}, cap, 1, "tok")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/"+cap+"/", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != document {
+		t.Fatalf("status=%d body=%q; an unreachable sidecar must still serve the app", rec.Code, rec.Body.String())
+	}
+}
+
+// Only the document is rewritten. Everything else is still the file server's,
+// byte for byte.
+func TestUIAppearanceLeavesOtherAssetsAlone(t *testing.T) {
+	const cap = "test-capability"
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"appearance":"dark","updated_at":"2026-08-11T00:00:00Z"}`)
+	}))
+	defer sidecar.Close()
+
+	const script = `const html = '<html lang="en">';`
+	handler := UIHandler(fstest.MapFS{
+		"index.html":  &fstest.MapFile{Data: []byte(`<html lang="en"></html>`)},
+		"renderer.js": &fstest.MapFile{Data: []byte(script)},
+	}, cap, sidecarPortOf(t, sidecar.URL), "tok")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/"+cap+"/renderer.js", nil))
+	if rec.Body.String() != script {
+		t.Fatalf("a script was rewritten: %q", rec.Body.String())
+	}
+}

@@ -29,7 +29,8 @@
       "typed-model-route-settings-bridge",
       "per-identity-model-settings",
       "official-model-catalog-selection",
-      "per-thread-cloud-sync-switch"
+      "per-thread-cloud-sync-switch",
+      "machine-scoped-appearance-preference"
     ],
     "legacyHostedFallback": false,
     "runtimePolicy": "packaged-bundled-only-development-explicit",
@@ -188,6 +189,10 @@
       {
         "bridgeMethod": "settings.getModelCatalog",
         "routeId": "settings.model-catalog.get"
+      },
+      {
+        "bridgeMethod": "settings.putAppearance",
+        "routeId": "settings.appearance.put"
       }
     ],
     "localMethods": [
@@ -249,6 +254,10 @@
       {
         "routeId": "system.network-state",
         "reason": "typed-sse-contract-unavailable"
+      },
+      {
+        "routeId": "settings.appearance.get",
+        "reason": "appearance-read-by-the-shell-into-index-html-before-first-paint"
       }
     ],
     "unsupportedNamespaces": [
@@ -818,6 +827,33 @@
         ],
         "maxBodyBytes": 8192,
         "bodyTooLargeError": "model settings body too large"
+      }
+    },
+    {
+      "id": "settings.appearance.get",
+      "method": "GET",
+      "path": "/settings/appearance",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "settings.appearance.put",
+      "method": "PUT",
+      "path": "/settings/appearance",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 1024,
+        "bodyTooLargeError": "appearance settings body too large"
       }
     },
     {
