@@ -61,6 +61,48 @@ Expected:
   CSP, extra remote CSP connect sources, non-relative CSS/JS references, and
   unexpected or token-like embedded files.
 
+## 1b. L2 Tool Loop and Approvals
+
+The tool loop is the one path whose behavior lives inside somebody else's
+binary, so it gets its own smoke against the real claude CLI. Everything is
+local: a scripted Anthropic endpoint stands in for the model, so the harness
+picks which tool the loop calls and when.
+
+```bash
+WORKMAX_TEST_CLAUDE_CLI=$HOME/.local/share/claude/versions/<ver> \
+  ./desktop/scripts/smoke-l2-approvals.sh
+```
+
+It owns its own sidecar (isolated data dir, both approval modes) and prints one
+`ok`/`FAIL` line per claim. `--skip-timeout` drops the case that waits out the
+120s approval timeout; `--keep` keeps the data dir and per-turn `.sse`
+captures for inspection. Without a CLI it prints "skipping" and exits 0, the
+same env gate as `TestIntegration_CLIEndpointInventory` — CI has no claude
+binary.
+
+Expected: 31 checks pass. What they cover:
+
+- a write tool call raises an `approval_request` frame carrying id, name and
+  target; each of the four decisions is answered through the same
+  `POST /agent/turns/:uuid/approve` route the renderer's card uses;
+- `allow_once` runs the tool and the turn still reaches `done`; `deny` leaves
+  the file absent, narrates `tool_denied`, and the turn survives the refusal;
+- `allow_session` silences the next call on the same thread; `allow_always`
+  silences a new thread too and leaves exactly one
+  `w_desktop_agent_permission_rule` row for the active local uid;
+- read-only tools (`Read`/`Glob`/`Grep`) never ask;
+- a tool outside the declared surface (`Bash`) is refused and does not execute
+  — in BOTH modes, including pre-approved mode, which is where it once did;
+- a write outside the workspace is refused outright, never offered as a card;
+- an unanswered card denies on the sidecar's 120s timeout while the stream
+  stays alive on keepalives;
+- with `WORKMAX_L2_APPROVALS` unset the loop is back to pre-approved mode: no
+  card, the tool runs, and the approve endpoint answers 503.
+
+`desktop/scripts/smoke-l2-approvals.test.sh` covers the harness itself without
+a CLI or a sidecar: the preflight, the skip gate, the approve payload's shell
+quoting, and the scripted endpoint's directive rules.
+
 Optional authenticated additions:
 
 ```bash

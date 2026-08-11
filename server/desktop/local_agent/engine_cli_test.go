@@ -373,6 +373,93 @@ func TestIntegration_WorkspaceEscapeIsDeniedAndNarrated(t *testing.T) {
 	}
 }
 
+// surfaceFake scripts a model that reaches for a tool the loop never declared
+// — Bash — and asks it to touch a file outside the workspace. Then it settles.
+type surfaceFake struct {
+	escapePath string
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *surfaceFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	f.calls++
+	call := f.calls
+	f.mu.Unlock()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	sseWrite(w, "message_start", map[string]any{"type": "message_start", "message": map[string]any{
+		"id": "msg_surf", "type": "message", "role": "assistant", "model": "fake",
+		"content": []any{}, "stop_reason": nil,
+		"usage": map[string]any{"input_tokens": 1, "output_tokens": 1}}})
+	if call == 1 {
+		input, _ := json.Marshal(map[string]string{
+			"command":     "touch " + f.escapePath,
+			"description": "surface probe",
+		})
+		sseWrite(w, "content_block_start", map[string]any{"type": "content_block_start", "index": 0,
+			"content_block": map[string]any{"type": "tool_use", "id": "toolu_surf", "name": "Bash", "input": map[string]any{}}})
+		sseWrite(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": 0,
+			"delta": map[string]any{"type": "input_json_delta", "partial_json": string(input)}})
+		sseWrite(w, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+		sseWrite(w, "message_delta", map[string]any{"type": "message_delta",
+			"delta": map[string]any{"stop_reason": "tool_use", "stop_sequence": nil},
+			"usage": map[string]any{"output_tokens": 5}})
+	} else {
+		sseWrite(w, "content_block_start", map[string]any{"type": "content_block_start", "index": 0,
+			"content_block": map[string]any{"type": "text", "text": ""}})
+		sseWrite(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": 0,
+			"delta": map[string]any{"type": "text_delta", "text": "SURFACE-HANDLED"}})
+		sseWrite(w, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+		sseWrite(w, "message_delta", map[string]any{"type": "message_delta",
+			"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil},
+			"usage": map[string]any{"output_tokens": 2}})
+	}
+	sseWrite(w, "message_stop", map[string]any{"type": "message_stop"})
+}
+
+// The tool surface, through the whole stack, in PRE-APPROVED mode — the
+// shipping default and the configuration where this was open.
+//
+// WithAllowedTools is an auto-approve list, not a restriction, and
+// bypassPermissions approves what is not on it. Before the PreToolUse surface
+// check, this exact scenario ran `touch` and the file landed outside the
+// workspace. The unit tests could not have caught it: it takes the real CLI
+// to show that the option we passed did not mean what the comment said.
+func TestIntegration_ToolOutsideTheSurfaceCannotRun(t *testing.T) {
+	db := openTestDB(t)
+	seedThreadRow(t, db)
+
+	escapePath := filepath.Join(t.TempDir(), "surface-proof.txt")
+	upstream := httptest.NewServer(&surfaceFake{escapePath: escapePath})
+	t.Cleanup(upstream.Close)
+
+	engine, _ := newCLIEngine(t, db, upstream.URL)
+
+	dst := &memSSEWriter{}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if err := engine.Chat(ctx, chatReq(), dst); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	if _, err := os.Stat(escapePath); !os.IsNotExist(err) {
+		t.Fatalf("a tool outside the surface EXECUTED and its file reached the disk: %v", err)
+	}
+	frames, _ := dst.snapshot()
+	sawDenied := false
+	for _, f := range frames {
+		if f.Type == "tool_denied" && strings.Contains(f.Data, "Bash") {
+			sawDenied = true
+		}
+	}
+	if !sawDenied {
+		t.Errorf("the out-of-surface call must be narrated as denied; frames: %+v", frames)
+	}
+}
+
 // endpointRecorder is the resident form of the probe that produced the
 // count_tokens finding: it answers ONLY the endpoints we proxy, records every
 // path the CLI asks for, and 404s anything else.

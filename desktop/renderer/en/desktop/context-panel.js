@@ -71,6 +71,25 @@ export function setRetrievedContext(sources) {
 }
 
 export function recordToolActivity(entry, activeTurn) {
+  // A denial lands as a SECOND frame about a call the log already has: the
+  // sidecar announces the tool the moment the model asks for it, and only
+  // then does the guard refuse it or the user decline the card. Appending
+  // would read as two steps — "Write outline.md" followed by "Write
+  // outline.md blocked" — and count as two in the "N steps · 1 blocked"
+  // receipt. One call is one row: fold the denial into the step it settles.
+  if (entry.denied) {
+    for (let i = contextState.toolActivity.length - 1; i >= 0; i -= 1) {
+      const step = contextState.toolActivity[i];
+      if (step.denied || step.name !== entry.name || step.target !== entry.target) continue;
+      step.denied = true;
+      step.reason = entry.reason;
+      renderTaskContext();
+      if (activeTurn?.assistantBubble?.parentNode) {
+        renderWorkLog(activeTurn.assistantBubble.parentNode, contextState.toolActivity, [], true);
+      }
+      return;
+    }
+  }
   // Bounded: a pathological turn making thousands of calls must not grow an
   // unbounded array behind the panel.
   if (contextState.toolActivity.length >= 200) return;

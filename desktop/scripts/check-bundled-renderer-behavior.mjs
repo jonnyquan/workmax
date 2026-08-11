@@ -3240,6 +3240,36 @@ async function testToolLoopActivityAndDeliverables() {
     "activity must reset per turn",
   );
   assert.doesNotMatch(document.byId.get("run-overview-list").textContent, /Edit…|blocked/);
+
+  // One call is one row. The sidecar announces a tool the moment the model
+  // asks for it and only then does the guard refuse it or the user decline
+  // the approval card — so the denial always arrives as a SECOND frame about
+  // a call the log already has. Appending would read as two steps and count
+  // as two in the receipt, for a tool that ran zero times.
+  const liveSteps = () => {
+    const strip = walk(
+      document.byId.get("message-list"),
+      (n) => n.classList?.contains("message-worklog") && n.classList?.contains("live"),
+    )[0];
+    return strip
+      ? walk(strip, (n) => n.classList?.contains("worklog-step") && !n.classList?.contains("produced"))
+      : [];
+  };
+  emit({ type: "tool_use", name: "Write", target: "draft.md" });
+  emit({ type: "tool_denied", name: "Write", target: "draft.md", reason: "用户拒绝了此操作" });
+  await settle();
+  {
+    const steps = liveSteps();
+    assert.equal(steps.length, 1, "a denial settles the step it refers to instead of adding one");
+    assert.equal(steps[0].classList.contains("denied"), true, "and that step reads as blocked");
+    assert.match(steps[0].textContent, /Write.*draft\.md.*blocked/su);
+  }
+  // A denial with no matching step still has to be visible: the guard can
+  // refuse a call the stream never announced.
+  emit({ type: "tool_denied", name: "Bash", target: "", reason: "工具不在本地循环的许可面内" });
+  await settle();
+  assert.equal(liveSteps().length, 2, "an unmatched denial is still its own row");
+
   emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
   await settle();
 }

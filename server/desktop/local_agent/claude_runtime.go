@@ -101,12 +101,20 @@ const localAgentSystemPrompt = `You are WorkMax's local agent. You work inside t
 // configured base URL.
 const placeholderAPIKey = "workmax-local-no-key"
 
-// securityHook gates every tool call against the workspace path policy
-// before the CLI executes it. Denials are narrated through emit — a blocked
-// tool is part of the turn's story, not a secret. The hook fires on the SDK's
-// transport goroutine while pump reads on the caller's; the denial path of
-// the bridge touches only the (locked) SSE writer, so that concurrency is
-// the same as it always was.
+// securityHook gates every tool call before the CLI executes it: first
+// against the declared tool surface, then against the workspace path policy.
+// Denials are narrated through emit — a blocked tool is part of the turn's
+// story, not a secret. The hook fires on the SDK's transport goroutine while
+// pump reads on the caller's; the denial path of the bridge touches only the
+// (locked) SSE writer, so that concurrency is the same as it always was.
+//
+// The surface check is the one that must not be skipped. WithAllowedTools
+// does not restrict what the model may ask for, and pre-approved mode runs
+// with bypassPermissions — so without this the CLI's whole tool set (Bash,
+// WebFetch, NotebookEdit, Task) is reachable from whatever endpoint the user
+// pointed the app at. Verified the hard way against the real CLI: a Bash
+// `touch` outside the workspace succeeded. Everything outside the surface now
+// dies here, in both modes, before the path guard is even asked.
 //
 // Deliberate deviation from the cloud hook it descends from: an unparseable
 // payload DENIES. The cloud fails open to keep a multi-tenant conversation
@@ -127,16 +135,51 @@ func securityHook(guard *pathValidator, emit agentruntime.EmitFunc) claudesdk.Ho
 		if cast, ok := inputMap["tool_input"].(map[string]any); ok && cast != nil {
 			toolInput = cast
 		}
+		if !toolSurface[toolName] {
+			log.Printf("local agent security: BLOCKED %s: outside the tool surface", toolName)
+			_ = emit(agentruntime.Event{
+				Kind: agentruntime.EventToolDenied,
+				Tool: agentruntime.ToolEvent{
+					Name:   toolName,
+					Target: toolTarget(toolInput),
+					Reason: "工具不在本地循环的许可面内",
+				},
+			})
+			return claudesdk.NewPreToolUseOutput(claudesdk.PermissionDecisionDeny,
+				fmt.Sprintf("Tool %s is outside the local loop's surface", toolName), nil), nil
+		}
 		if err := guard.validateToolCall(toolName, toolInput); err != nil {
 			log.Printf("local agent security: BLOCKED %s: %v", toolName, err)
 			_ = emit(agentruntime.Event{
 				Kind: agentruntime.EventToolDenied,
-				Tool: agentruntime.ToolEvent{Name: toolName, Reason: err.Error()},
+				Tool: agentruntime.ToolEvent{
+					Name:   toolName,
+					Target: toolTarget(toolInput),
+					Reason: err.Error(),
+				},
 			})
 			return claudesdk.NewPreToolUseOutput(claudesdk.PermissionDecisionDeny,
 				fmt.Sprintf("Security violation: %v", err), nil), nil
 		}
-		return claudesdk.NewPreToolUseOutput(claudesdk.PermissionDecisionAllow, "", nil), nil
+		// A path the guard likes is NOT an approval — it is the absence of a
+		// veto, and the hook must say exactly that. A PreToolUse hook that
+		// answers permissionDecision:"allow" pre-approves the call inside the
+		// CLI and the permission system never runs, which took canUseTool
+		// (and therefore the whole approval card) out of the loop: the first
+		// real end-to-end run wrote its file with no card ever shown. An empty
+		// output is the hook protocol's "no opinion", so the CLI goes on to
+		// its normal permission flow — the read surface auto-approved by
+		// WithAllowedTools, the write surface routed to approvalCallback. In
+		// legacy pre-approved mode nothing changes: bypassPermissions already
+		// decides, and a denial here still wins in both modes.
+		//
+		// "continue" rather than an empty map: the SDK marshals the hook
+		// response field with omitempty, so an empty output vanishes off the
+		// wire and the CLI rejects the control response outright ("Error in
+		// hook callback hook_0: ZodError ... expected object, received
+		// undefined"). It recovers, but a hook that logs a schema error on
+		// every allowed tool call is not a hook anyone can debug behind.
+		return claudesdk.HookJSONOutput{"continue": true}, nil
 	}
 }
 
@@ -181,19 +224,21 @@ func (r *claudeRuntime) buildQueryOptions(in agentruntime.TurnInput, emit agentr
 		claudesdk.WithIncludePartialMessages(true),
 		claudesdk.WithStderr(func(line string) { log.Printf("local agent cli: %s", line) }),
 	}
+	// Neither branch below decides the tool SURFACE — the PreToolUse hook
+	// above does, for both. WithAllowedTools only decides which of the
+	// permitted tools skip the question.
 	if in.Approvals != nil {
 		// Interactive approvals: the read surface is pre-allowed, the write
 		// surface consults approvalCallback through the CLI's permission
-		// protocol, and everything else is denied there. No bypass — the CLI
-		// must ask.
+		// protocol, and everything else is denied there too. No bypass — the
+		// CLI must ask.
 		opts = append(opts,
 			claudesdk.WithAllowedTools(readOnlyTools...),
 			claudesdk.WithCanUseTool(approvalCallback(in.Approvals, emit)),
 		)
 	} else {
-		// Legacy pre-approved mode, kill-checked: bypass composes with the
-		// allowlist — the CLI may use the listed tools without asking, and
-		// only those.
+		// Legacy pre-approved mode: the listed tools run without a prompt.
+		// Bypass applies to the prompt, not to the surface.
 		opts = append(opts,
 			claudesdk.WithAllowedTools(allowedTools...),
 			claudesdk.WithPermissionMode(claudesdk.PermissionModeBypassPermissions),

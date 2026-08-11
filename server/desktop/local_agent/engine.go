@@ -54,9 +54,27 @@ const doneEventData = `{"type":"done","result":"OK"}`
 const maxAgentTurns = 24
 
 // allowedTools is the L2a tool surface: file work inside the workspace.
-// Bash is deliberately absent until the PreToolUse safety hooks land (L2b) —
-// a shell is an escape hatch from every path rule the other tools respect.
+// Bash is deliberately absent — a shell is an escape hatch from every path
+// rule the other tools respect.
+//
+// This list is NOT self-enforcing. WithAllowedTools is an auto-approve list
+// inside the CLI, not a restriction on what the model may call: composed with
+// bypassPermissions it means "these need no prompt" while everything else is
+// approved by the bypass anyway. Measured on the real CLI: a Bash call that
+// the model invented ran `touch` on a path outside the workspace and the file
+// landed. toolSurface below is what actually holds the line.
 var allowedTools = []string{"Read", "Write", "Edit", "Glob", "Grep"}
+
+// toolSurface is allowedTools as the PreToolUse hook enforces it: an
+// allowlist, so a tool the CLI grows tomorrow (or a hostile endpoint asks for
+// today) is denied by default rather than by omission from a blocklist.
+var toolSurface = func() map[string]bool {
+	set := make(map[string]bool, len(allowedTools))
+	for _, t := range allowedTools {
+		set[t] = true
+	}
+	return set
+}()
 
 // readOnlyTools is the subset that never asks in approval mode: reading the
 // workspace is the loop's bloodstream, and every call still passes the

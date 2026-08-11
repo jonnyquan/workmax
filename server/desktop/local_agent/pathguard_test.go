@@ -115,14 +115,72 @@ func TestSecurityHook_DeniesAndReports(t *testing.T) {
 	}
 }
 
+// The tool SURFACE, enforced here rather than by WithAllowedTools — which is
+// an auto-approve list, not a restriction. Composed with bypassPermissions it
+// let the model reach the CLI's whole tool set; a real run had Bash `touch` a
+// path outside the workspace.
+func TestSecurityHook_DeniesToolsOutsideTheSurface(t *testing.T) {
+	ws := t.TempDir()
+	var denied []agentruntime.ToolEvent
+	hook := securityHook(newPathValidator(ws), func(ev agentruntime.Event) error {
+		denied = append(denied, ev.Tool)
+		return nil
+	})
+
+	for _, tool := range []string{"Bash", "WebFetch", "WebSearch", "NotebookEdit", "Task", ""} {
+		out, err := hook(map[string]any{
+			"tool_name":  tool,
+			"tool_input": map[string]any{"command": "touch /tmp/pwned"},
+		}, nil, claudesdk.HookContext{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hookDenied(t, out) {
+			t.Errorf("%q is outside the surface and must be denied", tool)
+		}
+	}
+	if len(denied) != 6 {
+		t.Errorf("every out-of-surface call must be narrated, got %d", len(denied))
+	}
+
+	// And the surface itself still gets through.
+	for _, tool := range allowedTools {
+		out, err := hook(map[string]any{
+			"tool_name":  tool,
+			"tool_input": map[string]any{"file_path": filepath.Join(ws, "fine.txt")},
+		}, nil, claudesdk.HookContext{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hookDenied(t, out) {
+			t.Errorf("%q is on the surface and must pass", tool)
+		}
+	}
+}
+
 // hookDenied digs the permission decision out of the hook output map — the
 // same place the CLI reads it from.
+//
+// An allowed call carries NO permissionDecision, deliberately: a PreToolUse
+// hook that answers "allow" pre-approves inside the CLI and the permission
+// system never runs, which silently removed canUseTool — and with it the
+// whole approval card — from the loop. The hook's yes is "no objection", and
+// it must still be a non-empty object, because the SDK marshals the response
+// field with omitempty and an empty one vanishes off the wire (the CLI then
+// logs a schema error for every allowed tool call).
 func hookDenied(t *testing.T, out claudesdk.HookJSONOutput) bool {
 	t.Helper()
+	if len(out) == 0 {
+		t.Fatal("hook output is empty; omitempty would drop it off the wire entirely")
+	}
 	specific, ok := out["hookSpecificOutput"].(map[string]any)
 	if !ok {
-		t.Fatalf("hook output has no hookSpecificOutput: %#v", out)
+		// No hook-specific output at all: the "no objection" shape.
+		return false
 	}
 	decision, _ := specific["permissionDecision"].(string)
+	if decision == claudesdk.PermissionDecisionAllow {
+		t.Fatal("the hook must never answer allow: it bypasses the CLI's permission system and takes canUseTool out of the loop")
+	}
 	return decision == claudesdk.PermissionDecisionDeny
 }
