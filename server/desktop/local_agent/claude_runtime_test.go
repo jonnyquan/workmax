@@ -37,6 +37,22 @@ func thinking(s string) *claudesdk.AssistantMessage {
 	}}
 }
 
+// toolUseCall is one assistant message announcing a tool call, with the id
+// the CLI will report the result under and the file it touches.
+func toolUseCall(id, name, path string) *claudesdk.AssistantMessage {
+	return &claudesdk.AssistantMessage{Content: []claudesdk.ContentBlock{
+		&claudesdk.ToolUseBlock{Type: "tool_use", ID: id, Name: name, Input: map[string]any{"file_path": path}},
+	}}
+}
+
+// toolResult is the user message the CLI feeds back once the tool ran — the
+// only place the loop says a step finished.
+func toolResult(id string, isError bool) *claudesdk.UserMessage {
+	return &claudesdk.UserMessage{Content: []claudesdk.ContentBlock{
+		&claudesdk.ToolResultBlock{Type: "tool_result", ToolUseID: id, Content: "ok", IsError: &isError},
+	}}
+}
+
 // chatReqWithTurn is chatReq with a caller-chosen turn UUID, so multi-turn
 // tests do not collide on the idempotency key.
 func chatReqWithTurn(turnUUID string) cloudproxy.ChatRequest {
@@ -192,6 +208,49 @@ func TestChat_FullBlocksWithoutPartialsStillEmit(t *testing.T) {
 	want := []string{"reasoning_delta", "text_delta", "done"}
 	if strings.Join(kinds, ",") != strings.Join(want, ",") {
 		t.Fatalf("frame order = %v, want %v", kinds, want)
+	}
+}
+
+// A tool call has two ends, and the work log needs both. The announcement
+// carries the tool's name and target; the result carries only the id it was
+// opened under, so the pump correlates them and the result frame arrives
+// named. Claude used to report only the opening half — EventToolResult was a
+// kind the vocabulary declared and only the pi engine ever emitted.
+func TestChat_ToolResultsAreNamedAndCorrelated(t *testing.T) {
+	db := openTestDB(t)
+	seedThreadRow(t, db)
+	engine, _ := newScriptedEngine(t, db, &scriptedIterator{})
+
+	dst := &memSSEWriter{}
+	_, _, err := scriptedTurn(t, engine, chatReq(), &scriptedIterator{messages: []claudesdk.Message{
+		toolUseCall("tu-1", "Write", "/ws/outline.md"),
+		toolResult("tu-1", false),
+		toolUseCall("tu-2", "Read", "/ws/missing.md"),
+		toolResult("tu-2", true),
+		// A result for a call this turn never announced names nothing: no
+		// frame rather than a row with no verb.
+		toolResult("tu-ghost", false),
+		text("done"),
+		resultWithSession(""),
+	}}, dst)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	frames, _ := dst.snapshot()
+	var got []string
+	for _, f := range frames {
+		got = append(got, f.Type+" "+f.Data)
+	}
+	want := []string{
+		`tool_use {"name":"Write","target":"outline.md"}`,
+		`tool_result {"name":"Write","target":"outline.md"}`,
+		`tool_use {"name":"Read","target":"missing.md"}`,
+		`tool_result {"is_error":"true","name":"Read","target":"missing.md"}`,
+		`text_delta {"delta":"done"}`,
+		`done {"type":"done","result":"OK"}`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("frames =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 

@@ -267,6 +267,13 @@ assert_grep "$work/once.sse" '"name":"Write","target":"once.txt"' \
 assert_grep "$work/once.approve" ' 200' "the approve endpoint accepts the decision"
 assert_file "$ws/once.txt" "allow_once runs the tool"
 assert_frame once done "an approved turn still reaches done"
+# A call has two ends. The CLI reports the second one as a user message
+# carrying only the tool_use id, so the pump has to correlate it back to the
+# announcement to name it — a result frame without the target would leave the
+# work log unable to say WHICH open step just closed.
+assert_grep "$work/once.sse" '"name":"Write","target":"once.txt"' \
+  "the result frame names the call it closes"
+assert_frame once tool_result "an approved call reports back when it finishes"
 
 # 3. Deny: the tool must not run, and the turn must survive the refusal.
 thread="$(new_thread)"; ws="$(workspace_of "$thread")"
@@ -274,6 +281,24 @@ run_turn deny "$thread" "Do it. TOOLPLAN Write $ws/denied.txt" deny
 assert_no_file "$ws/denied.txt" "deny keeps the tool from running"
 assert_frame deny tool_denied "deny is narrated on the stream"
 assert_frame deny done "a denied turn still reaches done"
+# FINDING (fixed): the denial frame carried no target, so the renderer could
+# not fold it into the step it settles and every refused file call drew two
+# work-log rows for a tool that ran zero times. The renderer-side fold had
+# been written and tested against the frame it wished for.
+assert_grep "$work/deny.sse" 'tool_denied' "the denial frame exists"
+if grep -A1 '^event: tool_denied$' "$work/deny.sse" | grep -q '"target":"denied.txt"'; then
+  ok "the denial names the call it refuses"
+else
+  fail "the denial names the call it refuses" "frames: $(sse_dump deny)"
+fi
+# FINDING: a refusal comes back through the CLI a SECOND time, as an errored
+# tool result. The renderer must treat the already-settled step as settled —
+# a bare "failed" would replace the reason the user needs.
+if grep -A1 '^event: tool_result$' "$work/deny.sse" | grep -q '"is_error":"true"'; then
+  ok "a refused call also reports back as an errored result"
+else
+  fail "a refused call also reports back as an errored result" "frames: $(sse_dump deny)"
+fi
 
 # 4. Session grant: the second turn of the SAME thread must not ask again.
 thread="$(new_thread)"; ws="$(workspace_of "$thread")"
@@ -313,6 +338,7 @@ mkdir -p "$ws"; printf 'seed content\n' > "$ws/readme.txt"
 run_turn readonly "$thread" "Read it. TOOLPLAN Read $ws/readme.txt" none
 assert_no_frame readonly approval_request "a Read never asks"
 assert_frame readonly tool_use "the Read still runs"
+assert_frame readonly tool_result "and reports back — both ends of every call, not only approved ones"
 
 # 7. FINDING (fixed): the tool SURFACE is enforced by the PreToolUse hook, not
 # by WithAllowedTools. Before the fix this Bash call executed and the file

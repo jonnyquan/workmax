@@ -40,8 +40,15 @@ func TestBridgeFrameShapes(t *testing.T) {
 			"tool_use", `{"name":"Glob"}`},
 		{"denied", Event{Kind: EventToolDenied, Tool: ToolEvent{Name: "Write", Reason: "outside workspace"}},
 			"tool_denied", `{"name":"Write","reason":"outside workspace"}`},
+		// The denial's target is what lets the renderer fold it into the step
+		// it settles instead of drawing a second row for a call that ran zero
+		// times.
+		{"denied with target", Event{Kind: EventToolDenied, Tool: ToolEvent{Name: "Write", Target: "a.md", Reason: "用户拒绝了此操作"}},
+			"tool_denied", `{"name":"Write","reason":"用户拒绝了此操作","target":"a.md"}`},
 		{"result ok", Event{Kind: EventToolResult, Tool: ToolEvent{Name: "Read"}},
 			"tool_result", `{"name":"Read"}`},
+		{"result with target", Event{Kind: EventToolResult, Tool: ToolEvent{Name: "Write", Target: "a.md"}},
+			"tool_result", `{"name":"Write","target":"a.md"}`},
 		{"result error", Event{Kind: EventToolResult, Tool: ToolEvent{Name: "Read", IsError: true}},
 			"tool_result", `{"is_error":"true","name":"Read"}`},
 	}

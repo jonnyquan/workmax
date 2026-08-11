@@ -404,7 +404,7 @@ function dispatchAgentSSEFrame(active, eventName, rawData) {
     emit(active, event);
     return;
   }
-  if (eventName === "tool_use" || eventName === "tool_denied") {
+  if (eventName === "tool_use" || eventName === "tool_denied" || eventName === "tool_result") {
     const parsed = parseAgentJSON(rawData);
     const value = parsed.ok && isRecord(parsed.value) ? parsed.value : null;
     // Informational, like retrieval: a malformed activity frame costs the
@@ -416,6 +416,12 @@ function dispatchAgentSSEFrame(active, eventName, rawData) {
     event.target = typeof value.target === "string" ? value.target.slice(0, 80) : "";
     if (eventName === "tool_denied") {
       event.reason = typeof value.reason === "string" ? value.reason.slice(0, 300) : "";
+    }
+    if (eventName === "tool_result") {
+      // The bridge writes every field of these frames as a string, so the
+      // failure flag arrives as "true", not true. Both spellings are read
+      // here rather than trusted: anything else is a success.
+      event.isError = value.is_error === true || value.is_error === "true";
     }
     emit(active, event);
     return;

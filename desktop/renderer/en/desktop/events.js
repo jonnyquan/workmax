@@ -34,6 +34,7 @@ import {
   presentApprovalRequest,
   recordReasoningDelta,
   recordToolActivity,
+  recordToolResult,
   setRetrievedContext,
 } from "./context-panel.js";
 import {
@@ -67,6 +68,7 @@ const AGENT_EVENT_TYPES = new Set([
   "retrieval",
   "tool_use",
   "tool_denied",
+  "tool_result",
   "approval_request",
   "unknown",
   "done",
@@ -210,6 +212,24 @@ export function parseAgentTurnEvent(value) {
         throw new Error("Malformed agent turn event");
       }
       return { type: value.type, turnID: value.turnID, name: value.name, target: value.target };
+    case "tool_result":
+      if (
+        !hasExactKeys(value, ["type", "turnID", "name", "target", "isError"]) ||
+        !isSafeProtocolString(value.name, 64) ||
+        typeof value.target !== "string" ||
+        !hasWellFormedUTF16(value.target) ||
+        value.target.length > 80 ||
+        typeof value.isError !== "boolean"
+      ) {
+        throw new Error("Malformed agent turn event");
+      }
+      return {
+        type: value.type,
+        turnID: value.turnID,
+        name: value.name,
+        target: value.target,
+        isError: value.isError,
+      };
     case "tool_denied":
       if (
         !hasExactKeys(value, ["type", "turnID", "name", "target", "reason"]) ||
@@ -541,6 +561,12 @@ export function handleParsedTurnEvent(activeTurn, event) {
       return;
     case "tool_denied":
       recordToolActivity({ name: event.name, target: event.target, denied: true, reason: event.reason }, activeTurn);
+      return;
+    case "tool_result":
+      // The other end of a tool call: the step the log opened is now closed,
+      // one way or the other. Nothing new appears — a result with no step to
+      // settle names nothing a reader could act on.
+      recordToolResult({ name: event.name, target: event.target, isError: event.isError }, activeTurn);
       return;
     case "retrieval":
       // What the local model was given from the knowledge base, announced

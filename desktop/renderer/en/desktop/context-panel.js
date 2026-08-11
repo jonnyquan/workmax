@@ -70,6 +70,26 @@ export function setRetrievedContext(sources) {
   renderTaskContext();
 }
 
+// A step is SETTLED once something closed it: the guard or the user blocked
+// it, or the tool ran and reported back. The distinction carries weight
+// beyond styling — a settled step is no longer a candidate for the frames
+// that arrive about a call in flight (a denial, an approval question), so
+// this is the predicate that keeps a second Write to the same file from
+// swallowing the first one's answer.
+function isStepSettled(step) {
+  return Boolean(step.denied || step.done);
+}
+
+// repaintWorkLog re-hangs the live strip on the streaming message. Every
+// mutation of a step goes through here, so a row that changes shape (a
+// denial folding in, an approval card becoming the step) repaints by the
+// same path that drew it.
+function repaintWorkLog(activeTurn) {
+  const wrapper = activeTurn?.assistantBubble?.parentNode;
+  if (!wrapper) return;
+  renderWorkLog(wrapper, contextState.toolActivity, [], true);
+}
+
 export function recordToolActivity(entry, activeTurn) {
   // A denial lands as a SECOND frame about a call the log already has: the
   // sidecar announces the tool the moment the model asks for it, and only
@@ -80,13 +100,11 @@ export function recordToolActivity(entry, activeTurn) {
   if (entry.denied) {
     for (let i = contextState.toolActivity.length - 1; i >= 0; i -= 1) {
       const step = contextState.toolActivity[i];
-      if (step.denied || step.name !== entry.name || step.target !== entry.target) continue;
+      if (isStepSettled(step) || step.name !== entry.name || step.target !== entry.target) continue;
       step.denied = true;
       step.reason = entry.reason;
       renderTaskContext();
-      if (activeTurn?.assistantBubble?.parentNode) {
-        renderWorkLog(activeTurn.assistantBubble.parentNode, contextState.toolActivity, [], true);
-      }
+      repaintWorkLog(activeTurn);
       return;
     }
   }
@@ -97,8 +115,28 @@ export function recordToolActivity(entry, activeTurn) {
   renderTaskContext();
   // The step also lands inline, Codex-style: the transcript is a work log,
   // not a chat with a hidden engine room.
-  if (activeTurn?.assistantBubble?.parentNode) {
-    renderWorkLog(activeTurn.assistantBubble.parentNode, contextState.toolActivity, [], true);
+  repaintWorkLog(activeTurn);
+}
+
+// The far end of a tool call. Both engines report it — the CLI feeds the
+// result back as a user message, pi sends tool_execution_end — and neither
+// adds a row: the step is already on screen, and this is the frame that
+// closes it. A result the log has no open step for settles nothing and is
+// dropped, because a row with a verb and no story is worse than silence.
+export function recordToolResult(entry, activeTurn) {
+  for (const step of contextState.toolActivity) {
+    if (isStepSettled(step) || step.name !== entry.name) continue;
+    // pi's tool_execution_end cannot name the file it touched, so a result
+    // with no target settles the OLDEST open call of that tool — which is
+    // the one that just returned, both loops being sequential. When the
+    // engine does name a target (the claude pump correlates it through the
+    // tool_use id), the match is exact.
+    if (entry.target !== "" && step.target !== entry.target) continue;
+    step.done = true;
+    step.failed = entry.isError === true;
+    renderTaskContext();
+    repaintWorkLog(activeTurn);
+    return;
   }
 }
 
@@ -162,25 +200,7 @@ function renderWorkLog(wrapper, steps, produced, live = false, duration = "") {
 
   const stepRows = expanded ? steps : [];
   for (const step of stepRows) {
-    const row = document.createElement("li");
-    row.className = "worklog-step" + (step.denied ? " denied" : "");
-    const verb = document.createElement("span");
-    verb.className = "worklog-verb";
-    verb.textContent = step.name;
-    row.appendChild(verb);
-    if (step.target) {
-      const target = document.createElement("span");
-      target.className = "worklog-target";
-      target.textContent = step.target;
-      row.appendChild(target);
-    }
-    if (step.denied) {
-      const why = document.createElement("span");
-      why.className = "worklog-denied";
-      why.textContent = step.reason ? `blocked — ${step.reason}` : "blocked";
-      row.appendChild(why);
-    }
-    strip.appendChild(row);
+    strip.appendChild(renderWorkLogStep(step));
   }
   for (const file of produced) {
     const row = document.createElement("li");
@@ -207,6 +227,72 @@ function renderWorkLog(wrapper, steps, produced, live = false, duration = "") {
   } else {
     wrapper.appendChild(strip);
   }
+}
+
+// One row of the work log. A step is a line of prose about a call — verb,
+// target, and whatever settled it — and when an approval question is about
+// THIS call the question is asked on this row rather than beside it: the
+// tool_use frame always precedes the approval_request (the CLI announces
+// before it asks, and no renderer can reorder that), so a separate card
+// meant the screen showed a step that looked done next to someone asking
+// whether it may happen. Answering resolves the row in place.
+function renderWorkLogStep(step) {
+  const row = document.createElement("li");
+  const approval = step.approval;
+  const awaiting = Boolean(approval) && !approval.settled;
+  row.className = "worklog-step";
+  if (step.denied) row.classList.add("denied");
+  else if (step.failed) row.classList.add("failed");
+  else if (step.done) row.classList.add("done");
+  if (awaiting) row.classList.add("awaiting");
+
+  const verb = document.createElement("span");
+  verb.className = "worklog-verb";
+  verb.textContent = step.name;
+  row.appendChild(verb);
+  if (step.target) {
+    const target = document.createElement("span");
+    target.className = "worklog-target";
+    target.textContent = step.target;
+    row.appendChild(target);
+  }
+  if (step.denied) {
+    const why = document.createElement("span");
+    why.className = "worklog-denied";
+    why.textContent = step.reason ? `blocked — ${step.reason}` : "blocked";
+    row.appendChild(why);
+  } else if (step.failed) {
+    const why = document.createElement("span");
+    why.className = "worklog-denied";
+    why.textContent = "failed";
+    row.appendChild(why);
+  }
+  if (!approval) return row;
+
+  if (awaiting) {
+    const ask = document.createElement("span");
+    ask.className = "approval-ask";
+    ask.textContent = "Awaiting approval";
+    row.appendChild(ask);
+    row.appendChild(buildApprovalActions(approval));
+    if (approval.note) {
+      const note = document.createElement("span");
+      note.className = "approval-note";
+      note.textContent = approval.note;
+      row.appendChild(note);
+    }
+    return row;
+  }
+  // A denial that folded into this step already states the outcome, in the
+  // vocabulary the log uses for every other refusal. "Denied" on top of
+  // "blocked — 用户拒绝了此操作" is the same fact twice.
+  if (!step.denied) {
+    const result = document.createElement("span");
+    result.className = approval.tone ? `approval-result ${approval.tone}` : "approval-result";
+    result.textContent = approval.label;
+    row.appendChild(result);
+  }
+  return row;
 }
 
 // attachLastTurnLog re-hangs the survivor copy on the transcript's final
@@ -353,10 +439,59 @@ function desktopAgentApprovalBridge() {
   return desktop.agent;
 }
 
-// The card collapses in place to its outcome — the question is answered, so
-// the buttons go away rather than merely disabling.
-function settleApprovalCard(entry, label, tone) {
+// buildApprovalActions draws the four decisions. Shared by both shapes a
+// question can take — a row of the work log, or a card of its own — because
+// the buttons are the same question either way, and the merged row is
+// rebuilt from scratch on every repaint.
+function buildApprovalActions(entry) {
+  const actions = document.createElement("div");
+  actions.className = "approval-actions";
+  for (const [decision, buttonLabel, settledLabel] of APPROVAL_DECISIONS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className =
+      decision === "deny" ? "approval-button deny" : "approval-button";
+    button.textContent = buttonLabel;
+    button.disabled = entry.answered;
+    button.addEventListener("click", () => {
+      submitApprovalDecision(entry, decision, settledLabel);
+    });
+    actions.appendChild(button);
+  }
+  return actions;
+}
+
+// refreshApproval reflects entry state that is not yet an outcome — buttons
+// disabled while a decision is in flight, a delivery failure to retry past.
+// A merged question repaints through the work log; a standalone card owns
+// its nodes and is edited in place.
+function refreshApproval(entry) {
+  if (entry.merged) {
+    repaintWorkLog(entry.turn);
+    return;
+  }
+  if (!entry.card) return;
+  for (const button of Array.from(entry.actions.children || [])) {
+    button.disabled = entry.answered;
+  }
+  entry.noteEl.textContent = entry.note;
+  entry.noteEl.hidden = entry.note === "";
+}
+
+// The question collapses in place to its outcome — answered, so the buttons
+// go away rather than merely disabling. In place means the step's own row
+// when the question was merged into one: the turn ends with as many rows as
+// it made calls.
+function settleApproval(entry, label, tone) {
   entry.answered = true;
+  entry.settled = true;
+  entry.label = label;
+  entry.tone = tone;
+  entry.note = "";
+  if (entry.merged) {
+    repaintWorkLog(entry.turn);
+    return;
+  }
   entry.card.textContent = "";
   entry.card.classList.add("approval-settled");
   const result = document.createElement("span");
@@ -365,66 +500,101 @@ function settleApprovalCard(entry, label, tone) {
   entry.card.appendChild(result);
 }
 
-export function presentApprovalRequest(activeTurn, event) {
-  const wrapper = activeTurn.assistantBubble?.parentNode;
-  if (!wrapper) return;
-  if (!activeTurn.approvalCards) activeTurn.approvalCards = new Map();
-  // One card per approval id: a duplicated frame must not stack a second
-  // question for the same answer.
-  if (activeTurn.approvalCards.has(event.id)) return;
-  if (activeTurn.approvalCards.size >= MAX_APPROVAL_CARDS_PER_TURN) return;
+// findStepForApproval returns the work-log step this question is about, or
+// null when there is none to merge with.
+//
+// The rule is deliberately narrow: same turn (the log is per-turn), same
+// tool, same target, and the step must still be open. Forward scan taking
+// the first unclaimed match — two identical calls announced back to back are
+// asked about in the same order, so the first question belongs to the first
+// step. Anything that misses (a guard denial that never announced, a
+// question that arrived before any tool_use, a second question for a step
+// that already owns one) keeps its own card, which is the honest shape when
+// there is no step on screen to point at.
+function findStepForApproval(event) {
+  for (const step of contextState.toolActivity) {
+    if (step.approval || isStepSettled(step)) continue;
+    if (step.name !== event.name || step.target !== event.target) continue;
+    return step;
+  }
+  return null;
+}
 
+function buildApprovalCard(wrapper, entry) {
   const card = document.createElement("div");
   card.className = "approval-card";
   const title = document.createElement("div");
   title.className = "approval-title";
-  title.textContent = event.target
-    ? `Agent requests to run ${event.name} · ${event.target}`
-    : `Agent requests to run ${event.name}`;
+  title.textContent = entry.target
+    ? `Agent requests to run ${entry.name} · ${entry.target}`
+    : `Agent requests to run ${entry.name}`;
   const note = document.createElement("div");
   note.className = "approval-note";
   note.hidden = true;
-  const actions = document.createElement("div");
-  actions.className = "approval-actions";
-  const entry = { card, note, actions, answered: false };
-  for (const [decision, buttonLabel, settledLabel] of APPROVAL_DECISIONS) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className =
-      decision === "deny" ? "approval-button deny" : "approval-button";
-    button.textContent = buttonLabel;
-    button.addEventListener("click", () => {
-      submitApprovalDecision(activeTurn, event.id, decision, settledLabel, entry);
-    });
-    actions.appendChild(button);
-  }
-  card.append(title, actions, note);
+  entry.card = card;
+  entry.noteEl = note;
+  entry.actions = buildApprovalActions(entry);
+  card.append(title, entry.actions, note);
   insertAboveBubble(wrapper, card);
+}
+
+export function presentApprovalRequest(activeTurn, event) {
+  const wrapper = activeTurn.assistantBubble?.parentNode;
+  if (!wrapper) return;
+  if (!activeTurn.approvalCards) activeTurn.approvalCards = new Map();
+  // One question per approval id: a duplicated frame must not stack a second
+  // question for the same answer.
+  if (activeTurn.approvalCards.has(event.id)) return;
+  if (activeTurn.approvalCards.size >= MAX_APPROVAL_CARDS_PER_TURN) return;
+
+  const entry = {
+    id: event.id,
+    turn: activeTurn,
+    name: event.name,
+    target: event.target,
+    answered: false,
+    settled: false,
+    label: "",
+    tone: "",
+    note: "",
+    // merged: the question is drawn as a row of the work log rather than a
+    // card of its own. A flag, not a reference back to the step — the step
+    // already points here, and two objects pointing at each other is a cycle
+    // nobody needs to own.
+    merged: false,
+    card: null,
+    actions: null,
+    noteEl: null,
+  };
   activeTurn.approvalCards.set(event.id, entry);
+
+  const step = findStepForApproval(event);
+  if (step) {
+    entry.merged = true;
+    step.approval = entry;
+    renderTaskContext();
+    repaintWorkLog(activeTurn);
+  } else {
+    buildApprovalCard(wrapper, entry);
+  }
   scrollMessagesToEnd();
 }
 
-function setApprovalButtonsDisabled(entry, disabled) {
-  for (const button of Array.from(entry.actions.children || [])) {
-    button.disabled = disabled;
-  }
-}
-
-function submitApprovalDecision(activeTurn, approvalID, decision, settledLabel, entry) {
+function submitApprovalDecision(entry, decision, settledLabel) {
   if (entry.answered) return;
   const agent = desktopAgentApprovalBridge();
-  if (!agent || !activeTurn.turnID) {
-    settleApprovalCard(entry, "Approvals are unavailable", "expired");
+  if (!agent || !entry.turn.turnID) {
+    settleApproval(entry, "Approvals are unavailable", "expired");
     return;
   }
   // Answered the moment the click lands: a second click while the request is
   // in flight must not send a second decision.
   entry.answered = true;
-  entry.note.hidden = true;
-  setApprovalButtonsDisabled(entry, true);
+  entry.note = "";
+  refreshApproval(entry);
   agent
-    .approveTurnTool(activeTurn.turnID, {
-      approval_id: approvalID,
+    .approveTurnTool(entry.turn.turnID, {
+      approval_id: entry.id,
       decision,
     })
     .then((result) => {
@@ -432,7 +602,7 @@ function submitApprovalDecision(activeTurn, approvalID, decision, settledLabel, 
         throw new Error("Malformed approval result");
       }
       if (result.ok) {
-        settleApprovalCard(
+        settleApproval(
           entry,
           settledLabel,
           decision === "deny" ? "denied" : "allowed"
@@ -442,30 +612,30 @@ function submitApprovalDecision(activeTurn, approvalID, decision, settledLabel, 
       if (result.status === 404) {
         // The pending set no longer knows this id: the turn moved on
         // (timeout, cancel, completion). Expired, not an error.
-        settleApprovalCard(entry, "Expired", "expired");
+        settleApproval(entry, "Expired", "expired");
         return;
       }
       throw new Error("Approval delivery failed");
     })
     .catch(() => {
       // The decision never landed, so the question is still open — unless the
-      // turn already settled this card as expired while the request was out.
-      if (entry.card.classList.contains("approval-settled")) return;
+      // turn already settled it as expired while the request was out.
+      if (entry.settled) return;
       entry.answered = false;
-      setApprovalButtonsDisabled(entry, false);
-      entry.note.textContent = "The decision could not be delivered. Try again.";
-      entry.note.hidden = false;
+      entry.note = "The decision could not be delivered. Try again.";
+      refreshApproval(entry);
     });
 }
 
 // A terminal turn takes its unanswered questions with it: the sidecar's
-// pending set is keyed by turn, so a card that outlives the turn could only
-// ever answer into a 404.
+// pending set is keyed by turn, so a question that outlives the turn could
+// only ever answer into a 404. Merged questions expire on their own row,
+// which is the last thing that happens to a step nobody answered for.
 function expireApprovalCards(activeTurn) {
   if (!activeTurn.approvalCards) return;
   for (const entry of activeTurn.approvalCards.values()) {
     if (entry.answered) continue;
-    settleApprovalCard(entry, "Expired", "expired");
+    settleApproval(entry, "Expired", "expired");
   }
 }
 
@@ -539,6 +709,11 @@ function agentExecutionDetail(running, failed, brief) {
   const activity = contextState.toolActivity;
   const denied = activity.filter((a) => a.denied).length;
   if (running) {
+    // A step holding an unanswered question is what the run is actually
+    // waiting on, wherever it sits in the list — saying "Write…" while the
+    // loop is blocked on the user reads as progress that is not happening.
+    const asking = activity.find((a) => a.approval && !a.approval.settled);
+    if (asking) return `${asking.name} · awaiting approval`;
     const last = activity[activity.length - 1];
     if (last) return last.denied ? `${last.name} blocked` : `${last.name}…`;
     return "In progress";

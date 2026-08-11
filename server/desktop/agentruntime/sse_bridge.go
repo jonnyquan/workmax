@@ -67,12 +67,25 @@ func (b *SSEBridge) Emit(ev Event) error {
 			Data: mustJSON(payload),
 		})
 	case EventToolDenied:
+		// The target belongs on this frame as much as on tool_use, and for a
+		// concrete reason: the renderer folds a denial into the step it
+		// settles by matching (name, target). Without it every denial for a
+		// file tool missed its step and drew a second row — the exact double
+		// entry the fold exists to prevent, invisible to a renderer test that
+		// emits the frame it wished for rather than the one this bridge sends.
+		payload := map[string]string{"name": ev.Tool.Name, "reason": ev.Tool.Reason}
+		if ev.Tool.Target != "" {
+			payload["target"] = ev.Tool.Target
+		}
 		return b.dst.WriteEvent(cloudproxy.SSEEvent{
 			Type: "tool_denied",
-			Data: mustJSON(map[string]string{"name": ev.Tool.Name, "reason": ev.Tool.Reason}),
+			Data: mustJSON(payload),
 		})
 	case EventToolResult:
 		payload := map[string]string{"name": ev.Tool.Name}
+		if ev.Tool.Target != "" {
+			payload["target"] = ev.Tool.Target
+		}
 		if ev.Tool.IsError {
 			payload["is_error"] = "true"
 		}

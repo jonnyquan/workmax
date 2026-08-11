@@ -3388,6 +3388,275 @@ async function testToolApprovalCardsAndReasoningCaption() {
   assert.equal(detail.textContent, "Consider the outline.\nPlan the write.");
 }
 
+// An approval question is about a step the log already shows. The CLI
+// announces a tool call before it asks permission for it — assistant message
+// first, permission request second, an order no renderer can change — so a
+// card of its own put "Agent requests to run Write · outline.md" next to a
+// line reading "Write outline.md" that looked like it had already happened.
+// The question belongs ON that row: it opens into the ask, and closes back
+// into the answer, and the turn ends with as many rows as it made calls.
+async function testApprovalBecomesTheStepItIsAbout() {
+  const approvals = [];
+  let emit = () => {};
+  let turnDone = false;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-08-11T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        return response({ items: [thread("00000000-0000-4000-8000-0000000d2c02", "Merged approvals")] });
+      }
+      if (pathname === "/agent/threads/00000000-0000-4000-8000-0000000d2c02/messages") {
+        return response({
+          items: turnDone
+            ? [{
+                uuid: "merge-msg", user_text: "Write the outline", ai_text: "Written.",
+                streaming_state: "complete",
+                created_at: "2026-08-11T10:00:00Z", updated_at: "2026-08-11T10:00:00Z",
+              }]
+            : [],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      async listWorkspaceFiles() { return typedSuccess({ items: [], count: 0, truncated: false }); },
+      startTurn(input, callback) {
+        emit = (event) => callback({ ...event, turnID: "merge-turn" });
+        return { turnID: "merge-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+      async approveTurnTool(turnID, input) {
+        approvals.push({ turnID, approval_id: input.approval_id, decision: input.decision });
+        return typedSuccess({ resolved: true });
+      },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+  const input = document.byId.get("chat-input");
+  input.value = "Write the outline";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  const steps = () =>
+    walk(
+      document.byId.get("message-list"),
+      (n) => n.classList?.contains("worklog-step") && !n.classList?.contains("produced"),
+    );
+  const cards = () =>
+    walk(document.byId.get("message-list"), (n) => n.classList?.contains("approval-card"));
+  const buttonsIn = (node) => walk(node, (n) => n.classList?.contains("approval-button"));
+
+  emit({ type: "tool_use", name: "Write", target: "outline.md" });
+  emit({ type: "tool_use", name: "Edit", target: "notes.md" });
+  await settle();
+  assert.equal(steps().length, 2, "two announced calls are two rows");
+  assert.equal(steps()[0].classList.contains("awaiting"), false, "an announced call is not yet a question");
+
+  // The hit: same turn, same tool, same target, nothing has settled that
+  // step. The card does not appear beside the row — it IS the row.
+  emit({ type: "approval_request", id: "ap-1", name: "Write", target: "outline.md" });
+  await settle();
+  assert.equal(cards().length, 0, "a question that found its step must not also draw a card");
+  assert.equal(steps().length, 2, "and must not add a row: one call is one row, question or not");
+  assert.equal(steps()[0].classList.contains("awaiting"), true, "the step it is about becomes the question");
+  assert.match(steps()[0].textContent, /Write.*outline\.md.*Awaiting approval/su);
+  assert.equal(buttonsIn(steps()[0]).length, 4, "the row offers all four decisions");
+  assert.equal(buttonsIn(steps()[1]).length, 0, "and only that row");
+  assert.match(
+    document.byId.get("run-overview-list").textContent,
+    /Write · awaiting approval/,
+    "a run blocked on the user must not read as a tool making progress",
+  );
+
+  // A second question in the same turn is its own question on its own row.
+  emit({ type: "approval_request", id: "ap-2", name: "Edit", target: "notes.md" });
+  await settle();
+  assert.equal(steps().length, 2, "two questions, two rows, still no cards");
+  assert.equal(buttonsIn(steps()[1]).length, 4, "the second row carries its own buttons");
+
+  // Answering resolves that row in place — and touches nothing else.
+  buttonsIn(steps()[0])[0].click();
+  await settle();
+  assert.deepEqual(
+    { ...approvals[0] },
+    { turnID: "merge-turn", approval_id: "ap-1", decision: "allow_once" },
+    "the row's click must deliver {approval_id, decision} for the streaming turn",
+  );
+  assert.equal(steps().length, 2, "an answer settles the row, it does not add one");
+  assert.equal(steps()[0].classList.contains("awaiting"), false, "the answered row stops asking");
+  assert.match(steps()[0].textContent, /Write.*outline\.md.*Allowed once/su);
+  assert.equal(buttonsIn(steps()[0]).length, 0, "an answered row is a result, not a disabled form");
+  assert.equal(buttonsIn(steps()[1]).length, 4, "the other question is untouched");
+
+  // The tool then ran and reported back: the row closes for real.
+  emit({ type: "tool_result", name: "Write", target: "outline.md", isError: false });
+  await settle();
+  assert.equal(steps()[0].classList.contains("done"), true, "a returned tool marks its step finished");
+  assert.match(steps()[0].textContent, /Allowed once/u, "and keeps the answer that let it run");
+
+  // The misses, which must keep the card. A question with no step on screen
+  // (the guard can refuse a call the stream never announced, and a question
+  // can outrun its announcement) has nothing to merge into.
+  emit({ type: "approval_request", id: "ap-3", name: "Bash", target: "" });
+  await settle();
+  assert.equal(cards().length, 1, "a question with no step of its own keeps its card");
+  assert.match(cards()[0].textContent, /Agent requests to run Bash/u);
+  assert.equal(steps().length, 2, "and invents no row");
+
+  // A second question about a step that already owns one also falls back:
+  // one row cannot answer two ids.
+  emit({ type: "tool_use", name: "Glob", target: "" });
+  emit({ type: "approval_request", id: "ap-4", name: "Glob", target: "" });
+  emit({ type: "approval_request", id: "ap-5", name: "Glob", target: "" });
+  await settle();
+  assert.equal(steps().length, 3, "the Glob call is one row");
+  assert.equal(steps()[2].classList.contains("awaiting"), true, "the first Glob question takes the row");
+  assert.equal(cards().length, 2, "the second Glob question keeps a card of its own");
+
+  // A settled step is no longer a candidate: the finished Write must not
+  // swallow a question about a second write to the same file.
+  emit({ type: "approval_request", id: "ap-6", name: "Write", target: "outline.md" });
+  await settle();
+  assert.equal(cards().length, 3, "a question about a closed step is not that step's question");
+  assert.equal(steps()[0].classList.contains("awaiting"), false, "the finished row stays finished");
+
+  // The turn ends with ap-2, ap-4 unanswered on their rows and three cards
+  // open: all of them expire, locally, with no decision invented.
+  emit({ type: "text_delta", delta: "Written." });
+  turnDone = true;
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  await settle();
+  assert.equal(approvals.length, 1, "expiry is local — no decision is invented for the user");
+  const settled = steps();
+  assert.equal(settled.length, 3, "the finished log has one row per call");
+  assert.match(settled[1].textContent, /Edit.*notes\.md.*Expired/su, "an unanswered row expires in place");
+  assert.match(settled[2].textContent, /Glob.*Expired/su);
+  assert.equal(
+    walk(document.byId.get("message-list"), (n) => n.classList?.contains("approval-button")).length,
+    0,
+    "a finished turn leaves no button that could only answer into a 404",
+  );
+  assert.equal(
+    walk(document.byId.get("message-list"), (n) => n.classList?.contains("awaiting")).length,
+    0,
+    "and nothing still asking",
+  );
+}
+
+// A denial is a second frame about a call the log already has, and it can
+// only be folded into that call if it says which call it was — which is why
+// the bridge puts the target on tool_denied. Merged questions ride the same
+// rule: answering Deny settles the row, and the denial that follows lands on
+// it rather than drawing a second one.
+async function testDenialFoldsIntoTheRowItAnswers() {
+  const approvals = [];
+  let emit = () => {};
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-08-11T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        return response({ items: [thread("00000000-0000-4000-8000-0000000d2c03", "Denials")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input, callback) {
+        emit = (event) => callback({ ...event, turnID: "deny-turn" });
+        return { turnID: "deny-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+      async approveTurnTool(turnID, input) {
+        approvals.push({ turnID, approval_id: input.approval_id, decision: input.decision });
+        return typedSuccess({ resolved: true });
+      },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+  const input = document.byId.get("chat-input");
+  input.value = "Write it";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  const steps = () =>
+    walk(
+      document.byId.get("message-list"),
+      (n) => n.classList?.contains("worklog-step") && !n.classList?.contains("produced"),
+    );
+
+  emit({ type: "tool_use", name: "Write", target: "secret.md" });
+  emit({ type: "approval_request", id: "ap-1", name: "Write", target: "secret.md" });
+  await settle();
+  walk(steps()[0], (n) => n.classList?.contains("approval-button"))[3].click();
+  await settle();
+  assert.equal(approvals[0].decision, "deny");
+  assert.match(steps()[0].textContent, /Denied/u, "the click reads back before the sidecar answers");
+
+  // The sidecar's denial arrives second, carrying the target the bridge now
+  // sends. One call, one row — and the reason replaces the bare decision,
+  // because "Denied" on top of "blocked — 用户拒绝了此操作" is one fact twice.
+  emit({ type: "tool_denied", name: "Write", target: "secret.md", reason: "用户拒绝了此操作" });
+  await settle();
+  assert.equal(steps().length, 1, "the denial settles the row it answers instead of adding one");
+  assert.equal(steps()[0].classList.contains("denied"), true);
+  assert.match(steps()[0].textContent, /blocked — 用户拒绝了此操作/su);
+  assert.doesNotMatch(steps()[0].textContent, /Denied/u, "and states the outcome once");
+  assert.match(
+    document.byId.get("run-overview-list").textContent,
+    /Write blocked/,
+    "the panel follows the row",
+  );
+
+  // What the real chain actually sends: the CLI feeds a refusal back as an
+  // ERRORED tool result, so every denial is followed by a tool_result the
+  // renderer has already answered. Read from the live smoke; a denial that
+  // then re-read as a bare "failed" would lose the reason the user needs.
+  emit({ type: "tool_result", name: "Write", target: "secret.md", isError: true });
+  await settle();
+  assert.equal(steps().length, 1, "the result of a refused call adds nothing");
+  assert.equal(steps()[0].classList.contains("denied"), true, "a settled step stays settled");
+  assert.match(steps()[0].textContent, /blocked — 用户拒绝了此操作/su, "and keeps the reason");
+
+  // A tool that ran and failed is not a tool that was blocked: the marks
+  // differ, and only refusals count in the receipt.
+  emit({ type: "tool_use", name: "Read", target: "gone.md" });
+  emit({ type: "tool_result", name: "Read", target: "gone.md", isError: true });
+  await settle();
+  assert.equal(steps().length, 2);
+  assert.equal(steps()[1].classList.contains("failed"), true, "an error result marks the step failed");
+  assert.equal(steps()[1].classList.contains("denied"), false, "failing is not being blocked");
+  assert.match(steps()[1].textContent, /Read.*gone\.md.*failed/su);
+
+  // A result the log has no open step for settles nothing and adds nothing.
+  emit({ type: "tool_result", name: "Grep", target: "", isError: false });
+  await settle();
+  assert.equal(steps().length, 2, "an unmatched result must not invent a row");
+
+  emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+  await settle();
+}
+
 // A first-time user faces an empty screen and a text box. The starter cards
 // are the bridge: one click opens the create flow, and once the thread exists
 // the card's prompt is waiting in the composer — sending stays the user's
@@ -8235,6 +8504,8 @@ await testFailedTurnStateAndDuration();
 await testModelProtocolHintFollowsTheChoice();
 await testToolLoopActivityAndDeliverables();
 await testToolApprovalCardsAndReasoningCaption();
+await testApprovalBecomesTheStepItIsAbout();
+await testDenialFoldsIntoTheRowItAnswers();
 await testStarterPromptLandsInTheComposer();
 await testCancelledStarterDropsItsPrompt();
 await testSelectedSourcesRideTheNextTurn();

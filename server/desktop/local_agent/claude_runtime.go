@@ -254,6 +254,14 @@ func (r *claudeRuntime) buildQueryOptions(in agentruntime.TurnInput, emit agentr
 	return opts
 }
 
+// openCalls remembers what a tool_use id was FOR, so the result that comes
+// back under that id can be named. The CLI's tool_result block carries only
+// tool_use_id, is_error and an opaque payload — the tool's name and the file
+// it touched live in the ToolUseBlock that opened the call, one message
+// earlier. Bounded because a runaway loop must not grow a map behind the
+// stream; past the cap results simply go unnamed and are dropped.
+const maxOpenToolCalls = 256
+
 // pump drains the SDK message stream into unified events.
 //
 // With IncludePartialMessages on, text and thinking arrive twice: as raw
@@ -266,6 +274,7 @@ func (r *claudeRuntime) pump(ctx context.Context, iter claudesdk.MessageIterator
 	sawResult := false
 	sawTextDelta := false
 	sawThinkingDelta := false
+	openCalls := map[string]agentruntime.ToolEvent{}
 	for {
 		msg, nerr := iter.Next(ctx)
 		if nerr != nil {
@@ -320,12 +329,47 @@ func (r *claudeRuntime) pump(ctx context.Context, iter claudesdk.MessageIterator
 						return werr
 					}
 				case *claudesdk.ToolUseBlock:
+					call := agentruntime.ToolEvent{Name: b.Name, Target: toolTarget(b.Input)}
+					if b.ID != "" && len(openCalls) < maxOpenToolCalls {
+						openCalls[b.ID] = call
+					}
 					if werr := emit(agentruntime.Event{
 						Kind: agentruntime.EventToolUse,
-						Tool: agentruntime.ToolEvent{Name: b.Name, Target: toolTarget(b.Input)},
+						Tool: call,
 					}); werr != nil {
 						return werr
 					}
+				}
+			}
+		case *claudesdk.UserMessage:
+			// The CLI reports every tool it ran by feeding the result back as a
+			// user message. That is the only place the loop says a step
+			// FINISHED — until this existed the work log could open a step and
+			// never close it, and EventToolResult was a kind the vocabulary
+			// declared and only the pi engine ever produced.
+			blocks, ok := m.Content.([]claudesdk.ContentBlock)
+			if !ok {
+				continue
+			}
+			for _, block := range blocks {
+				b, ok := block.(*claudesdk.ToolResultBlock)
+				if !ok {
+					continue
+				}
+				call, known := openCalls[b.ToolUseID]
+				if !known {
+					// A result for a call this pump never announced names
+					// nothing the renderer could settle; silence beats a row
+					// with no verb.
+					continue
+				}
+				delete(openCalls, b.ToolUseID)
+				call.IsError = b.IsError != nil && *b.IsError
+				if werr := emit(agentruntime.Event{
+					Kind: agentruntime.EventToolResult,
+					Tool: call,
+				}); werr != nil {
+					return werr
 				}
 			}
 		case *claudesdk.ResultMessage:
