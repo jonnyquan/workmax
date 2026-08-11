@@ -16,6 +16,9 @@
 import { fences } from "./fence.js";
 import {
   agentMode,
+  appearanceDarkButton,
+  appearanceLightButton,
+  appearanceSystemButton,
   attachButton,
   chatForm,
   chatInput,
@@ -35,7 +38,6 @@ import {
   localAccountPanel,
   localAccountRow,
   localAccountSwitchNote,
-  loginButton,
   loginCancelButton,
   loginEmail,
   loginForm,
@@ -57,7 +59,6 @@ import {
   modelSettingsError,
   modelSettingsForm,
   modelSettingsSubmitButton,
-  modelsButton,
   newThreadButton,
   newThreadCancelButton,
   newThreadForm,
@@ -73,7 +74,13 @@ import {
   renameThreadCancel,
   renameThreadForm,
   runtimeLabel,
+  settingsButton,
+  settingsCloseButton,
+  settingsOverlay,
+  statusBar,
   statusCard,
+  statusDismissButton,
+  statusRetryButton,
   stopButton,
   threadPanel,
   threadSearchInput,
@@ -230,10 +237,27 @@ function applyTheme(choice) {
 
 export function setTheme(choice) {
   applyTheme(choice);
+  renderAppearanceChoice();
   try {
     themeStore()?.setItem(THEME_STORAGE_KEY, themeChoice);
   } catch {
     // A full or locked store must not take the window down over a colour.
+  }
+}
+
+// The segmented control in Settings. It names all three states and marks the
+// live one, rather than being a switch you press until the window looks right.
+const APPEARANCE_BUTTONS = () => [
+  ["system", appearanceSystemButton],
+  ["light", appearanceLightButton],
+  ["dark", appearanceDarkButton],
+];
+
+function renderAppearanceChoice() {
+  for (const [choice, button] of APPEARANCE_BUTTONS()) {
+    if (!button) continue;
+    button.classList.toggle("active", choice === themeChoice);
+    button.setAttribute("aria-pressed", choice === themeChoice ? "true" : "false");
   }
 }
 
@@ -290,6 +314,9 @@ export const state = {
   // pressed twice into two revocations of the same session.
   disconnecting: false,
   localAccountPanelOpen: false,
+  // Whether the credential form is on screen. The connect control and the
+  // form are the same invitation; only one of them is shown at a time.
+  loginFormOpen: false,
   // The id being renamed inline, or null. While set, background repaints
   // (auth polling → updateComposerState) must NOT rebuild the account list —
   // a repaint that eats the user's half-typed name is data loss in miniature.
@@ -329,6 +356,18 @@ export class ThreadCreateFailure extends Error {
 export function setStatus(message, kind = "default") {
   statusCard.textContent = sanitizeErrorMessage(message);
   statusCard.classList.toggle("error", kind === "error");
+  // The strip around the line carries the tone and the two ways out. An error
+  // used to be red text that stayed until something else happened to replace
+  // it: no way to act on it, no way to put it down. Dismiss clears it; Retry
+  // is the one action that could plausibly fix anything this app reports,
+  // because every error here ends at "the sidecar did not answer".
+  const isError = kind === "error";
+  if (statusBar) {
+    statusBar.hidden = statusCard.textContent === "";
+    statusBar.classList.toggle("error", isError);
+  }
+  if (statusRetryButton) statusRetryButton.hidden = !isError;
+  if (statusDismissButton) statusDismissButton.hidden = !isError;
 }
 
 function bridge() {
@@ -632,8 +671,25 @@ function fillModelSettingsForm(settings) {
   setModelSettingsError("");
 }
 
+// The settings panel. Opening it is always safe and never depends on a bridge:
+// appearance and the account binding are readable without the sidecar, and the
+// model section fills itself in — or says why it cannot — once it is on screen.
+export function openSettingsPanel() {
+  if (!settingsOverlay) return;
+  settingsOverlay.hidden = false;
+  renderAppearanceChoice();
+  renderLocalAccountBinding();
+}
+
+function closeSettingsPanel() {
+  if (!settingsOverlay) return;
+  settingsOverlay.hidden = true;
+  closeModelSettings();
+}
+
 export async function openModelSettings() {
   if (!modelSettingsForm) return;
+  openSettingsPanel();
   const settings = desktopSettingsBridge();
   if (!settings) {
     setStatus("Model settings require desktopBridge.settings (alpha.7+).", "error");
@@ -945,6 +1001,10 @@ export function activeLocalAccount() {
 // explains where the work is going, and hiding it made connecting and
 // disconnecting feel like signing in and out of the app itself.
 export function renderLocalAccountArea() {
+  // The binding moved to Settings, which is open or closed independently of
+  // this rail, so it is repainted whenever the state behind it changes rather
+  // than only when the identity popover happens to be open.
+  renderLocalAccountBinding();
   if (!localAccountRow || !localAccountPanel) return;
   const active = activeLocalAccount();
   const visible = active !== null;
@@ -972,7 +1032,6 @@ export function renderLocalAccountArea() {
   }
   localAccountPanel.hidden = !state.localAccountPanelOpen;
   if (!state.localAccountPanelOpen) return;
-  renderLocalAccountBinding();
   if (!localAccountListEl) return;
   if (state.localAccountRenamingID !== null) return;
   // Switching identities decides who owns LOCAL work. While an account is
@@ -995,11 +1054,32 @@ export function renderLocalAccountArea() {
   }
 }
 
-// The binding line: bound / expired / unbound, and the one action that
-// changes it. Disconnect is the existing logout — no data moves, which is why
-// the copy promises exactly that and nothing more.
-function renderLocalAccountBinding() {
+// Two sources answer "is an account connected", and only one of them is always
+// available: the sidecar's binding record needs desktopBridge.local, the
+// session status does not. An authenticated session IS a connected account, so
+// a missing binding record must not leave the app offering to connect one that
+// is already there. The record wins when it has an opinion; the session fills
+// the gap when it does not.
+function effectiveCloudBinding() {
   const binding = state.cloudBinding || { state: "unbound", user_id: "" };
+  if (binding.state !== "unbound") return binding;
+  if (state.auth?.state === "authenticated") {
+    return { state: "bound", user_id: binding.user_id };
+  }
+  if (state.auth?.state === "expired") {
+    return { state: "expired", user_id: binding.user_id };
+  }
+  return binding;
+}
+
+// The binding line: bound / expired / unbound, and the one action that
+// changes it. This is the app's single "connect an account" control — there
+// used to be a second one in the rail wearing the same words, which meant two
+// buttons, two visibility rules and one intent. Disconnect is the existing
+// logout — no data moves, which is why the copy promises exactly that and
+// nothing more.
+function renderLocalAccountBinding() {
+  const binding = effectiveCloudBinding();
   const named = binding.user_id ? " (" + binding.user_id + ")" : "";
   if (localAccountBindingState) {
     localAccountBindingState.textContent =
@@ -1010,7 +1090,10 @@ function renderLocalAccountBinding() {
           : "No WorkMax account connected. Everything here is local to this machine.";
   }
   if (localAccountConnectButton) {
-    localAccountConnectButton.hidden = binding.state === "bound";
+    // While the credential form is open it is the form's own Continue that
+    // asks; a second, identical invitation above it would be noise.
+    localAccountConnectButton.hidden =
+      binding.state === "bound" || state.loginFormOpen === true;
     localAccountConnectButton.textContent =
       binding.state === "expired" ? "Sign in again" : "Connect account";
   }
@@ -1629,7 +1712,6 @@ export async function handleSessionChanged() {
   try {
     const auth = await loadAuthStatus(generation);
     if (!fences.session.isCurrent(generation) || !auth) return;
-    loginButton.hidden = auth.state === "authenticated";
     if (auth.state !== "authenticated") {
       // The account went away rather than changing — a disconnect, or a
       // session that expired. This machine's own identity is still here, so
@@ -1664,7 +1746,6 @@ export async function handleSessionChanged() {
   } catch {
     if (fences.session.isCurrent(generation)) {
       state.auth = null;
-      loginButton.hidden = false;
     }
   } finally {
     if (fences.session.isCurrent(generation)) {
@@ -2302,7 +2383,12 @@ function signedOutStatusMessage(authState = state.auth?.state) {
 
 function setLoginFormState(visible, submitting = false) {
   loginForm.hidden = !visible;
-  loginButton.hidden = visible || state.auth?.state === "authenticated";
+  state.loginFormOpen = visible;
+  // Signing in is a settings errand and the form lives in the settings panel,
+  // so asking for it has to bring the panel with it — otherwise the form is
+  // shown inside a dialog nobody opened.
+  if (visible) openSettingsPanel();
+  renderLocalAccountBinding();
   loginEmail.disabled = submitting;
   loginPassword.disabled = submitting;
   loginSubmitButton.disabled = submitting;
@@ -2416,7 +2502,7 @@ async function login() {
     return;
   }
   const generation = fences.loginOperation.bump();
-  loginButton.disabled = true;
+  if (localAccountConnectButton) localAccountConnectButton.disabled = true;
   setStatus("Preparing a secure sign-in session...");
   try {
     const result = parseLoginTransactionResult(await auth.beginLogin());
@@ -2426,7 +2512,7 @@ async function login() {
       showLoginBridgeUnavailable();
     }
   } finally {
-    loginButton.disabled = false;
+    if (localAccountConnectButton) localAccountConnectButton.disabled = false;
   }
 }
 
@@ -2564,7 +2650,6 @@ export async function refresh() {
   if (!api) {
     state.agentAvailable = false;
     state.createAvailable = false;
-    loginButton.hidden = true;
     updateComposerState();
     setStatus("This bundled renderer must run inside WorkMax Desktop.", "error");
     return;
@@ -2619,12 +2704,19 @@ export async function refresh() {
   threadPanel.hidden = true;
   setTurnState("Ready");
   updateComposerState();
-  runtimeLabel.textContent = `sidecar ${api.sidecarVersion || "unknown"} · app ${api.appVersion || "unknown"}`;
+  // A source build stamps no version, and "sidecar unknown · app unknown"
+  // reads as a fault rather than as the absence of a number. Say nothing
+  // instead: the line earns its space only when it carries one.
+  const versions = [
+    api.sidecarVersion ? `sidecar ${api.sidecarVersion}` : "",
+    api.appVersion ? `app ${api.appVersion}` : "",
+  ].filter(Boolean);
+  runtimeLabel.textContent = versions.join(" · ");
+  runtimeLabel.hidden = versions.length === 0;
   setStatus("Checking auth status...");
   try {
     const auth = await loadAuthStatus(generation);
     if (!auth || !fences.session.isCurrent(generation)) return;
-    loginButton.hidden = auth.state === "authenticated";
     if (auth.state !== "authenticated") {
       state.threads = [];
       renderThreads();
@@ -2674,7 +2766,6 @@ export async function refresh() {
       return;
     }
     if (fences.session.isCurrent(generation)) {
-      loginButton.hidden = true;
       setStatus(String(error), "error");
       updateComposerState();
     }
@@ -2684,9 +2775,40 @@ export async function refresh() {
 refreshButton.addEventListener("click", () => {
   void refresh();
 });
-if (modelsButton) {
-  modelsButton.addEventListener("click", () => {
+if (statusRetryButton) {
+  statusRetryButton.addEventListener("click", () => {
+    void refresh();
+  });
+}
+if (statusDismissButton) {
+  statusDismissButton.addEventListener("click", () => {
+    // Dismissing clears the line rather than hiding a message that is
+    // still there: a strip that reappears with stale text on the next
+    // unrelated repaint would be worse than one that never closed.
+    setStatus("");
+  });
+}
+if (settingsButton) {
+  settingsButton.addEventListener("click", () => {
     void openModelSettings();
+  });
+}
+if (settingsCloseButton) {
+  settingsCloseButton.addEventListener("click", () => {
+    closeSettingsPanel();
+  });
+}
+if (settingsOverlay) {
+  settingsOverlay.addEventListener("click", (event) => {
+    // The backdrop dismisses; the panel does not. Same rule the quick
+    // switcher already taught.
+    if (event.target === settingsOverlay) closeSettingsPanel();
+  });
+}
+for (const [choice, button] of APPEARANCE_BUTTONS()) {
+  if (!button) continue;
+  button.addEventListener("click", () => {
+    setTheme(choice);
   });
 }
 if (modelPreferredRoute) {
@@ -2706,12 +2828,9 @@ if (modelSettingsForm) {
 }
 if (modelSettingsCancelButton) {
   modelSettingsCancelButton.addEventListener("click", () => {
-    closeModelSettings();
+    closeSettingsPanel();
   });
 }
-loginButton.addEventListener("click", () => {
-  void login();
-});
 if (onboardingSignin) {
   onboardingSignin.addEventListener("click", () => {
     void login();
@@ -2860,6 +2979,12 @@ if (localAccountDisconnectButton) {
   });
 }
 
+renderAppearanceChoice();
+// The account binding is shown in Settings, which can be opened before any
+// bridge has answered — so it starts out saying the true thing rather than
+// the markup's placeholder.
+renderLocalAccountBinding();
+
 void refresh();
 
 buildStarterCards();
@@ -2907,6 +3032,10 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     if (quickSwitcher && !quickSwitcher.hidden) {
       closeQuickSwitcher();
+      return;
+    }
+    if (settingsOverlay && !settingsOverlay.hidden) {
+      closeSettingsPanel();
       return;
     }
     if (state.activeTurn && !state.activeTurn.stopRequested) {

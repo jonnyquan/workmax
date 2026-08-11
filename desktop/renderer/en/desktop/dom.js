@@ -11,6 +11,13 @@
 // null rather than throwing, and the callers that can survive that check for
 // it — see the `if (renameThreadButton)` guards next to their listeners.
 export const statusCard = document.querySelector("#status-card");
+// The strip the status line sits in, and its two ways out. An error the user
+// cannot put down stops being information and becomes furniture, so it gets a
+// dismiss — and the action that would actually fix it, which for every error
+// this app raises is "ask the sidecar again".
+export const statusBar = document.querySelector("#status-bar");
+export const statusRetryButton = document.querySelector("#status-retry");
+export const statusDismissButton = document.querySelector("#status-dismiss");
 export const localAccountRow = document.querySelector("#local-account-row");
 export const localAccountAvatar = document.querySelector("#local-account-avatar");
 export const localAccountNameEl = document.querySelector("#local-account-name");
@@ -25,7 +32,15 @@ export const localAccountCreateForm = document.querySelector("#local-account-cre
 export const localAccountNameInput = document.querySelector("#local-account-name-input");
 export const runtimeLabel = document.querySelector("#runtime-label");
 export const refreshButton = document.querySelector("#refresh-button");
-export const modelsButton = document.querySelector("#models-button");
+// Settings is a modal, not a column. A route, a protocol and an API key used
+// to live between the conversation list and the account row; the rail is
+// navigation, and this is the door out of it.
+export const settingsButton = document.querySelector("#settings-button");
+export const settingsOverlay = document.querySelector("#settings-overlay");
+export const settingsCloseButton = document.querySelector("#settings-close-button");
+export const appearanceSystemButton = document.querySelector("#appearance-system");
+export const appearanceLightButton = document.querySelector("#appearance-light");
+export const appearanceDarkButton = document.querySelector("#appearance-dark");
 export const modelSettingsForm = document.querySelector("#model-settings-form");
 export const modelPreferredRoute = document.querySelector("#model-preferred-route");
 export const modelLocalFields = document.querySelector("#model-local-fields");
@@ -41,7 +56,6 @@ export const modelKeyStatus = document.querySelector("#model-key-status");
 export const modelSettingsError = document.querySelector("#model-settings-error");
 export const modelSettingsSubmitButton = document.querySelector("#model-settings-submit-button");
 export const modelSettingsCancelButton = document.querySelector("#model-settings-cancel-button");
-export const loginButton = document.querySelector("#login-button");
 export const loginForm = document.querySelector("#login-form");
 export const loginEmail = document.querySelector("#login-email");
 export const loginPassword = document.querySelector("#login-password");

@@ -789,7 +789,7 @@ async function testAuthenticatedCacheRead() {
   const { document, ns } = await runRenderer(bridge);
   assert.deepEqual(calls, ["/auth/status", "/agent/threads?include_paused=true"]);
   assert.match(document.byId.get("runtime-label").textContent, /sidecar sidecar-test · app app-test/);
-  assert.equal(document.byId.get("login-button").hidden, true);
+  assert.equal(document.byId.get("local-account-connect").hidden, true);
   assert.match(document.byId.get("thread-list").textContent, /Storyboard draft/);
 
   const threadButton = walk(
@@ -871,7 +871,7 @@ async function testUnauthenticatedLogin() {
 
   const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   rendererDocument = document;
-  assert.equal(document.byId.get("login-button").hidden, false);
+  assert.equal(document.byId.get("local-account-connect").hidden, false);
   assert.equal(document.byId.get("login-form").hidden, true);
   assert.match(
     document.byId.get("status-card").textContent,
@@ -880,10 +880,10 @@ async function testUnauthenticatedLogin() {
   );
   assert.deepEqual(statusCalls, [[]]);
 
-  document.byId.get("login-button").click();
+  document.byId.get("local-account-connect").click();
   await settle();
   assert.deepEqual(beginCalls, [[]]);
-  assert.equal(document.byId.get("login-button").hidden, true);
+  assert.equal(document.byId.get("local-account-connect").hidden, true);
   assert.equal(document.byId.get("login-form").hidden, false);
   assert.match(document.byId.get("status-card").textContent, /email and password/i);
 
@@ -980,7 +980,7 @@ async function testInvalidCredentialsStayRetryableAndClearPassword() {
   };
 
   const { document, ns } = await runRenderer(bridge, desktopBridge);
-  document.byId.get("login-button").click();
+  document.byId.get("local-account-connect").click();
   await settle();
   document.byId.get("login-email").value = "writer@example.com";
   document.byId.get("login-password").value = "wrong-password";
@@ -1033,7 +1033,7 @@ async function testCancelFencesLatePasswordCompletion() {
   };
 
   const { document, ns } = await runRenderer(bridge, desktopBridge);
-  document.byId.get("login-button").click();
+  document.byId.get("local-account-connect").click();
   await settle();
   document.byId.get("login-email").value = "writer@example.com";
   document.byId.get("login-password").value = "late-password";
@@ -1093,7 +1093,7 @@ async function testAmbiguousPasswordResponseReconcilesSessionWithoutReplay() {
   };
 
   const { document, ns } = await runRenderer(bridge, desktopBridge);
-  document.byId.get("login-button").click();
+  document.byId.get("local-account-connect").click();
   await settle();
   document.byId.get("login-email").value = "writer@example.com";
   document.byId.get("login-password").value = "ambiguous-password";
@@ -1352,7 +1352,7 @@ async function testRejectsMalformedLoginTransactionResult() {
     };
 
     const { document, ns } = await runRenderer(bridge, desktopBridge);
-    document.byId.get("login-button").click();
+    document.byId.get("local-account-connect").click();
     await settle();
 
     assert.match(document.byId.get("status-card").textContent, /temporarily unavailable/i);
@@ -4876,7 +4876,7 @@ async function testSignedOutLocalRouteCanDriveTheAgent() {
     "local threads must load without a cloud session; they belong to the local single user",
   );
   assert.equal(
-    document.byId.get("login-button").hidden,
+    document.byId.get("local-account-connect").hidden,
     false,
     "signing in must still be offered — local mode is a way to work, not a replacement",
   );
@@ -7854,7 +7854,7 @@ async function testOfficialModelPickerShowsLockedModelsWithTheirTier() {
   const { document } = await runRenderer(bridge, desktopBridge);
   await settle();
 
-  document.byId.get("models-button").click();
+  document.byId.get("settings-button").click();
   await settle();
 
   const select = document.byId.get("model-official-id");
@@ -7889,7 +7889,7 @@ async function testDowngradedModelSelectionIsSurfacedNotSubstituted() {
   const { document } = await runRenderer(bridge, desktopBridge);
   await settle();
 
-  document.byId.get("models-button").click();
+  document.byId.get("settings-button").click();
   await settle();
 
   assert.equal(document.byId.get("model-settings-error").hidden, false);
@@ -7930,7 +7930,7 @@ async function testOfficialModelPickerExplainsItselfWithoutAnAccount() {
   const { document } = await runRenderer(bridge, desktopBridge);
   await settle();
 
-  document.byId.get("models-button").click();
+  document.byId.get("settings-button").click();
   await settle();
 
   assert.match(

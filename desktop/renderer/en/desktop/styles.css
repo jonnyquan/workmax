@@ -1,26 +1,14 @@
 /* ===========================================================================
    Design tokens
    ===========================================================================
-   Ported from the Work Agent web client's design system (web/app/globals.css)
-   so the desktop and the web surface read as one product rather than two
-   applications that happen to share a name.
-   
-   The palette is warm-paper neutrals with a low-saturation ink-green primary.
-   Values are kept in HSL channel form, the way the source defines them, so a
-   token can be reused at partial opacity — hsl(var(--x) / 0.5) — without
-   introducing a second, drifting definition of the same colour.
-   
-   Contrast, carried over from the source's own notes: the primary reads about
-   6.9:1 on the background, which passes WCAG AA for body text, so it is safe
-   for links and labels and not only for large headings. Amber requires a dark
-   foreground — white on it lands near 2.2:1.
+   Two token families live here and they are not the same kind of thing.
 
-   Appearance is three-state: follow the system (the default, and still the
-   right default — a native window that ignores the system appearance looks
-   broken next to every other window on the desktop), or force light, or force
-   dark. The forcing half exists because "follow the system" is the wrong
-   answer for the reader who wants a dark editor on a light desktop, and that
-   reader had no way to say so.
+   The first is COLOUR, and it is three-state: follow the system (the default,
+   and still the right default — a native window that ignores the system
+   appearance looks broken next to every other window on the desktop), or force
+   light, or force dark. The forcing half exists because "follow the system" is
+   the wrong answer for the reader who wants a dark editor on a light desktop,
+   and that reader had no way to say so.
 
    The cascade below is what makes the three states resolve correctly, and the
    order of the three blocks is load-bearing:
@@ -38,29 +26,47 @@
    routed through a second layer of indirection — and
    check-bundled-renderer-behavior.mjs asserts the two blocks are identical, so
    the duplication is a checked invariant rather than a drift waiting to happen.
+
+   The palette is warm-paper neutrals with a low-saturation ink-green primary,
+   ported from the web client so the two surfaces read as one product. The
+   neutrals were desaturated in this pass: the cream was doing the job a
+   hierarchy should do — announcing itself — and at 24% saturation it tinted
+   every white surface in the window. The hue family is unchanged, so the app
+   still reads warm; it just no longer reads yellow. The ink-green is untouched:
+   it is the brand, and it is the only saturated colour in the interface.
+
+   Contrast: the primary reads about 7:1 on the background, which passes WCAG AA
+   for body text, so it is safe for links and labels and not only for large
+   headings. Muted foreground lands near 7.5:1 in light and 7:1 in dark. Amber
+   requires a dark foreground — white on it lands near 2.2:1.
+
+   The second family is SCALE — type, space, radius, control height. It has one
+   state, because a 13px row is 13px whatever the appearance is, and it lives in
+   its own :root block below the colour cascade so the two never get confused
+   for each other.
 */
 
 :root {
-  --background: 42 24% 94%;
-  --foreground: 40 12% 14%;
-  --card: 44 33% 98%;
-  --card-foreground: 40 12% 14%;
+  --background: 40 12% 96%;
+  --foreground: 40 8% 13%;
+  --card: 40 25% 99%;
+  --card-foreground: 40 8% 13%;
   --primary: 158 34% 27%;
-  --primary-foreground: 44 33% 98%;
-  --secondary: 44 18% 88%;
-  --secondary-foreground: 40 12% 14%;
-  --muted: 44 18% 88%;
-  --muted-foreground: 40 8% 40%;
+  --primary-foreground: 40 25% 99%;
+  --secondary: 40 10% 93%;
+  --secondary-foreground: 40 8% 13%;
+  --muted: 40 10% 93%;
+  --muted-foreground: 40 6% 42%;
   --accent: 158 34% 27%;
-  --accent-foreground: 44 33% 98%;
-  --destructive: 0 84.2% 60.2%;
+  --accent-foreground: 40 25% 99%;
+  --destructive: 0 68% 45%;
   --destructive-foreground: 0 0% 98%;
   --success: 152 42% 33%;
-  --warning: 38 82% 48%;
-  --warning-foreground: 40 12% 14%;
+  --warning: 38 82% 40%;
+  --warning-foreground: 40 8% 13%;
   --info: 185 38% 34%;
-  --border: 40 14% 82%;
-  --input: 40 14% 82%;
+  --border: 40 8% 88%;
+  --input: 40 8% 88%;
   --ring: 158 34% 27%;
   --radius: 0.5rem;
   /* Syntax colours. Same HSL channel form as the rest, so a token can be used
@@ -82,24 +88,26 @@
 /* (2) dark because the system says so — unless the user forced light. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --background: 40 10% 8%;
-    --foreground: 42 18% 92%;
-    --card: 40 9% 11%;
-    --card-foreground: 42 18% 92%;
+    --background: 40 6% 9%;
+    --foreground: 40 8% 92%;
+    --card: 40 5% 12%;
+    --card-foreground: 40 8% 92%;
     --primary: 150 36% 52%;
-    --primary-foreground: 40 10% 8%;
-    --secondary: 40 8% 15%;
-    --secondary-foreground: 42 18% 92%;
-    --muted: 40 8% 15%;
-    --muted-foreground: 42 10% 62%;
+    --primary-foreground: 40 6% 9%;
+    --secondary: 40 5% 16%;
+    --secondary-foreground: 40 8% 92%;
+    --muted: 40 5% 16%;
+    --muted-foreground: 40 6% 62%;
     --accent: 150 36% 52%;
-    --accent-foreground: 40 10% 8%;
-    --destructive: 0 72% 58%;
+    --accent-foreground: 40 6% 9%;
+    --destructive: 0 72% 62%;
+    --destructive-foreground: 0 0% 98%;
     --success: 150 36% 52%;
     --warning: 38 78% 58%;
+    --warning-foreground: 40 6% 9%;
     --info: 185 38% 52%;
-    --border: 40 7% 20%;
-    --input: 40 7% 20%;
+    --border: 40 5% 20%;
+    --input: 40 5% 20%;
     --ring: 150 36% 52%;
     --code-comment: 42 8% 50%;
     --code-keyword: 292 45% 72%;
@@ -116,24 +124,26 @@
 /* (3) dark because the user said so, whatever the system says. Must stay
    byte-identical to (2) — the behaviour suite checks it. */
 :root[data-theme="dark"] {
-  --background: 40 10% 8%;
-  --foreground: 42 18% 92%;
-  --card: 40 9% 11%;
-  --card-foreground: 42 18% 92%;
+  --background: 40 6% 9%;
+  --foreground: 40 8% 92%;
+  --card: 40 5% 12%;
+  --card-foreground: 40 8% 92%;
   --primary: 150 36% 52%;
-  --primary-foreground: 40 10% 8%;
-  --secondary: 40 8% 15%;
-  --secondary-foreground: 42 18% 92%;
-  --muted: 40 8% 15%;
-  --muted-foreground: 42 10% 62%;
+  --primary-foreground: 40 6% 9%;
+  --secondary: 40 5% 16%;
+  --secondary-foreground: 40 8% 92%;
+  --muted: 40 5% 16%;
+  --muted-foreground: 40 6% 62%;
   --accent: 150 36% 52%;
-  --accent-foreground: 40 10% 8%;
-  --destructive: 0 72% 58%;
+  --accent-foreground: 40 6% 9%;
+  --destructive: 0 72% 62%;
+  --destructive-foreground: 0 0% 98%;
   --success: 150 36% 52%;
   --warning: 38 78% 58%;
+  --warning-foreground: 40 6% 9%;
   --info: 185 38% 52%;
-  --border: 40 7% 20%;
-  --input: 40 7% 20%;
+  --border: 40 5% 20%;
+  --input: 40 5% 20%;
   --ring: 150 36% 52%;
   --code-comment: 42 8% 50%;
   --code-keyword: 292 45% 72%;
@@ -146,6 +156,50 @@
   --code-attr: 30 60% 66%;
 }
 
+/* --- Scale -----------------------------------------------------------------
+   Five type sizes, one 4px spacing step, three weights, four radii. The old
+   sheet had eleven sizes and seven weights (550, 650, 800…), which is not a
+   hierarchy — it is the absence of one, since nothing was reliably bigger or
+   heavier than anything else. Everything below picks from these and nothing
+   invents its own value. */
+:root {
+  --fs-micro: 11px;   /* timestamps, chips, counts */
+  --fs-small: 12px;   /* secondary lines, list meta, notes */
+  --fs-base: 13px;    /* the app's own voice: rows, buttons, fields */
+  --fs-read: 15px;    /* prose: messages and the composer */
+  --fs-title: 17px;   /* the thing you are looking at */
+  --fs-display: 22px; /* the one headline on an empty screen */
+
+  --lh-tight: 1.3;
+  --lh-ui: 1.45;
+  --lh-read: 1.65;
+
+  --fw-normal: 400;
+  --fw-medium: 500;
+  --fw-strong: 600;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+
+  /* One radius per role. Controls are 6, surfaces are 10, floating panels are
+     14, and anything genuinely pill-shaped is a pill. No fifth value. */
+  --r-control: 6px;
+  --r-surface: 10px;
+  --r-panel: 14px;
+  --r-pill: 999px;
+
+  --h-control: 30px;
+  --h-control-sm: 24px;
+
+  --rail: 300px;
+  --measure: 720px;
+}
+
 :root {
   /* Native widgets — form controls, scrollbar gutters, the flash of paper
      behind a resizing window — follow the same three states. "light dark"
@@ -153,6 +207,7 @@
      forced theme does not leave native chrome arguing with the page. */
   color-scheme: light dark;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: var(--fs-base);
   background: hsl(var(--background));
   color: hsl(var(--foreground));
 }
@@ -192,16 +247,16 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: hsl(var(--border));
+  border-radius: var(--r-pill);
+  background: hsl(var(--muted-foreground) / 0.25);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.5);
+  background: hsl(var(--muted-foreground) / 0.45);
 }
 
 ::selection {
-  background: hsl(var(--primary) / 0.2);
+  background: hsl(var(--primary) / 0.18);
 }
 
 html {
@@ -219,43 +274,69 @@ body {
      a dead strip at the bottom of the window, forever. */
   overflow: hidden;
   background: hsl(var(--background));
+  font-size: var(--fs-base);
+  line-height: var(--lh-ui);
+  -webkit-font-smoothing: antialiased;
 }
 
+h1, h2, h3 {
+  margin: 0;
+  font-weight: var(--fw-strong);
+  letter-spacing: -0.01em;
+}
+
+p {
+  margin: 0;
+}
+
+/* --- Controls ---------------------------------------------------------------
+   Three tiers and no fourth. PRIMARY is the one action a surface is asking for
+   and there is never more than one visible at a time. SECONDARY is the bare
+   <button>: a real control, outlined, equal in weight to its neighbours.
+   GHOST is a control that should be reachable without being seen — refresh,
+   dismiss, rename, close.
+
+   Before this, "Refresh", "Models" and a filled green "Connect account" sat in
+   one grid, three different importances wearing two different costumes. The
+   filled button now appears once per surface, which is what makes it mean
+   anything. */
 button {
-  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  height: var(--h-control);
+  padding: 0 var(--sp-3);
   border: 1px solid hsl(var(--border));
-  border-radius: 6px;
-  background: hsl(var(--muted));
+  border-radius: var(--r-control);
+  background: transparent;
   color: hsl(var(--foreground));
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
-  transition: background-color 120ms ease, border-color 120ms ease, transform 80ms ease;
+  transition: background-color 100ms ease, border-color 100ms ease, color 100ms ease;
 }
 
-button:hover {
-  border-color: hsl(var(--border));
-  background: hsl(var(--border));
+button:hover:not(:disabled) {
+  background: hsl(var(--muted));
 }
 
 button:disabled {
   cursor: default;
-  opacity: 0.55;
-}
-
-button:active:not(:disabled) {
-  transform: translateY(1px);
+  opacity: 0.45;
 }
 
 button.primary {
-  /* The primary action carries the brand colour. It was grey before, which
-     made every button look equally important — the ink-green reads at about
-     6.9:1 on the background, so this is a contrast improvement as well as a
-     hierarchy one. */
+  /* The primary action carries the brand colour. It was grey once, which made
+     every button look equally important — the ink-green reads at about 7:1 on
+     the background, so this is a contrast improvement as well as a hierarchy
+     one. */
   border-color: hsl(var(--primary));
   background: hsl(var(--primary));
   color: hsl(var(--primary-foreground));
-  font-weight: 500;
 }
 
 button.primary:hover:not(:disabled) {
@@ -263,21 +344,155 @@ button.primary:hover:not(:disabled) {
   border-color: hsl(var(--primary) / 0.88);
 }
 
+button.ghost {
+  border-color: transparent;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+}
+
+button.ghost:hover:not(:disabled) {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+.icon-button {
+  width: var(--h-control);
+  min-width: var(--h-control);
+  padding: 0;
+  font-size: var(--fs-read);
+}
+
+/* One focus ring, one colour, everywhere. There used to be two — a grey
+   outline on some controls and a green box-shadow on others — which meant the
+   keyboard user was told two different stories about what "focused" looks
+   like. */
 a:focus-visible,
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid hsl(var(--muted-foreground));
-  outline-offset: 2px;
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
 }
 
+/* --- Fields ----------------------------------------------------------------
+   Label above input, always. The label is the small quiet line; the value is
+   the loud one. */
+.field {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.field > span {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
+}
+
+.field input,
+.field select,
+input[type="text"],
+input[type="url"],
+input[type="email"],
+input[type="password"],
+input[type="search"],
+select {
+  width: 100%;
+  height: var(--h-control);
+  padding: 0 var(--sp-2);
+  border: 1px solid hsl(var(--input));
+  border-radius: var(--r-control);
+  outline: none;
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: var(--fs-base);
+  font-weight: var(--fw-normal);
+}
+
+.field input:focus-visible,
+.field select:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  border-color: hsl(var(--ring));
+}
+
+.field input:disabled,
+.field select:disabled,
+input:disabled,
+select:disabled {
+  opacity: 0.55;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: hsl(var(--muted-foreground) / 0.85);
+}
+
+.field-stack {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+.field-note {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  line-height: var(--lh-ui);
+}
+
+/* The model note turns into a demand when the stored choice stopped being
+   allowed: same line, different colour, so the answer appears where the
+   question was asked. */
+.field-note.is-error {
+  color: hsl(var(--destructive));
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+}
+
+.check input {
+  width: auto;
+  height: auto;
+  margin: 0;
+  accent-color: hsl(var(--primary));
+}
+
+.form-error {
+  color: hsl(var(--destructive));
+  font-size: var(--fs-small);
+  line-height: var(--lh-ui);
+}
+
+.form-error.pending {
+  color: hsl(var(--muted-foreground));
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --- Shell -----------------------------------------------------------------
+   Three columns: conversations, the conversation itself, and the context of
+   the run. The middle one is the only one that flexes — the rails carry fixed
+   lists and reading them is easier at a stable width. Both rails lost 40px in
+   this pass; the middle column is where the words are. */
 .shell {
   display: grid;
-  /* Three columns: conversations, the conversation itself, and the context of
-     the run. The middle one is the only one that flexes — the rails carry
-     fixed-width lists and reading them is easier at a stable width. */
-  grid-template-columns: 340px minmax(0, 1fr) 340px;
+  grid-template-columns: var(--rail) minmax(0, 1fr) var(--rail);
   width: 100%;
   height: 100%;
   overflow: hidden;
@@ -287,562 +502,270 @@ textarea:focus-visible {
    rather than squeezing the conversation. */
 @media (max-width: 1180px) {
   .shell {
-    grid-template-columns: 300px minmax(0, 1fr);
+    grid-template-columns: 272px minmax(0, 1fr);
   }
   .context-panel {
     display: none;
   }
 }
 
+@media (max-width: 980px) {
+  .shell {
+    grid-template-columns: 256px minmax(0, 1fr);
+  }
+}
+
+/* --- Sidebar ---------------------------------------------------------------
+   Navigation and identity, and nothing else. */
 .sidebar {
   display: flex;
   flex-direction: column;
   min-width: 0;
   border-right: 1px solid hsl(var(--border));
-  /* Chrome, not content: tinted so the conversation reads as the surface in
-     front of it. */
   background: hsl(var(--background));
-}
-
-/* Competitor grammar: conversations first, account state at the bottom.
-   Rearranged with order so the DOM (and every test that walks it) is
-   untouched — the sidebar is a flex column, so this is purely visual. */
-.sidebar > .brand { order: 0; }
-.sidebar > .sidebar > .thread-toolbar {
-  margin-top: 2px;
-}
-
-.thread-toolbar { order: 10; }
-.sidebar > .thread-search { order: 11; }
-.sidebar > #new-thread-form { order: 12; }
-.sidebar > .thread-list { order: 13; }
-.sidebar > .content-match-panel { order: 14; }
-.sidebar > #local-account-row { order: 19; }
-.sidebar > #local-account-panel { order: 19; }
-.sidebar > #status-card { order: 20; }
-.sidebar > .sidebar-actions { order: 21; }
-.sidebar > #model-settings-form { order: 22; }
-.sidebar > #login-form { order: 23; }
-.sidebar > .sidebar-footer #runtime-label {
-  margin: 0 0 2px;
-  color: hsl(var(--muted-foreground) / 0.7);
-  font-size: 10px;
-}
-
-.sidebar-footer { order: 30; }
-
-.model-settings-form {
-  margin: 0 12px 12px;
-}
-
-.model-local-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.sidebar-check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: hsl(var(--muted-foreground));
-}
-
-.sidebar-check input {
-  margin: 0;
-}
-
-.model-key-status {
-  margin: 0;
-  font-size: 12px;
-  color: hsl(var(--muted-foreground));
 }
 
 .brand {
   display: flex;
-  gap: 10px;
+  flex: none;
+  gap: var(--sp-2);
   align-items: center;
-  padding: 16px 16px 12px;
+  padding: var(--sp-4) var(--sp-4) var(--sp-3);
 }
 
 .brand-mark {
   display: grid;
+  flex: none;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 22px;
+  height: 22px;
   overflow: hidden;
   /* The mark itself is a circular badge; a rounded square would crop it. */
-  border-radius: 999px;
-  /* The real WorkMax mark, inlined: the renderer ships as five allowlisted
-     files, and a sixth (an image) would ripple through three packaging
+  border-radius: var(--r-pill);
+  /* The real WorkMax mark, inlined: the renderer ships as a short allowlist of
+     files, and one more (an image) would ripple through three packaging
      allowlists for 5KB of pixels. */
   background: hsl(var(--primary)) url("data:image/png;base64,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") center / cover no-repeat;
   color: transparent;
-  font-weight: 800;
 }
 
 .brand h1 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 1.2;
-  letter-spacing: -0.01em;
+  font-size: var(--fs-base);
+  font-weight: var(--fw-strong);
+  line-height: var(--lh-tight);
 }
 
-.brand p,
-.status-card,
-.thread-item p,
-.empty-state p,
-#thread-meta {
-  margin: 0;
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.local-account-row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  height: auto;
-  margin: 10px 14px 0;
-  padding: 8px 10px;
-  border: 1px solid hsl(var(--border) / 0.6);
-  border-radius: 8px;
-  background: hsl(var(--card));
-  text-align: left;
-}
-
-.local-account-avatar {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 999px;
-  background: hsl(var(--primary));
-  color: hsl(var(--primary-foreground));
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.local-account-name {
-  flex: 1;
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 550;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.local-account-hint {
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-}
-
-.local-account-panel {
-  margin: 10px 14px 0;
-}
-
-.local-account-list {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-/* The binding block: what this local identity is connected to, and the one
-   action that changes it. It sits above the identity list because "who am I
-   here" is answered before "which of my workspaces". */
-.local-account-binding {
-  display: grid;
-  gap: 8px;
-  margin: 10px 0;
-  padding: 9px 10px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
-  background: hsl(var(--muted) / 0.35);
-}
-
-.local-account-binding-state {
-  margin: 0;
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.local-account-binding-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.local-account-binding-actions button {
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 6px;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font: inherit;
-  font-size: 12px;
-}
-
-.local-account-binding-actions button:hover:not(:disabled) {
-  background: hsl(var(--muted) / 0.6);
-}
-
-.local-account-binding-actions button:disabled {
-  opacity: 0.6;
-}
-
-.local-account-hint-line {
-  margin: 0 0 8px;
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.local-account-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  height: auto;
-  padding: 7px 9px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  font-size: 13px;
-  text-align: left;
-}
-
-.local-account-item:hover {
-  background: hsl(var(--muted) / 0.6);
-}
-
-.local-account-item.active {
-  background: hsl(var(--primary) / 0.1);
-  box-shadow: inset 2px 0 0 hsl(var(--primary));
-}
-
-.local-account-entry {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.local-account-entry .local-account-item {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.local-account-action {
+.sidebar-nav-head {
   flex: none;
-  height: auto;
-  padding: 4px 7px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  opacity: 0;
+  padding: 0 var(--sp-3);
 }
 
-.local-account-entry:hover .local-account-action,
-.local-account-action.armed {
-  opacity: 1;
+.thread-search {
+  padding-bottom: var(--sp-3);
 }
 
-.local-account-action:hover {
-  background: hsl(var(--muted) / 0.6);
-  color: hsl(var(--foreground));
-}
-
-.local-account-action.danger:hover,
-.local-account-action.armed {
-  background: hsl(0 72% 45% / 0.12);
-  color: hsl(0 72% 45%);
-}
-
-.local-account-rename {
-  display: flex;
-  flex: 1;
-  gap: 6px;
-  align-items: center;
-}
-
-.local-account-rename input {
-  flex: 1;
-  min-width: 0;
-  height: 30px;
-  padding: 0 8px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 6px;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font: inherit;
-  font-size: 13px;
-}
-
-.local-account-rename button {
-  flex: none;
-  height: 30px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-
-.local-account-create {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.local-account-create input {
-  flex: 1;
-  min-width: 0;
-  height: 32px;
-  padding: 0 9px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 6px;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font: inherit;
-  font-size: 13px;
-}
-
-.status-card {
-  margin: 10px 14px 8px;
-  padding: 7px 10px;
-  border: 1px solid hsl(var(--border) / 0.6);
-  border-radius: 8px;
-  background: hsl(var(--card));
-  font-size: 11px;
-}
-
-.status-card.error {
-  border-color: hsl(var(--destructive) / 0.25);
-  color: hsl(var(--destructive));
-}
-
-.sidebar-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 0 14px 14px;
-}
-
-/* The primary action reads as the row's conclusion, not a leftover cell. */
-.sidebar-actions .primary {
-  grid-column: 1 / -1;
-}
-
-.login-form {
-  display: grid;
-  gap: 12px;
-  margin: 0 14px 14px;
-  padding: 13px;
-  border: 1px solid hsl(var(--secondary));
-  border-radius: 8px;
+.thread-search input {
   background: hsl(var(--card));
 }
 
-.login-form[hidden] {
-  display: none;
-}
-
-.login-form-heading {
-  display: grid;
-  gap: 4px;
-}
-
-.login-form-heading strong {
-  font-size: 13px;
-}
-
-.login-form-heading span {
+/* A label, not a control. It names the list below it and must not look
+   clickable next to the buttons it sits with. */
+.rail-label {
   color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.login-field {
-  display: grid;
-  gap: 5px;
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.login-field input {
-  width: 100%;
-  height: 34px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 6px;
-  outline: none;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font: inherit;
-  font-size: 13px;
-  font-weight: 400;
-  padding: 0 9px;
-}
-
-.login-field input:focus {
-  border-color: hsl(var(--border));
-  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.35);
-}
-
-.login-field input:disabled {
-  opacity: 0.65;
-}
-
-.login-form-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.sidebar > .thread-toolbar {
-  margin-top: 2px;
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
 }
 
 .thread-toolbar {
   display: flex;
-  flex: none;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 0 14px 10px;
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-2);
 }
 
-.thread-toolbar button {
-  min-width: 68px;
+.thread-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
 }
 
-.sidebar-form {
+/* An inline form in the rail. It is the only card-like thing in this column,
+   because it is the only thing here that is a task rather than a list. */
+.rail-form {
   display: grid;
   flex: none;
-  gap: 11px;
-  margin: 0 14px 12px;
-  padding: 13px;
-  border: 1px solid hsl(var(--secondary));
-  border-radius: 8px;
+  gap: var(--sp-3);
+  margin: 0 var(--sp-3) var(--sp-3);
+  padding: var(--sp-3);
+  border-radius: var(--r-surface);
   background: hsl(var(--card));
+  box-shadow: 0 0 0 1px hsl(var(--border));
 }
 
-.sidebar-form[hidden] {
-  display: none;
+.rail-form > strong {
+  font-size: var(--fs-base);
+  font-weight: var(--fw-strong);
 }
 
-.sidebar-form-heading {
-  display: grid;
-  gap: 4px;
-}
-
-.sidebar-form-heading strong {
-  font-size: 13px;
-}
-
-.sidebar-form-heading span {
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.sidebar-field {
-  display: grid;
-  gap: 5px;
-  color: hsl(var(--foreground));
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.sidebar-field input,
-.sidebar-field select {
-  width: 100%;
-  height: 34px;
-  border: 1px solid hsl(var(--secondary));
-  border-radius: 6px;
-  outline: none;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font: inherit;
-  font-size: 13px;
-  font-weight: 400;
-  padding: 0 9px;
-}
-
-.sidebar-field input:focus,
-.sidebar-field select:focus {
-  border-color: hsl(var(--border));
-  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.35);
-}
-
-.sidebar-field input:disabled,
-.sidebar-field select:disabled {
-  opacity: 0.65;
-}
-
-.sidebar-form-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.form-error {
-  margin: 0;
-  color: hsl(var(--destructive));
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.form-error.pending {
-  color: hsl(var(--muted-foreground));
+.rail-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
 }
 
 .thread-list {
   flex: 1;
   min-height: 0;
   margin: 0;
-  padding: 0 8px 12px;
+  padding: 0 var(--sp-2) var(--sp-3);
   overflow: auto;
   list-style: none;
 }
 
-.sidebar-footer #runtime-label {
-  margin: 0 0 2px;
-  color: hsl(var(--muted-foreground) / 0.7);
-  font-size: 10px;
-}
-
-.sidebar-footer {
-  padding: 9px 18px 12px;
-  border-top: 1px solid hsl(var(--secondary));
+/* Day grouping. Uppercase is doing real work here — it is the only uppercase
+   in the app, and it marks the one kind of row that is not clickable. */
+.thread-group {
+  padding: var(--sp-4) var(--sp-2) var(--sp-1);
   color: hsl(var(--muted-foreground));
-  font-size: 11px;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-strong);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  list-style: none;
 }
 
-.sidebar-footer a {
-  color: inherit;
-  text-decoration: none;
+.thread-group:first-child {
+  padding-top: var(--sp-1);
 }
 
-.sidebar-footer a:hover {
+.thread-item {
+  position: relative;
+  width: 100%;
+  margin: 0;
+}
+
+.thread-button {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  height: auto;
+  padding: var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  background: transparent;
+  text-align: left;
+  white-space: normal;
+}
+
+.thread-button:hover:not(:disabled) {
+  background: hsl(var(--muted));
+}
+
+/* The open conversation. A tinted fill rather than a card plus a rule plus a
+   shadow: one signal is enough to say "this one". */
+.thread-button.active,
+.thread-button.active:hover {
+  background: hsl(var(--primary) / 0.1);
+}
+
+.thread-button strong {
+  display: block;
+  overflow: hidden;
   color: hsl(var(--foreground));
-  text-decoration: underline;
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-button.active strong {
+  font-weight: var(--fw-strong);
+}
+
+.thread-item p,
+.status-card,
+#thread-meta {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  line-height: var(--lh-ui);
+}
+
+.thread-recovery-badge {
+  display: inline-block;
+  margin-top: var(--sp-1);
+  padding: 1px var(--sp-1);
+  border-radius: var(--r-control);
+  background: hsl(var(--warning) / 0.16);
+  color: hsl(var(--warning));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
+}
+
+/* Row controls. Delete, pin and sync live in the row's corner and stay out of
+   sight until the row is hovered or the control is focused — a destructive
+   control on every row at rest reads as clutter and invites misclicks. Clicks
+   and keyboard focus work regardless: opacity hides, it does not disable. */
+.thread-delete,
+.thread-pin,
+.thread-sync {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-2);
+  border-color: transparent;
+  border-radius: var(--r-control);
+  background: hsl(var(--card));
+  box-shadow: 0 0 0 1px hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.thread-item:hover .thread-delete,
+.thread-item:hover .thread-pin,
+.thread-item:hover .thread-sync,
+.thread-delete:focus-visible,
+.thread-pin:focus-visible,
+.thread-sync:focus-visible,
+.thread-delete.armed {
+  opacity: 1;
+}
+
+.thread-item:has(.thread-delete) .thread-pin {
+  right: 62px;
+}
+
+/* Unlike pin and delete, a paused sync does NOT hide at rest: "this one stays
+   on my machine" is a standing fact about the conversation, and a fact you can
+   only see by hovering is a fact the user does not have. */
+.thread-item:has(.thread-sync) .thread-pin {
+  right: 74px;
+}
+
+.thread-sync.paused {
+  box-shadow: 0 0 0 1px hsl(var(--primary) / 0.4);
+  color: hsl(var(--foreground));
+  opacity: 1;
+}
+
+.thread-delete.armed {
+  background: hsl(var(--destructive));
+  box-shadow: none;
+  color: hsl(var(--destructive-foreground));
+}
+
+.thread-list .status-card {
+  padding: var(--sp-2);
 }
 
 .content-match-panel {
   flex: none;
   margin: 0;
-  padding: 0 8px 8px;
-  border-top: 1px solid hsl(var(--border) / 0.6);
+  padding: 0 var(--sp-2) var(--sp-2);
 }
 
 .content-match-list {
@@ -858,21 +781,22 @@ textarea:focus-visible {
   gap: 2px;
   width: 100%;
   height: auto;
-  padding: 7px 10px;
-  border: 0;
-  border-radius: 8px;
+  padding: var(--sp-2);
+  border-color: transparent;
+  border-radius: var(--r-control);
   background: transparent;
   text-align: left;
+  white-space: normal;
 }
 
 .content-match:hover {
-  background: hsl(var(--muted) / 0.6);
+  background: hsl(var(--muted));
 }
 
 .content-match strong {
   overflow: hidden;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -883,174 +807,499 @@ textarea:focus-visible {
   -webkit-box-orient: vertical;
   overflow: hidden;
   color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: var(--fs-micro);
+  line-height: var(--lh-ui);
 }
 
-.thread-item {
+/* --- Sidebar foot: state, identity, settings -------------------------------
+   The bottom of the rail answers three questions in three lines: what is the
+   app doing, who am I here, and where do I change things. */
+.sidebar-foot {
   position: relative;
-  width: 100%;
-  margin: 0;
+  flex: none;
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
 }
 
-/* Delete lives on the row, only on local-only threads. Hidden until the row
-   is hovered or the control is focused — a destructive control on every row
-   at rest reads as clutter and invites misclicks. Clicks and keyboard focus
-   work regardless: opacity hides, it does not disable. */
-.thread-delete {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  height: auto;
-  padding: 2px 7px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 6px;
-  background: hsl(var(--card));
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  line-height: 1.4;
-  opacity: 0;
-  transition: opacity 120ms ease;
+.status-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  padding: var(--sp-2);
+  border-radius: var(--r-control);
+  background: hsl(var(--muted) / 0.7);
 }
 
-.thread-item:hover .thread-delete,
-.thread-delete:focus-visible,
-.thread-delete.armed {
-  opacity: 1;
+.status-bar .status-card {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
-.thread-delete.armed {
-  border-color: hsl(var(--destructive) / 0.5);
-  background: hsl(var(--destructive));
-  color: hsl(var(--destructive-foreground));
+.status-bar-actions {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  margin: -3px -3px 0 0;
 }
 
-/* Pin shares the delete's hover-reveal manners and sits beside it; on synced
-   threads (no delete) it takes the corner alone. */
-.thread-pin {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  height: auto;
-  padding: 2px 7px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 6px;
-  background: hsl(var(--card));
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  line-height: 1.4;
-  opacity: 0;
-  transition: opacity 120ms ease;
+.status-bar-actions button {
+  height: var(--h-control-sm);
+  min-width: var(--h-control-sm);
+  padding: 0 var(--sp-1);
+  font-size: var(--fs-micro);
 }
 
-.thread-item:has(.thread-delete) .thread-pin {
-  right: 62px;
+/* An error is a different kind of message, so it gets a different ground and
+   two ways out: the action that would fix it, and the one that puts it down.
+   Before this it was red text that stayed until something else replaced it. */
+.status-bar.error {
+  background: hsl(var(--destructive) / 0.1);
 }
 
-.thread-item:hover .thread-pin,
-.thread-pin:focus-visible {
-  opacity: 1;
-}
-
-.thread-pin:hover {
-  color: hsl(var(--foreground));
-}
-
-/* The sync switch sits in the corner of threads the cloud already knows
-   about; the pin steps aside for it. Unlike pin and delete it does NOT hide
-   at rest once paused — "this one stays on my machine" is a standing fact
-   about the conversation, and a fact you can only see by hovering is a fact
-   the user does not have. */
-.thread-sync {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  height: auto;
-  padding: 2px 7px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 6px;
-  background: hsl(var(--card));
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  line-height: 1.4;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.thread-item:has(.thread-sync) .thread-pin {
-  right: 78px;
-}
-
-.thread-item:hover .thread-sync,
-.thread-sync:focus-visible,
-.thread-sync.paused {
-  opacity: 1;
-}
-
-.thread-sync.paused {
-  border-color: hsl(var(--primary) / 0.4);
-  color: hsl(var(--foreground));
-}
-
-.thread-sync:hover {
-  color: hsl(var(--foreground));
-}
-
-/* The model note turns into a demand when the stored choice stopped being
-   allowed: same line, different weight, so the answer appears where the
-   question was asked. */
-.model-key-status.is-error {
+.status-bar.error .status-card {
   color: hsl(var(--destructive));
 }
 
-.thread-button {
-  display: block;
-  width: 100%;
+.identity-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.local-account-row {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
   height: auto;
-  padding: 9px 10px;
-  border: 0;
-  border-radius: 8px;
-  border-radius: 8px;
-  background: transparent;
+  padding: var(--sp-2);
+  border-color: transparent;
+  border-radius: var(--r-control);
+  justify-content: flex-start;
   text-align: left;
 }
 
-.thread-button:hover {
-  background: hsl(var(--muted) / 0.6);
+.local-account-row:hover:not(:disabled) {
+  background: hsl(var(--muted));
 }
 
-/* The open conversation gets the card surface and a brand accent — the same
-   "this is the one in front" language the center column speaks. */
-.thread-button.active {
-  background: hsl(var(--card));
-  box-shadow: inset 2px 0 0 hsl(var(--primary)), 0 1px 2px rgb(0 0 0 / 4%);
+.local-account-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-pill);
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-strong);
 }
 
-.thread-button strong {
-  display: block;
+.local-account-text {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.local-account-name {
   overflow: hidden;
-  color: hsl(var(--foreground));
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.thread-recovery-badge {
-  display: inline-block;
-  margin-top: 5px;
-  padding: 2px 5px;
-  border: 1px solid hsl(var(--warning) / 0.4);
-  border-radius: 999px;
-  color: hsl(var(--warning));
-  font-size: 10px;
-  font-weight: 650;
+.local-account-hint {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
 }
 
+.sidebar-footer {
+  padding-top: var(--sp-3);
+  color: hsl(var(--muted-foreground) / 0.8);
+  font-size: var(--fs-micro);
+}
+
+.sidebar-footer #runtime-label {
+  margin-bottom: 1px;
+  color: hsl(var(--muted-foreground) / 0.7);
+}
+
+.sidebar-footer a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.sidebar-footer a:hover {
+  color: hsl(var(--foreground));
+  text-decoration: underline;
+}
+
+/* The identity popover: which of this machine's identities owns the work. It
+   floats above the row it belongs to rather than pushing the list around. */
+.account-popover {
+  position: absolute;
+  right: var(--sp-3);
+  bottom: 76px;
+  left: var(--sp-3);
+  z-index: 20;
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border-radius: var(--r-surface);
+  background: hsl(var(--card));
+  box-shadow:
+    0 0 0 1px hsl(var(--border)),
+    0 12px 32px hsl(40 10% 10% / 0.14);
+}
+
+.account-popover-title {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
+}
+
+.local-account-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.local-account-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.local-account-item {
+  flex: 1;
+  min-width: 0;
+  height: var(--h-control);
+  overflow: hidden;
+  padding: 0 var(--sp-2);
+  border-color: transparent;
+  border-radius: var(--r-control);
+  font-weight: var(--fw-normal);
+  text-align: left;
+  text-overflow: ellipsis;
+  justify-content: flex-start;
+}
+
+.local-account-item:hover {
+  background: hsl(var(--muted));
+}
+
+.local-account-item.active {
+  background: hsl(var(--primary) / 0.1);
+  font-weight: var(--fw-medium);
+}
+
+.local-account-action {
+  flex: none;
+  height: var(--h-control-sm);
+  min-width: auto;
+  padding: 0 var(--sp-1);
+  border-color: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
+  opacity: 0;
+}
+
+.local-account-entry:hover .local-account-action,
+.local-account-action:focus-visible,
+.local-account-action.armed {
+  opacity: 1;
+}
+
+.local-account-action:hover {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+.local-account-action.danger:hover,
+.local-account-action.armed {
+  background: hsl(var(--destructive) / 0.12);
+  color: hsl(var(--destructive));
+}
+
+.local-account-rename {
+  display: flex;
+  flex: 1;
+  gap: var(--sp-1);
+  align-items: center;
+}
+
+.local-account-rename input {
+  flex: 1;
+  min-width: 0;
+}
+
+.local-account-rename button {
+  flex: none;
+}
+
+.local-account-create-form {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.local-account-create-form input {
+  flex: 1;
+  min-width: 0;
+}
+
+.local-account-create-form button {
+  flex: none;
+}
+
+/* --- Overlays --------------------------------------------------------------
+   One dismissal grammar for every floating surface: a dimmed ground, a panel
+   that owns the keyboard, Escape to leave. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: var(--sp-5);
+  background: hsl(40 10% 8% / 0.35);
+}
+
+/* The switcher is a keyboard tool: it belongs where the eye already is, near
+   the top, not floating in the middle of the window. */
+.quick-switcher {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+.quick-switcher-panel {
+  width: min(560px, 100%);
+  overflow: hidden;
+  border-radius: var(--r-panel);
+  background: hsl(var(--card));
+  box-shadow:
+    0 0 0 1px hsl(var(--border)),
+    0 24px 64px hsl(40 10% 8% / 0.28);
+}
+
+.quick-switcher-panel input {
+  height: 46px;
+  padding: 0 var(--sp-4);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: var(--fs-read);
+}
+
+.quick-switcher-panel input:focus-visible {
+  outline: none;
+  border: 0;
+}
+
+.quick-switcher-list {
+  max-height: 340px;
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2) var(--sp-2);
+  overflow: auto;
+  list-style: none;
+}
+
+.quick-switcher-heading {
+  padding: var(--sp-3) var(--sp-2) var(--sp-1);
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
+}
+
+.quick-switcher-command,
+.quick-switcher-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-3);
+  width: 100%;
+  height: auto;
+  padding: var(--sp-2);
+  border-color: transparent;
+  border-radius: var(--r-control);
+  background: transparent;
+  text-align: left;
+}
+
+.quick-switcher-command strong,
+.quick-switcher-item strong {
+  overflow: hidden;
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-switcher-command span,
+.quick-switcher-item span {
+  flex: none;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
+}
+
+.quick-switcher-command:hover,
+.quick-switcher-item:hover {
+  background: hsl(var(--muted));
+}
+
+.quick-switcher-command.active,
+.quick-switcher-item.active {
+  background: hsl(var(--primary) / 0.1);
+}
+
+.quick-switcher-empty {
+  padding: var(--sp-4);
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  text-align: center;
+}
+
+/* --- Settings --------------------------------------------------------------
+   Everything that configures the app, in the one place that is about
+   configuring the app. */
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100%);
+  max-height: min(820px, calc(100vh - var(--sp-5) * 2));
+  overflow: hidden;
+  border-radius: var(--r-panel);
+  background: hsl(var(--card));
+  box-shadow:
+    0 0 0 1px hsl(var(--border)),
+    0 24px 64px hsl(40 10% 8% / 0.28);
+}
+
+.settings-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-3) var(--sp-4) var(--sp-5);
+}
+
+.settings-head h2 {
+  font-size: var(--fs-title);
+}
+
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--sp-5) var(--sp-5);
+}
+
+/* Groups are separated by air, not by rules. The one hairline is between
+   groups, at 40% opacity, and only because a scrolling panel needs somewhere
+   for the eye to land. */
+.settings-group {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-5) 0;
+}
+
+.settings-group + .settings-group {
+  box-shadow: inset 0 1px 0 hsl(var(--border) / 0.7);
+}
+
+.settings-group:first-child {
+  padding-top: 0;
+}
+
+.settings-group-title {
+  font-size: var(--fs-base);
+  font-weight: var(--fw-strong);
+}
+
+.settings-note {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  line-height: var(--lh-ui);
+}
+
+.settings-group-title + .settings-note {
+  margin-top: calc(var(--sp-3) * -1 + var(--sp-1));
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+.account-binding {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+.local-account-binding-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.login-form {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border-radius: var(--r-surface);
+  background: hsl(var(--muted) / 0.6);
+}
+
+/* A three-way choice reads as one control, not three buttons that happen to be
+   adjacent. */
+.segmented {
+  display: inline-flex;
+  justify-self: start;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-control);
+  background: hsl(var(--muted));
+}
+
+.segment {
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-3);
+  border-color: transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+}
+
+.segment:hover:not(:disabled) {
+  background: hsl(var(--card) / 0.6);
+  color: hsl(var(--foreground));
+}
+
+.segment.active,
+.segment.active:hover {
+  background: hsl(var(--card));
+  box-shadow: 0 1px 2px hsl(40 10% 10% / 0.1);
+  color: hsl(var(--foreground));
+  font-weight: var(--fw-medium);
+}
+
+/* --- Content ---------------------------------------------------------------
+   The reading surface. */
 .content {
   min-width: 0;
   overflow: hidden;
-  /* The reading surface. */
   background: hsl(var(--card));
 }
 
@@ -1059,153 +1308,97 @@ textarea:focus-visible {
   place-content: safe center;
   justify-items: center;
   height: 100%;
-  padding: 40px;
+  padding: var(--sp-7) var(--sp-6);
   overflow-y: auto;
   text-align: center;
 }
 
+/* One sentence and one action. The old empty screen opened with a decorative
+   glyph, a pill reading "PPT AGENT" and a paragraph — three pieces of chrome
+   in front of the only question the screen actually asks. */
 .empty-state h2 {
-  margin: 0 0 10px;
-  font-size: 30px;
-  font-weight: 700;
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-display);
+  font-weight: var(--fw-strong);
   letter-spacing: -0.02em;
-  line-height: 1.25;
+  line-height: var(--lh-tight);
 }
 
-.empty-glyph {
-  margin-bottom: 14px;
-  color: hsl(var(--muted-foreground) / 0.55);
-  font-size: 34px;
-  line-height: 1;
-}
-
-.empty-state > p:not(.eyebrow) {
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.empty-state > p:not(.eyebrow) {
-  max-width: 520px;
+.empty-state > p {
+  max-width: 46ch;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-read);
+  line-height: var(--lh-read);
 }
 
 .onboarding-paths {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  width: min(620px, 100%);
-  margin-top: 26px;
+  gap: var(--sp-3);
+  width: min(600px, 100%);
+  margin-top: var(--sp-6);
 }
 
-.onboarding-paths[hidden] {
-  display: none;
-}
-
-.onboarding-card {
+.onboarding-card,
+.starter-card {
   display: grid;
-  gap: 7px;
+  align-content: start;
+  gap: var(--sp-2);
   height: auto;
-  padding: 18px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 14px;
-  background: hsl(var(--card));
+  padding: var(--sp-4);
+  border-color: hsl(var(--border));
+  border-radius: var(--r-surface);
+  background: transparent;
+  font-weight: var(--fw-normal);
   text-align: left;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  white-space: normal;
 }
 
-.onboarding-card:hover {
+.onboarding-card:hover:not(:disabled),
+.starter-card:hover:not(:disabled) {
   border-color: hsl(var(--primary) / 0.45);
-  box-shadow: 0 4px 16px rgb(0 0 0 / 7%);
+  background: hsl(var(--primary) / 0.04);
 }
 
-.onboarding-icon {
-  font-size: 19px;
-  line-height: 1;
+.onboarding-card strong,
+.starter-card strong {
+  color: hsl(var(--foreground));
+  font-size: var(--fs-base);
+  font-weight: var(--fw-strong);
 }
 
-.onboarding-icon.tone-blue { color: hsl(211 74% 48%); }
-.onboarding-icon.tone-green { color: hsl(152 46% 38%); }
-
-.onboarding-card strong {
-  font-size: 14px;
-  font-weight: 650;
-}
-
-.onboarding-card > span:last-child {
+.onboarding-card > span,
+.starter-card span {
   color: hsl(var(--muted-foreground));
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-@media (max-width: 1320px) {
-  .onboarding-paths {
-    grid-template-columns: 1fr;
-    width: min(360px, 100%);
-  }
+  font-size: var(--fs-small);
+  line-height: var(--lh-ui);
 }
 
 .starter-prompts {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--sp-2);
   width: min(720px, 100%);
-  margin-top: 22px;
-}
-
-.starter-prompts[hidden] {
-  display: none;
+  margin-top: var(--sp-5);
 }
 
 .starter-card {
-  display: grid;
-  gap: 7px;
-  height: auto;
-  padding: 14px 15px;
-  border: 1px solid hsl(var(--border) / 0.8);
-  border-radius: 12px;
-  background: hsl(var(--card));
-  text-align: left;
-  transition: border-color 120ms ease, box-shadow 120ms ease, transform 80ms ease;
+  padding: var(--sp-3);
 }
 
-.starter-icon {
-  font-size: 15px;
-  line-height: 1;
-}
-
-.starter-icon.tone-blue { color: hsl(211 74% 48%); }
-.starter-icon.tone-violet { color: hsl(262 60% 55%); }
-.starter-icon.tone-green { color: hsl(152 46% 38%); }
-
-.starter-preview {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.starter-card:hover {
-  border-color: hsl(var(--primary) / 0.45);
-  background: hsl(var(--card));
-  box-shadow: 0 4px 14px rgb(0 0 0 / 6%);
-}
-
-.starter-card strong {
-  font-size: 13px;
-  font-weight: 650;
-  color: hsl(var(--foreground));
-}
-
+.starter-preview,
 .starter-card span {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-  line-height: 1.5;
 }
 
 @media (max-width: 1320px) {
+  .onboarding-paths {
+    grid-template-columns: 1fr;
+    width: min(380px, 100%);
+  }
   .starter-prompts {
     grid-template-columns: 1fr;
     width: min(440px, 100%);
@@ -1213,32 +1406,13 @@ textarea:focus-visible {
 }
 
 .empty-action {
-  min-width: 112px;
-  margin-top: 18px;
-  padding: 0 16px;
+  margin-top: var(--sp-5);
+  padding: 0 var(--sp-4);
 }
 
-.empty-state h2,
-.thread-panel h2 {
-  margin: 0 0 8px;
-  font-size: 22px;
-  line-height: 1.2;
-}
-
-.eyebrow {
-  margin: 0 0 12px !important;
-  padding: 4px 12px;
-  border: 1px solid hsl(var(--primary) / 0.25);
-  border-radius: 999px;
-  background: hsl(var(--primary) / 0.08);
-  color: hsl(var(--primary)) !important;
-  font-size: 11px !important;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
+/* --- Thread panel ----------------------------------------------------------- */
 .thread-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -1250,262 +1424,107 @@ textarea:focus-visible {
   flex: none;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 18px;
-  padding: 20px 32px 16px;
-  border-bottom: 1px solid hsl(var(--border) / 0.7);
-  background: hsl(var(--card) / 0.5);
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6) var(--sp-3);
+}
+
+.thread-header-copy {
+  min-width: 0;
 }
 
 .thread-panel header h2 {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: var(--fs-title);
+  font-weight: var(--fw-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Title with its rename control beside it; the inline form swaps in for the
-   title, not on top of it. */
+/* Title with its controls beside it; the controls stay quiet until the header
+   is hovered, because they are things you do to a conversation occasionally
+   and never the reason you opened it. */
 .thread-title-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-2);
+  min-width: 0;
 }
 
-#rename-thread-button {
-  height: auto;
-  padding: 2px 8px;
-  background: hsl(var(--card));
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
+.thread-title-row button {
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.thread-panel header:hover .thread-title-row button,
+.thread-title-row button:focus-visible {
+  opacity: 1;
+}
+
+#thread-meta {
+  margin-top: 2px;
 }
 
 .rename-thread-form {
   display: flex;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.rename-thread-form[hidden] {
-  display: none;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
 }
 
 .rename-thread-form input {
   flex: 1;
   min-width: 0;
-  height: 34px;
-  padding: 0 9px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 6px;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font: inherit;
-  font-size: 14px;
+  font-size: var(--fs-base);
 }
 
+.rename-thread-form button {
+  flex: none;
+}
+
+/* The turn's state, at a glance: busy pulses, done settles green, warnings
+   amber, errors red. Text carries the detail either way. */
 .turn-state {
   flex: none;
-  margin-top: 2px;
-  padding: 4px 10px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 999px;
-  background: hsl(var(--card));
+  height: var(--h-control-sm);
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-pill);
+  background: hsl(var(--muted));
   color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  font-weight: 650;
-  transition: color 120ms ease, border-color 120ms ease;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
 }
 
-/* The pill's colour is its state at a glance: busy pulses, done settles
-   green, warnings amber, errors red. Text carries the detail either way. */
 .turn-state.is-busy {
-  border-color: hsl(var(--info) / 0.4);
+  background: hsl(var(--info) / 0.14);
   color: hsl(var(--info));
   animation: turn-busy-pulse 1.6s ease-in-out infinite;
 }
 
 .turn-state.is-ok {
-  border-color: hsl(var(--success) / 0.4);
+  background: hsl(var(--success) / 0.14);
   color: hsl(var(--success));
 }
 
 .turn-state.is-warn {
-  border-color: hsl(var(--warning) / 0.5);
+  background: hsl(var(--warning) / 0.16);
   color: hsl(var(--warning));
 }
 
-.turn-state.is-error {
-  border-color: hsl(var(--destructive) / 0.4);
+.turn-state.is-error,
+.turn-state.error {
+  background: hsl(var(--destructive) / 0.12);
   color: hsl(var(--destructive));
 }
 
 @keyframes turn-busy-pulse {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
-}
-
-.turn-state.busy {
-  border-color: hsl(var(--border));
-  color: hsl(var(--foreground));
-}
-
-.turn-state.error {
-  border-color: hsl(var(--destructive) / 0.25);
-  color: hsl(var(--destructive));
-}
-
-/* Quick switcher: a keyboard-first jump between conversations. The overlay
-   dims the app; the panel floats high so the list can grow downward. */
-.quick-switcher {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding-top: 14vh;
-  background: rgb(0 0 0 / 32%);
-}
-
-.quick-switcher[hidden] {
-  display: none;
-}
-
-.quick-switcher-panel {
-  width: min(560px, calc(100vw - 80px));
-  border: 1px solid hsl(var(--border));
-  border-radius: 14px;
-  background: hsl(var(--card));
-  box-shadow: 0 24px 64px rgb(0 0 0 / 24%);
-  overflow: hidden;
-}
-
-.quick-switcher-panel input {
-  width: 100%;
-  height: 48px;
-  padding: 0 16px;
-  border: 0;
-  border-bottom: 1px solid hsl(var(--border));
-  outline: none;
-  background: transparent;
-  color: hsl(var(--foreground));
-  font: inherit;
-  font-size: 15px;
-}
-
-.quick-switcher-list {
-  max-height: 320px;
-  margin: 0;
-  padding: 6px;
-  overflow: auto;
-  list-style: none;
-}
-
-.quick-switcher-heading {
-  padding: 8px 12px 4px;
-  color: hsl(var(--muted-foreground));
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.quick-switcher-command,
-.quick-switcher-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 12px;
-  width: 100%;
-  height: auto;
-  padding: 9px 12px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  text-align: left;
-}
-
-.quick-switcher-command strong,
-.quick-switcher-command strong,
-.quick-switcher-item strong {
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 550;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.quick-switcher-command span,
-.quick-switcher-command span,
-.quick-switcher-item span {
-  flex: none;
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-}
-
-.quick-switcher-command:hover,
-.quick-switcher-item:hover {
-  background: hsl(var(--muted) / 0.6);
-}
-
-.quick-switcher-command.active,
-.quick-switcher-command.active,
-.quick-switcher-item.active {
-  background: hsl(var(--primary) / 0.1);
-  box-shadow: inset 2px 0 0 hsl(var(--primary));
-}
-
-.quick-switcher-empty {
-  padding: 14px;
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-  text-align: center;
-}
-
-/* Nears-the-limit capacity note; absent until it matters. */
-#composer-capacity {
-  color: hsl(var(--warning));
-}
-
-/* Floating return-to-newest affordance: appears when the stream moves on
-   without the reader, sits above the composer's shadow. */
-.jump-latest {
-  position: absolute;
-  bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
-  height: auto;
-  padding: 6px 14px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 999px;
-  background: hsl(var(--card));
-  color: hsl(var(--foreground));
-  font-size: 12px;
-  box-shadow: 0 4px 14px rgb(0 0 0 / 12%);
-}
-
-.jump-latest:hover {
-  border-color: hsl(var(--primary) / 0.5);
-}
-
-/* The whole panel is a drop target while a file hovers over it. */
-.thread-panel.drop-target::after {
-  content: "Drop files to attach";
-  position: absolute;
-  inset: 0;
-  z-index: 30;
-  display: grid;
-  place-items: center;
-  border: 2px dashed hsl(var(--primary));
-  border-radius: 12px;
-  background: hsl(var(--primary) / 0.06);
-  color: hsl(var(--primary));
-  font-size: 15px;
-  font-weight: 600;
-  pointer-events: none;
-}
-
-.thread-panel {
-  position: relative;
+  50% { opacity: 0.6; }
 }
 
 .message-viewport {
@@ -1519,56 +1538,555 @@ textarea:focus-visible {
   display: grid;
   /* Tight inside an exchange, air between exchanges: the question and its
      answer read as one unit, and units read apart. */
-  gap: 10px;
+  gap: var(--sp-2);
   /* A reading column, not a full bleed: ~70ch keeps long answers scannable.
-     The composer stays wider on purpose — writing wants room, reading wants
-     a measure. */
+     The composer stays wider on purpose — writing wants room, reading wants a
+     measure. */
   width: min(760px, 100%);
   margin: 0 auto;
-  padding: 24px 32px 34px;
+  padding: var(--sp-3) var(--sp-6) var(--sp-6);
 }
 
+.message {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+/* Air between exchanges. This is the only vertical rhythm in the transcript —
+   there are no rules between messages, because a rule between every turn is a
+   ledger, not a conversation. */
 .message.user:not(:first-child) {
-  margin-top: 18px;
+  margin-top: var(--sp-4);
 }
 
+/* Who said it. Sentence case, not a shouted uppercase label: the transcript
+   already has one uppercase register (day groups in the rail) and a second one
+   here would make every message look like the start of a new section. */
+.message-role {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
+}
+
+.message-time {
+  color: hsl(var(--muted-foreground) / 0.7);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
+  font-variant-numeric: tabular-nums;
+}
+
+.message.user .message-role {
+  justify-content: flex-end;
+}
+
+/* The assistant signs its answers with the same mark the rail wears. */
+.message-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  background: hsl(var(--primary)) url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAACo1BMVEUAAAABKSMBJR8BHBcAIRwELSUAHxkBAAACKyQAAQEBFREAAwMWGx4KLycMMisCGRURRjsEIhwAJyEJDxQUMCeTln3+tnYABgcKJR4AEA4DCRCnpYqfZz8iKhz/ungPFBcUGBxgbVsnQzj+6sUACwofPDL/78grRjgHLyqPj3hRXk75r3FGXU28spQbHiEXNSz9s3MLKCEPKyMHQTeBhG3Uw6J3Qx8USj11e2b95sGQlXxaZlX9qW6VnIH24r4jQDN6f2qJinM5UUQJCQesc0l/bE8XKR+1rJANDQwNHBZneGShnoSjoocZOTD53LOaln3iyqMkNihveGOWiWqDcFWHj3hxf2r9wYUsKxxARzgHRj2cnIL0rG40OS30uIIwSz+ha0QsMiZ0aE7m1LLy3blEVUXSuJAzRztTalhncFyWgl/GuZv/8809V0jAt5hNZVM+LhyBi3T+4rlmPB1bVUAeNix/Z0Y8PSrNvJxcWktITDtyblnon2T/+NEHLCVsUjTZyag8QTH31qpVRCrEsI3ypmovIhS3e0zhzqwUJBuLgmjLjVp6hHBJOSScjnA5TkBqdWDHgk5JLRkhLiX/v31JRS/ryZohFAodTT/u2bRUOCAeIBeQSyAUDgupkGpYb10COzJsRCT//9nYklt7dmCupou8qYaDVDG3ajndnWTClGdtXUTewZdQTURiSi+obkKsnH+lUiHt1K09XU2GQxvTm2iZcEvsz6OHWjiJeFr1v42ul3N5XT2lg12/o3lTSjf9yZHHq4GMc1GNYz3usnpoalWSVi41MSHFZzHmpnCkd04vWUh/fF5kYk7bXh/QXyK3VyKjlnjSrH7qmFvVgEjNcz7gkliVeFcqPi8oUEKshVbgtYiiWzK5hlfAeEXpYR4PPTGunA8xAAAACXBIWXMAAAsTAAALEwEAmpwYAAAMnklEQVR42o1Xh1sa2xLfZZcFlsBKB0lQekAQQYgUFdTYu8beYu+9R2OPNdX03nvvvffcfm9yb25/f8o7C5rk5uZ935sP2MPsmd/MmZlzzgwEQTQa9JHIMYNBshgqxGJya7WKVD6mYpLTGAzvZNoHEd8faOHHy6T5CFJZouXtAqfTqdM5BYKInKRmi4qxCPGJwg9j2qIoqZ0pNrRHRMmj1Ww6l0Lh0tmpAK0op9Us8kEsaoSgf5hOW2CLTElF1mY2ymFRYJhOpVJhmIsSGKvZmpxrIiEWAD4VpnkX7VXPMCclb07FUJg+xKIvEsxWwDCKmTan5JqZvtkkzoflL9oDXqgMKUksgkul0lksUjuVOjQEAKgseGiISknMTJIaJECWRvu372lAHhK3O9UIXMaCqbCbhaIULpcCfgAcWAZs2brvGqIWtIsZPvWfOQHIM9wpcpTCorOpVC5K1+oHvv7662PPq9VcCp1efnjfvhX79vEpqDzFzfQifALgDTuNGS3dhFDpChZwmvp5dlRW3dWvvrraWm/fvKbz8uUVL010cxxMpyPR0mjmogs+rgDIG6RqFDiOSkX5Axs3f+UXukDaU9+9GkZhGKyETuey2ZhaavgcAWAwDFITSmWBSWj1D1m7Qv38/ML8wsIKtS++faENq6sGuungJcwagjGTtJn5mQNoUJnURFGT+infZP8a6pP2Kywc/vb7gsJCv9CrejoXpAUICbcsFe2WljFon0QR+MAkVaCsVCCO9W+sO2j41e+QV/3lv08WFgIsv0O7Ng2xhigYl8pt1XJRrZTPYHziQxoRYcCoMMjcaKvN1hjfZ4vP3RVaWPDdt2sKv9rlFxbq15pzvLHxuE6einK5XDoL1UcQtA9ZzaCJcj3A/1RUoZvenX4+eMno+YE+28Htf39XW+i3K8wvtM44PbFxduNERobNzqeAtKAi1iTRgiPJLVmWzIFZqZi+saOvhMfjBQTwROUbR858X+aV98upvHQ+kOfPCwwsyU4zlqHAVngoRQvRFg0gija5WVTUZesY2eofkBATI4oJCPAvGFkfSi7fLzmjnweElyxZEhjA68+wRZMIaLUAXzwVGHXtSCoLrbalKc9DCSIGg8FkJgQG+/dXtoaGhYXmZKzhBQcv8VJwsH9JRp+CQlWzMJ1hMRLiFDVMp6iNaZXneQkQbf/+/eTeAEZcMgL/1V35JgCIexGAFcG882kpLJhFpWgjkAWAgx7SAOsVx4B/sGh+anDw6JaVh3dCMbxy28FDYcaJJQsUGBwITAgOuJQmR4HLsSiDbxciEW4unaLtu3lgP485v04mFAplMuHP81CC/w8phw5eOcZb4l0/8EJgIAnQ32Hkg6MG3eTEya0NNeegIP/tV37bKYL2H5WFhIQEBQUVy37eKfIfsPnpOs6DqAQGgMgAFwaQOME/XtGTJnAFCjIQonYDOgQPSX+chAL8L8iCikOEAEMmlJ1kiPpHmltulvjzeP4k8RJ4ZIwDeYd3RIFkoGPyJHJLmCPYMJXLP3FPIgrYe/T00+Gn60JC1k3NyaZioIoMue3MfiC7c35+cnL/fIJ/AsDxj/ktxcw1RaOKCAQ4MToHBU5NPjGOxIjO5pWW5j0rDgk5/ebem8F80YWJ9RMXGDz/w1tWrt4yN3X01smTkwn+MaILJ6opLHBmO90AIEmODFEMVcd7cWhJ/KPrT+69fnTnTl7eo1LhuGjngfUHdkKitvDTv72ZCpLJ5p4+PXrSP0ayfaIF7EsqllsHQaqc6KEyTH5zVblkz40b284UiM7kPbtz5uX460ezjJiGq08Sxi/ckxVfv066dt3r04NzPEjSeymDDw4YtDWXCWERJrUL0z8ezpcsffXno21/3ih9FpR3X/T8eumxhJjYsidxf526IbtfEHNdFiQ8c+GGbO5ljKS3Z4IN9gNF65RAfAEbbNDU2J6Hqluv/sorJW2X5ZXOPcv78eKt/I3tdxOXfj8lLK3Y8CwkKC+WOVD851/DUNeTWbACNtcUIYZSnTB5VHEKihIn3/4UHh4UJBz8qTgvT5g39+rFhmxPdn7+25+DwoNCyPQ6/aZUdvHVHjy9y0Kns91ctoAPKZwUNpXO7epKHkiYvLUOIBQDjJCg8PAt79ounK19Ms7ccBGwQ2TrBoOEwvDit0sTzqc8LABS4JgUmKAyEEVwDzSc6G8pgKDV24KET5euXiksDh+c2lBSkUndfnsNkzYnLA45/bq4OGRd+NFb+/Pjn9/9hpSiwgI1CQDuMbS/Kt0V35UQMyWTDb47dVQoK97DiBlwoQok6RhD1VYsFF7848UUyNEN0F6p3To9SiFPediphrROMITRmeyqZL00ai90ct02QCFb2kSMrcfLuCxYHV+SCM2flgl/+ilk2+AeqOC43b57NpECDnA6VZAKqQXgJtizYllmxY999Z7kY7f+OLVly6l5CEosSbFiYFLcMWAZtPPUYFDxzyd3ls8m1+ts2cvE/HyYSmc7+SCMQ+aHh7+7HJc4f3863u6J+iH7l19unO0fiEqpr3jPpXC2394s1X3z8I8XS9/cXxWVbrfHPxiPixu9fG0vxk0ViCGOc02NcmL76PtEycMdGdM2qXX9+tz1Vqs1y9Nyd8ZcUUBs7LPbrVE6XZQn1+PRtVQdmAyYeT/eOTsSRVE4cZDKsw13mk5kauPwuNsPHlf80GfrMxrj4422jEuZbSvuriHiNmY0Hi9y6tJTjLaRiXM7YiV4tzYzW5O2o0KfK4IYSQeX3+9I6+odF3MkM13lAXsfnKsBdLOmJFGV2bshkyLBS2rGMnanXcmYfZgfe7uAQJZtzzzrGGv4T2pUK7gamnOWP0lTNlz+flm3ZXQG2VpSEdvT03N2Va+KwDMzK0ZRAleNZjf80vDL/a695XFEucV8+NvOE5rftYcOORVgO1simq93OO5uGI/jZ998HNubKEksL1+WSPQ2rCFKMu9mA5iGUYIo7y1JFJvjug7sOCbu7Ry+qSytXr4rAgOHqqr9zphy7ADfHbcqzZGWtuPxgVHV1tiGx+c6Hs/su3aiRizJ7tjxoKFXVF6x6kDNWJryXLmbVTHmGDtTnZsrIsutaEfklR23+W7+gzSNRtOkXGvFXQ6NRqk8V7LhcM25zMQapVLZ5MHTNR1KwFXWbHXzY292ONLuZCi8VwtqHPs9u3dZ/t7hnlUk3X64dzv5jB3OX/by3r22yXs9sbGrtk92rYolqWc4/2X+eE+FsaNJSt7Q4GqW3xzofLdy5crVS310ceVF73M1yVu9wL/44bWPfapzdsxX6dAgvvTaWz2dvXw520vLFwdsLwt8vYxPucvZ1P53+1LEC+WdKCm8h8AwsYUDvhjHYkY5HA6GcsDDIsY4HNRiwVDvax+ffIUiPeGtooXrGYIfbGFxcLkmCo+vEuvBg8BxDgfHJO8jBQQhUVdWbSLMjUo5TkhwDoFzEBxDLXOX0MXCnca8WnoWQ2o1RnOlpjbriIuTpZOL+Zuj9XplMlLvUlQ1CVR6R1O9OStKLtZnWbR2BX629FcG7UONKol6zcfM09O1u5s26zS1xqaqtem1mkilJ1JXf8TaXaWsFBdpNC65cvdaj/yItSXSxPk9V/WxVmQw4IkGApFGWquqpC3ThiYB0hiprxoxVDtaKo24OrIy0jNdqawXKzZFGgmjwyEXWeOxT8o0sAjFuQKV3TFiS6+skurXZjGTHXJluqg20tGUjruVyY3KyihNvXy3zWGUPG+qFHcb1Z+WmjSy0I1HaiM1RXqHxqNdqyNaIg2OdLw2cqRRU8vXgIUk65uyKo2WqnhgnMMj+LxUBbGsK4obObLe4ljrQvqadgMfHCmS1K6NqF3b4m4q4ldV649kGZWNTfH2I66WyKuifxTLNLJZUNUluzZrMXlWN2Ky6+rFfHs1ws+qRlxZ7qxqrBtVeBTdunqX3uXiHzeI/lVskzYYijIlFBzEGMMlOIpJCBTFt3YDBk6gGIpIEESC44QoU9r8BXlvwa+V1iNte/Z0dq7w0bU2U2OLqe3awt/Ozs49bYhcqmB+Sd7bsojXpxcQM8sWKX+Gm5xOmcn/wJghRkHLA31BnkbzfVTRER4TsJiC+ogiFn8YUhCcnxXRrPq8V/qHDTQGVldk1YJk51BIArtnYYDhiNtedJAD0RiMz3uNzyDErU6d3M3BcQTDSNUYhuA42u3SCerMDNqXl/8RiWx9GbgiSZDucW3q5lvMZgu/e5PLLhDklhEL3fP/kl3MSrIxZRKphqR2gY9A792qRpi+1hb6P4iEABOZKkJs4fMtYsLX/X9Z+38Bxs97lArLMAYAAAAASUVORK5CYII=") center / cover no-repeat;
+  color: transparent;
+  font-size: 0;
+}
+
+.bubble {
+  width: fit-content;
+  max-width: min(var(--measure), 100%);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-surface);
+  background: hsl(var(--muted) / 0.7);
+  color: hsl(var(--foreground));
+  font-size: var(--fs-read);
+  line-height: var(--lh-read);
+  white-space: pre-wrap;
+  /* Long unbroken tokens — an id, a base64 blob, a path — used to widen the
+     column until the transcript scrolled sideways and the composer went with
+     it. A word that cannot break gets broken. */
+  overflow-wrap: anywhere;
+}
+
+/* The answer flows on the page, the question sits in a bubble — the reading
+   grammar of every major agent client. The model's prose gets the whole column
+   and no frame; structure inside it (code, quotes, the work log) keeps its own
+   chrome, so a border here was double-packaging. */
+.message.assistant .bubble {
+  max-width: 100%;
+  padding: 0;
+  background: transparent;
+}
+
+.message.user .bubble {
+  margin-left: auto;
+  /* A tint of the brand rather than a slab of it: the question is marked as
+     the reader's own without becoming the loudest object on the page, and the
+     same declaration reads correctly in both appearances because the text
+     stays the page's own foreground. */
+  background: hsl(var(--primary) / 0.1);
+}
+
+/* Waiting for the first token. The three dots occupy the empty bubble so the
+   pause reads as "thinking", not "broken". Cleared by the first delta or any
+   terminal event. */
+.message.pending .bubble {
+  min-width: 56px;
+}
+
+.message.pending .bubble::after {
+  content: "";
+  display: inline-block;
+  width: 32px;
+  height: 8px;
+  background-image: radial-gradient(circle 3px, hsl(var(--muted-foreground)) 100%, transparent 0);
+  background-size: 12px 8px;
+  background-repeat: repeat-x;
+  animation: typing-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes typing-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+.message.partial .message-role::after {
+  content: "partial";
+  color: hsl(var(--warning));
+  font-size: var(--fs-micro);
+}
+
+/* Per-message actions. Ghost controls that appear on hover, in the row below
+   the answer. They used to be outlined buttons sitting at 35% opacity, which
+   is a control loud enough to see and too faint to read. */
+.message-actions {
+  display: flex;
+  gap: var(--sp-1);
+  min-height: 22px;
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.message:hover .message-actions,
+.message-actions:focus-within {
+  opacity: 1;
+}
+
+.message.user .message-actions {
+  justify-content: flex-end;
+}
+
+.message-action {
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-2);
+  border-color: transparent;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
+}
+
+.message-action:hover:not(:disabled) {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+/* The top of a windowed transcript. A long conversation mounts only its most
+   recent exchanges, and this is the rest of it — quiet, because it is a
+   boundary marker rather than an action anyone came here to take. */
+.transcript-earlier {
+  justify-self: center;
+  height: var(--h-control-sm);
+  margin-bottom: var(--sp-2);
+  padding: 0 var(--sp-3);
+  border-color: transparent;
+  border-radius: var(--r-pill);
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
+}
+
+.transcript-earlier:hover {
+  color: hsl(var(--foreground));
+}
+
+/* --- Rendered Markdown ------------------------------------------------------ */
+
+/* pre-wrap is right for the raw text of a streaming answer and wrong once the
+   answer has been parsed into blocks, which carry their own spacing. */
+.bubble.markdown {
+  white-space: normal;
+}
+
+/* The still-streaming remainder of an answer: completed blocks above it are
+   already typeset, this tail is raw text and keeps the raw-text whitespace
+   rules even after the bubble has switched to block flow. */
+.md-stream-tail {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.md-stream-tail:empty {
+  display: none;
+}
+
+.bubble.markdown > *:first-child { margin-top: 0; }
+.bubble.markdown > *:last-child { margin-bottom: 0; }
+
+.md-paragraph {
+  margin: 0 0 var(--sp-3);
+  overflow-wrap: anywhere;
+}
+
+.md-heading {
+  margin: var(--sp-5) 0 var(--sp-2);
+  color: hsl(var(--foreground));
+  font-size: var(--fs-read);
+  font-weight: var(--fw-strong);
+  line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
+}
+
+.md-list {
+  margin: 0 0 var(--sp-3);
+  padding-left: var(--sp-5);
+  overflow-wrap: anywhere;
+}
+
+.md-list li {
+  margin-bottom: var(--sp-1);
+}
+
+.bubble.markdown blockquote {
+  margin: 0 0 var(--sp-3);
+  padding-left: var(--sp-3);
+  border-left: 2px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+}
+
+.bubble.markdown hr {
+  margin: var(--sp-4) 0;
+  border: none;
+  border-top: 1px solid hsl(var(--border));
+}
+
+/* Code chrome lives in a header strip above the <pre>, never inside it — a
+   label or button inside the block becomes part of its selectable text. */
+.md-code-wrap {
+  margin: 0 0 var(--sp-3);
+  overflow: hidden;
+  border-radius: var(--r-control);
+  background: hsl(var(--muted) / 0.7);
+}
+
+.md-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-3);
+}
+
+.md-code-lang {
+  color: hsl(var(--muted-foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--fs-micro);
+  letter-spacing: 0.03em;
+}
+
+.md-code-head button {
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-2);
+  border-color: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
+}
+
+.md-code {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-3);
+  border-radius: var(--r-control);
+  background: hsl(var(--muted) / 0.7);
+  /* The one place horizontal scrolling belongs: a long line of code must not
+     widen the message column. */
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.md-code-wrap > .md-code {
+  margin: 0;
+  padding-top: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.md-code code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--fs-small);
+  line-height: 1.55;
+}
+
+.md-code-inline {
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: hsl(var(--muted));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--fs-small);
+  overflow-wrap: anywhere;
+}
+
+.md-link {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* A link the renderer would not follow is shown as the literal text the model
+   wrote, so the user can see what was proposed rather than a dead anchor. */
+.md-link-refused {
+  color: hsl(var(--muted-foreground));
+}
+
+/* Syntax tokens. Colour only — no weight or size changes, because a code block
+   whose lines shift as it is highlighted is worse than one that never was. The
+   classes are produced by the tokenizer in markdown.js; a language it does not
+   know simply leaves the text unclassified and inherits the block's colour. */
+.tok-comment {
+  color: hsl(var(--code-comment));
+  font-style: italic;
+}
+
+.tok-keyword { color: hsl(var(--code-keyword)); }
+.tok-string { color: hsl(var(--code-string)); }
+.tok-number { color: hsl(var(--code-number)); }
+.tok-function { color: hsl(var(--code-function)); }
+.tok-builtin { color: hsl(var(--code-builtin)); }
+.tok-punct { color: hsl(var(--code-punct)); }
+.tok-tag { color: hsl(var(--code-tag)); }
+.tok-attr { color: hsl(var(--code-attr)); }
+
+/* --- Inline run narration --------------------------------------------------
+   The work log: what the agent did, above the words that explain it. Reads
+   like a checklist, quiet mono for targets, red for refusals. */
+.message-worklog {
+  display: grid;
+  gap: var(--sp-1);
+  width: fit-content;
+  max-width: min(var(--measure), 100%);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-surface);
+  background: hsl(var(--muted) / 0.55);
+  list-style: none;
+}
+
+.worklog-summary {
+  display: flex;
+}
+
+.worklog-toggle,
+.reasoning-toggle {
+  height: auto;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
+}
+
+.worklog-toggle:hover,
+.reasoning-toggle:hover {
+  background: transparent;
+  color: hsl(var(--foreground));
+}
+
+.worklog-step {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  overflow-wrap: anywhere;
+}
+
+.worklog-step::before {
+  content: "›";
+  color: hsl(var(--primary));
+  font-weight: var(--fw-strong);
+}
+
+.worklog-verb {
+  color: hsl(var(--foreground));
+  font-weight: var(--fw-medium);
+}
+
+.worklog-target {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--fs-micro);
+  overflow-wrap: anywhere;
+}
+
+.worklog-step.denied::before {
+  content: "×";
+  color: hsl(var(--destructive));
+}
+
+.worklog-denied {
+  color: hsl(var(--destructive));
+  font-size: var(--fs-micro);
+}
+
+.worklog-step.produced {
+  cursor: pointer;
+}
+
+.worklog-step.produced::before {
+  content: "+";
+  color: hsl(var(--success));
+}
+
+.worklog-step.produced:hover .worklog-target {
+  text-decoration: underline;
+}
+
+/* The reasoning caption: one live "Thinking…" line while the model reasons,
+   folding into a "Thought" toggle once the turn settles. Same quiet register
+   as the work log — narration, never competing with the answer. */
+.reasoning-strip {
+  max-width: min(var(--measure), 100%);
+  margin: 0;
+}
+
+.reasoning-caption {
+  display: block;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  font-style: italic;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reasoning-detail {
+  margin: var(--sp-1) 0 0;
+  color: hsl(var(--muted-foreground));
+  font-family: inherit;
+  font-size: var(--fs-small);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* L2 tool approvals: the agent paused on a tool call and asked. The card sits
+   with the work log, compact, and collapses in place to its outcome. */
+.approval-card {
+  display: grid;
+  gap: var(--sp-2);
+  width: fit-content;
+  max-width: min(var(--measure), 100%);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-surface);
+  background: hsl(var(--primary) / 0.08);
+  box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.25);
+  font-size: var(--fs-small);
+  overflow-wrap: anywhere;
+}
+
+.approval-card.approval-settled {
+  background: hsl(var(--muted) / 0.55);
+  box-shadow: none;
+}
+
+.approval-title {
+  color: hsl(var(--foreground));
+  font-weight: var(--fw-medium);
+}
+
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.approval-button {
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-3);
+  border-color: hsl(var(--primary) / 0.4);
+  color: hsl(var(--primary));
+  font-size: var(--fs-small);
+}
+
+.approval-button:hover:not(:disabled) {
+  background: hsl(var(--primary) / 0.12);
+}
+
+.approval-button.deny {
+  border-color: hsl(var(--destructive) / 0.4);
+  color: hsl(var(--destructive));
+}
+
+.approval-button.deny:hover:not(:disabled) {
+  background: hsl(var(--destructive) / 0.1);
+}
+
+.approval-note {
+  color: hsl(var(--destructive));
+  font-size: var(--fs-micro);
+}
+
+.approval-result {
+  color: hsl(var(--muted-foreground));
+  font-weight: var(--fw-medium);
+}
+
+.approval-result.allowed { color: hsl(var(--primary)); }
+.approval-result.denied { color: hsl(var(--destructive)); }
+
+/* --- Interruption and drop targets ----------------------------------------- */
 .turn-recovery-card {
   display: flex;
   flex: none;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  width: min(900px, calc(100% - 64px));
-  margin: 0 auto 10px;
-  padding: 11px 12px;
-  border: 1px solid hsl(var(--warning) / 0.4);
-  border-radius: 8px;
+  gap: var(--sp-4);
+  width: min(900px, calc(100% - var(--sp-6) * 2));
+  margin: 0 auto var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-surface);
   background: hsl(var(--warning) / 0.12);
 }
 
-.turn-recovery-card[hidden] {
-  display: none;
-}
-
 .turn-recovery-card[aria-busy="true"] {
-  border-color: hsl(var(--border));
+  background: hsl(var(--muted));
 }
 
 .turn-recovery-copy {
   display: grid;
   min-width: 0;
-  gap: 3px;
+  gap: 2px;
 }
 
 .turn-recovery-copy strong {
   color: hsl(var(--foreground));
-  font-size: 12px;
+  font-size: var(--fs-small);
+  font-weight: var(--fw-strong);
 }
 
 .turn-recovery-copy > span {
   color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: var(--fs-micro);
+  line-height: var(--lh-ui);
 }
 
 .turn-recovery-prompt {
@@ -1589,618 +2107,100 @@ textarea:focus-visible {
 .turn-recovery-actions {
   display: flex;
   flex: none;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
-.turn-recovery-actions button {
-  min-width: 76px;
+/* Floating return-to-newest affordance: appears when the stream moves on
+   without the reader, sits above the composer's shadow. */
+.jump-latest {
+  position: absolute;
+  bottom: var(--sp-4);
+  left: 50%;
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-3);
+  border-color: transparent;
+  border-radius: var(--r-pill);
+  background: hsl(var(--card));
+  box-shadow:
+    0 0 0 1px hsl(var(--border)),
+    0 4px 14px hsl(40 10% 10% / 0.12);
+  color: hsl(var(--foreground));
+  font-size: var(--fs-small);
+  transform: translateX(-50%);
 }
 
-.message {
-  display: grid;
-  gap: 8px;
-}
-
-.message-role {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: hsl(var(--muted-foreground));
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.message-time {
-  margin-left: 2px;
-  color: hsl(var(--muted-foreground) / 0.75);
-  font-weight: 400;
-  letter-spacing: 0.02em;
-}
-
-.message.user .message-role {
-  justify-content: flex-end;
-}
-
-/* The assistant signs its answers with the same mark the sidebar wears. */
-.message-avatar {
+/* The whole panel is a drop target while a file hovers over it. */
+.thread-panel.drop-target::after {
+  content: "Drop files to attach";
+  position: absolute;
+  inset: 0;
+  z-index: 30;
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: hsl(var(--primary)) url("data:image/png;base64,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") center / cover no-repeat;
-  color: transparent;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-.message.user .message-role {
-  text-align: right;
-}
-
-.bubble {
-  width: fit-content;
-  max-width: min(720px, 100%);
-  padding: 12px 15px;
-  border: 1px solid hsl(var(--border) / 0.7);
-  border-radius: 12px;
-  background: hsl(var(--card));
-  color: hsl(var(--foreground));
-  font-size: 14px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 3%);
-}
-
-/* Rendered Markdown ------------------------------------------------------- */
-
-/* pre-wrap is right for the raw text of a streaming answer and wrong once the
-   answer has been parsed into blocks, which carry their own spacing. */
-.bubble.markdown {
-  white-space: normal;
-}
-
-/* The still-streaming remainder of an answer: completed blocks above it are
-   already typeset, this tail is raw text and keeps the raw-text whitespace
-   rules even after the bubble has switched to block flow. */
-.md-stream-tail {
-  display: block;
-  white-space: pre-wrap;
-}
-.md-stream-tail:empty {
-  display: none;
-}
-
-.bubble.markdown > *:first-child { margin-top: 0; }
-.bubble.markdown > *:last-child { margin-bottom: 0; }
-
-.md-paragraph {
-  margin: 0 0 10px;
-}
-
-.md-heading {
-  margin: 14px 0 6px;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.4;
-  color: hsl(var(--foreground));
-}
-
-.md-list {
-  margin: 0 0 10px;
-  padding-left: 20px;
-}
-
-.md-list li {
-  margin-bottom: 3px;
-}
-
-.bubble.markdown blockquote {
-  margin: 0 0 10px;
-  padding-left: 10px;
-  border-left: 2px solid hsl(var(--border));
-  color: hsl(var(--muted-foreground));
-}
-
-.bubble.markdown hr {
-  margin: 12px 0;
-  border: none;
-  border-top: 1px solid hsl(var(--border));
-}
-
-.md-code {
-  margin: 0 0 10px;
-  padding: 10px 12px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 6px;
-  background: hsl(var(--muted));
-  /* The one place horizontal scrolling belongs: a long line of code must not
-     widen the message column. */
-  overflow-x: auto;
-  white-space: pre;
-}
-
-.md-code code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.md-code-inline {
-  padding: 1px 4px;
-  border-radius: 4px;
-  background: hsl(var(--muted));
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-}
-
-.md-link {
-  color: hsl(var(--primary));
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-/* A link the renderer would not follow is shown as the literal text the model
-   wrote, so the user can see what was proposed rather than a dead anchor. */
-.md-link-refused {
-  color: hsl(var(--muted-foreground));
-}
-
-/* The answer flows on the page, the question sits in a bubble — the reading
-   grammar of every major agent client. The model's prose gets the whole
-   column and no frame; structure inside it (code, quotes, the work log)
-   keeps its own chrome, so the border was double-packaging. */
-.message.assistant .bubble {
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.message.user .bubble {
-  margin-left: auto;
-  border-color: hsl(var(--primary));
-  /* Brand ink, not near-black: the user's words carry the product colour,
-     the model's answer stays on paper. */
-  background: hsl(var(--primary));
-  color: hsl(var(--primary-foreground));
-}
-
-/* Waiting for the first token. The three dots occupy the empty bubble so the
-   pause reads as "thinking", not "broken". Cleared by the first delta or any
-   terminal event. */
-.message.pending .bubble {
-  min-width: 64px;
-}
-
-.message.pending .bubble::after {
-  content: "";
-  display: inline-block;
-  width: 32px;
-  height: 8px;
-  background-image: radial-gradient(circle 3px, hsl(var(--muted-foreground)) 100%, transparent 0);
-  background-size: 12px 8px;
-  background-repeat: repeat-x;
-  animation: typing-pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes typing-pulse {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 1; }
-}
-
-/* The inline work log: what the agent did, above the words that explain it.
-   Reads like a checklist, quiet mono for targets, red for refusals. */
-.message-worklog {
-  display: grid;
-  gap: 3px;
-  width: fit-content;
-  max-width: min(720px, 100%);
-  margin: 0;
-  padding: 8px 12px;
-  border: 1px solid hsl(var(--border) / 0.7);
-  border-radius: 10px;
-  background: hsl(var(--secondary) / 0.35);
-  list-style: none;
-}
-
-.worklog-summary {
-  display: flex;
-}
-
-.worklog-toggle {
-  height: auto;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.worklog-toggle:hover {
-  color: hsl(var(--foreground));
-  background: transparent;
-}
-
-.worklog-step {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  font-size: 12px;
-  color: hsl(var(--muted-foreground));
-}
-
-.worklog-step::before {
-  content: "›";
-  color: hsl(var(--primary));
-  font-weight: 700;
-}
-
-.worklog-verb {
-  font-weight: 600;
-  color: hsl(var(--foreground));
-}
-
-.worklog-target {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-}
-
-.worklog-step.denied::before {
-  content: "×";
-  color: hsl(var(--destructive));
-}
-
-.worklog-denied {
-  color: hsl(var(--destructive));
-  font-size: 11px;
-}
-
-.worklog-step.produced {
-  cursor: pointer;
-}
-
-.worklog-step.produced::before {
-  content: "＋";
-  color: hsl(var(--success));
-}
-
-.worklog-step.produced:hover .worklog-target {
-  text-decoration: underline;
-}
-
-/* The reasoning caption: one live "Thinking…" line while the model reasons,
-   folding into a "Thought" toggle once the turn settles. Same quiet register
-   as the work log — narration, never competing with the answer. */
-.reasoning-strip {
-  max-width: min(720px, 100%);
-  margin: 0;
-}
-
-.reasoning-caption {
-  display: block;
-  overflow: hidden;
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-  font-style: italic;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.reasoning-toggle {
-  height: auto;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.reasoning-toggle:hover {
-  color: hsl(var(--foreground));
-  background: transparent;
-}
-
-.reasoning-detail {
-  margin: 4px 0 0;
-  color: hsl(var(--muted-foreground));
-  font-family: inherit;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-/* L2 tool approvals: the agent paused on a tool call and asked. The card sits
-   with the work log, compact, and collapses in place to its outcome. */
-.approval-card {
-  display: grid;
-  gap: 6px;
-  width: fit-content;
-  max-width: min(720px, 100%);
-  margin: 0;
-  padding: 8px 12px;
-  border: 1px solid hsl(var(--primary) / 0.35);
-  border-radius: 10px;
+  border: 2px dashed hsl(var(--primary));
+  border-radius: var(--r-panel);
   background: hsl(var(--primary) / 0.06);
-  font-size: 12px;
-}
-
-.approval-card.approval-settled {
-  border-color: hsl(var(--border) / 0.7);
-  background: hsl(var(--secondary) / 0.35);
-}
-
-.approval-title {
-  color: hsl(var(--foreground));
-  font-weight: 600;
-}
-
-.approval-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.approval-button {
-  height: auto;
-  padding: 3px 10px;
-  border: 1px solid hsl(var(--primary) / 0.4);
-  border-radius: 7px;
-  background: transparent;
   color: hsl(var(--primary));
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--fs-read);
+  font-weight: var(--fw-strong);
+  pointer-events: none;
 }
 
-.approval-button:hover {
-  background: hsl(var(--primary) / 0.12);
-}
-
-.approval-button.deny {
-  border-color: hsl(var(--destructive) / 0.4);
-  color: hsl(var(--destructive));
-}
-
-.approval-button.deny:hover {
-  background: hsl(var(--destructive) / 0.1);
-}
-
-.approval-button:disabled {
-  opacity: 0.5;
-}
-
-.approval-note {
-  color: hsl(var(--destructive));
-  font-size: 11px;
-}
-
-.approval-result {
-  color: hsl(var(--muted-foreground));
-  font-weight: 600;
-}
-
-.approval-result.allowed {
-  color: hsl(var(--primary));
-}
-
-.approval-result.denied {
-  color: hsl(var(--destructive));
-}
-
-/* Per-message actions. The row keeps its height at rest (no layout jump) but
-   fades until the message is hovered or a button is focused — present enough
-   to be discovered, quiet enough not to compete with the answer. */
-.message-actions {
-  display: flex;
-  gap: 6px;
-  opacity: 0.35;
-  transition: opacity 120ms ease;
-}
-
-.message:hover .message-actions,
-.message-actions:focus-within {
-  opacity: 1;
-}
-
-.message.user .message-actions {
-  justify-content: flex-end;
-}
-
-.message-action {
-  padding: 3px 8px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 6px;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  line-height: 1.4;
-  cursor: pointer;
-}
-
-.message-action:hover {
-  background: hsl(var(--secondary));
-  color: hsl(var(--foreground));
-}
-
-.message-action:focus-visible {
-  outline: none;
-  border-color: hsl(var(--ring));
-  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.35);
-}
-
-/* The top of a windowed transcript. A long conversation mounts only its most
-   recent exchanges, and this is the rest of it — quiet, because it is a
-   boundary marker rather than an action anyone came here to take, and full
-   width because a centred pill in a reading column reads as the end of the
-   content rather than the edge of what is shown. */
-.transcript-earlier {
-  justify-self: center;
-  margin-bottom: 8px;
-  padding: 5px 14px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 999px;
-  background: hsl(var(--card));
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  line-height: 1.5;
-  cursor: pointer;
-}
-
-.transcript-earlier:hover {
-  background: hsl(var(--secondary));
-  color: hsl(var(--foreground));
-}
-
-.transcript-earlier:focus-visible {
-  outline: none;
-  border-color: hsl(var(--ring));
-  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.35);
-}
-
-/* Code chrome lives in a header strip above the <pre>, never inside it — a
-   label or button inside the block becomes part of its selectable text. */
-.md-code-wrap {
-  margin: 0 0 10px;
-}
-
-.md-code-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 5px 8px 5px 12px;
-  border: 1px solid hsl(var(--border));
-  border-bottom: 0;
-  border-radius: 6px 6px 0 0;
-  background: hsl(var(--secondary) / 0.6);
-}
-
-.md-code-wrap > .md-code {
-  margin: 0;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-}
-
-.md-code-lang {
-  color: hsl(var(--muted-foreground));
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  letter-spacing: 0.03em;
-}
-
-/* Syntax tokens. Colour only — no weight or size changes, because a code block
-   whose lines shift as it is highlighted is worse than one that never was. The
-   classes are produced by the tokenizer in renderer.js; a language it does not
-   know simply leaves the text unclassified and inherits the block's colour. */
-.tok-comment {
-  color: hsl(var(--code-comment));
-  font-style: italic;
-}
-
-.tok-keyword {
-  color: hsl(var(--code-keyword));
-}
-
-.tok-string {
-  color: hsl(var(--code-string));
-}
-
-.tok-number {
-  color: hsl(var(--code-number));
-}
-
-.tok-function {
-  color: hsl(var(--code-function));
-}
-
-.tok-builtin {
-  color: hsl(var(--code-builtin));
-}
-
-.tok-punct {
-  color: hsl(var(--code-punct));
-}
-
-.tok-tag {
-  color: hsl(var(--code-tag));
-}
-
-.tok-attr {
-  color: hsl(var(--code-attr));
-}
-
-.message.partial .message-role::after {
-  content: " · partial";
-  color: hsl(var(--warning));
-}
-
+/* --- Composer --------------------------------------------------------------- */
 .composer {
   flex: none;
-  width: min(900px, calc(100% - 64px));
-  margin: 0 auto 24px;
-  padding: 12px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 14px;
+  width: min(900px, calc(100% - var(--sp-6) * 2));
+  margin: 0 auto var(--sp-5);
+  padding: var(--sp-3);
+  border-radius: var(--r-panel);
   background: hsl(var(--card));
-  /* A soft lift, not a floating panel: the 24%-black drop shadow read as a
-     modal on the light theme. */
-  box-shadow: 0 2px 6px rgb(0 0 0 / 5%), 0 8px 24px rgb(0 0 0 / 6%);
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  box-shadow:
+    0 0 0 1px hsl(var(--border)),
+    0 1px 2px hsl(40 10% 10% / 0.04),
+    0 8px 24px hsl(40 10% 10% / 0.05);
+  transition: box-shadow 100ms ease;
 }
 
 .composer:focus-within {
-  border-color: hsl(var(--ring) / 0.6);
-  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12), 0 8px 24px rgb(0 0 0 / 6%);
+  box-shadow:
+    0 0 0 1px hsl(var(--ring) / 0.55),
+    0 8px 24px hsl(40 10% 10% / 0.06);
 }
 
 .composer-toolbar,
 .composer-actions {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: var(--sp-2);
   color: hsl(var(--muted-foreground));
-  font-size: 11px;
-}
-
-.composer-toolbar label {
-  font-weight: 700;
-  text-transform: uppercase;
+  font-size: var(--fs-micro);
 }
 
 .composer-toolbar select {
+  width: auto;
   max-width: 180px;
-  height: 26px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 999px;
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-2);
+  border-color: transparent;
+  border-radius: var(--r-pill);
+  background: hsl(var(--muted));
+  font-size: var(--fs-micro);
+}
+
+.composer-chip {
+  flex: none;
+  padding: 3px var(--sp-2);
+  border-radius: var(--r-pill);
   background: hsl(var(--muted) / 0.8);
-  color: hsl(var(--foreground));
-  font: inherit;
-  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  white-space: nowrap;
 }
 
 .mode-chip {
   background: hsl(var(--primary) / 0.1);
   color: hsl(var(--primary));
-  font-weight: 650;
-  letter-spacing: 0.04em;
-}
-
-.composer-chip {
-  flex: none;
-  padding: 4px 9px;
-  border-radius: 999px;
-  background: hsl(var(--muted) / 0.55);
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-  white-space: nowrap;
+  font-weight: var(--fw-medium);
 }
 
 #composer-status {
@@ -2212,26 +2212,23 @@ textarea:focus-visible {
 
 .composer-input {
   display: block;
-  margin: 10px 0;
+  margin: var(--sp-2) 0;
 }
 
 .composer-input textarea {
   display: block;
   width: 100%;
-  min-height: 72px;
+  min-height: 64px;
   max-height: 220px;
+  padding: 0;
   resize: vertical;
   border: 0;
   outline: 0;
   background: transparent;
   color: hsl(var(--foreground));
   font: inherit;
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.composer-input textarea::placeholder {
-  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-read);
+  line-height: var(--lh-read);
 }
 
 .composer-input textarea:disabled {
@@ -2242,145 +2239,97 @@ textarea:focus-visible {
   justify-content: flex-end;
 }
 
-.send-round {
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
-  padding: 0;
-  border-radius: 999px;
-  font-size: 15px;
-  line-height: 1;
-}
-
-.composer-actions > span {
+.composer-hint {
   margin-right: auto;
+  font-variant-numeric: tabular-nums;
 }
 
-.composer-actions button {
-  min-width: 72px;
+/* Nears-the-limit capacity note; absent until it matters. */
+#composer-capacity {
+  color: hsl(var(--warning));
 }
 
-/* The attach affordance is an icon button; give the glyph a proper optical
-   box instead of a squashed default button. */
-#attach-button {
-  min-width: 34px;
-  width: 34px;
+.send-round {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
   padding: 0;
-  border-radius: 8px;
-  font-size: 16px;
-  line-height: 1;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-base);
+}
+
+#settings-button {
+  font-size: var(--fs-title);
+}
+
+#attach-button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  font-size: var(--fs-read);
 }
 
 .attachment-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-2);
 }
 
-.attachment-chips:empty,
-.attachment-chips[hidden] {
+.attachment-chips:empty {
   display: none;
 }
 
 .attachment-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 6px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 4px;
+  gap: var(--sp-1);
+  max-width: 100%;
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-control);
   background: hsl(var(--muted));
   color: hsl(var(--foreground));
-  font-size: 12px;
+  font-size: var(--fs-small);
+  overflow-wrap: anywhere;
 }
 
 .attachment-chip.error {
-  border-color: hsl(var(--destructive));
+  background: hsl(var(--destructive) / 0.12);
   color: hsl(var(--destructive));
 }
 
 .attachment-chip-retry,
 .attachment-chip-remove {
-  min-width: auto;
   height: auto;
-  padding: 0 4px;
-  border: none;
-  border-radius: 3px;
+  min-width: auto;
+  padding: 0 2px;
+  border-color: transparent;
   background: transparent;
   color: inherit;
-  font-size: 11px;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
   text-decoration: underline;
-  cursor: pointer;
 }
 
-#attach-button {
-  min-width: auto;
-  padding: 0 10px;
+.attachment-chip-retry:hover,
+.attachment-chip-remove:hover {
+  background: transparent;
 }
 
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-@keyframes cursor-blink {
-  50% {
-    opacity: 0.2;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  button {
-    transition: none;
-  }
-
-  .message.pending .bubble::after {
-    animation: none;
-  }
-}
-
-@media (max-width: 980px) {
-  .shell {
-    grid-template-columns: 280px minmax(0, 1fr);
-  }
-
-  .thread-panel header,
-  .message-list {
-    padding-right: 22px;
-    padding-left: 22px;
-  }
-
-  .composer {
-    width: calc(100% - 44px);
-  }
-
-  .turn-recovery-card {
-    width: calc(100% - 44px);
-  }
-}
-
-
-/* ---------------------------------------------------------------------------
-   Task context panel
-   ---------------------------------------------------------------------------
+/* --- Task context panel -----------------------------------------------------
    The right rail answers "what is this run made of": which steps have run,
    what it was given, what it produced. Everything here is derived from state
    the renderer already holds or reads back from the sidecar — nothing is
    displayed that the desktop cannot actually supply.
-*/
 
+   It used to be four boxes stacked between four hairlines. The rules are gone;
+   the sections are held apart by space and named by a quiet label, which is
+   how the eye groups things anyway. */
 .context-panel {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  padding-bottom: var(--sp-5);
   overflow-y: auto;
   border-left: 1px solid hsl(var(--border));
   background: hsl(var(--background));
@@ -2390,51 +2339,49 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 16px 16px 12px;
-  border-bottom: 1px solid hsl(var(--border));
+  gap: var(--sp-2);
+  padding: var(--sp-4) var(--sp-4) var(--sp-2);
 }
 
 .context-title {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
   color: hsl(var(--foreground));
+  font-size: var(--fs-base);
+  font-weight: var(--fw-strong);
 }
 
 .context-count {
-  font-size: 12px;
   color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
   font-variant-numeric: tabular-nums;
 }
 
 .context-section {
-  padding: 14px 16px;
-  border-bottom: 1px solid hsl(var(--border));
+  padding: var(--sp-4) var(--sp-4) 0;
 }
 
 .context-section-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin: 0 0 10px;
-  font-size: 12px;
-  font-weight: 600;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
   color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
 }
 
 .context-section-meta {
-  font-size: 11px;
-  font-weight: 400;
   color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
   font-variant-numeric: tabular-nums;
 }
 
-.run-steps {
+.run-steps,
+.context-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sp-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -2442,61 +2389,51 @@ textarea:focus-visible {
 
 .run-step {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
   align-items: baseline;
-  gap: 8px;
-  font-size: 12px;
+  gap: var(--sp-2);
   color: hsl(var(--foreground));
+  font-size: var(--fs-small);
 }
 
 /* The marker carries the state, so it must not rely on colour alone. */
 .run-step-mark {
-  font-size: 12px;
-  line-height: 1.4;
   color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  line-height: var(--lh-ui);
 }
 
 .run-step.is-complete .run-step-mark { color: hsl(var(--success)); }
 .run-step.is-active .run-step-mark { color: hsl(var(--info)); }
 .run-step.is-failed .run-step-mark { color: hsl(var(--destructive)); }
-
 .run-step.is-pending .run-step-label { color: hsl(var(--muted-foreground)); }
 
 .run-step-detail {
-  font-size: 11px;
   color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
   text-align: right;
   white-space: nowrap;
-}
-
-.context-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
 }
 
 .context-item {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 8px 10px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
+  padding: var(--sp-2);
+  border-radius: var(--r-control);
   background: hsl(var(--card));
+  box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.8);
 }
 
 .context-item-name {
-  font-size: 12px;
   color: hsl(var(--foreground));
-  word-break: break-all;
+  font-size: var(--fs-small);
+  overflow-wrap: anywhere;
 }
 
 .context-item-meta {
-  font-size: 11px;
   color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
 }
 
 .context-item.is-missing .context-item-name { color: hsl(var(--muted-foreground)); }
@@ -2506,14 +2443,14 @@ textarea:focus-visible {
    The snippet is clamped rather than scrolled — this is a rail, and four
    expanded chunks would push everything else off the screen. */
 .context-item-snippet {
-  margin: 4px 0 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: hsl(var(--muted-foreground));
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
+  margin-top: var(--sp-1);
   overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  line-height: var(--lh-ui);
 }
 
 /* An indexed conversation is not a file the user can open, so it is named in
@@ -2525,79 +2462,61 @@ textarea:focus-visible {
 }
 
 /* A checked source is armed for the next request; the row reads as one
-   clickable label so the target is bigger than the 13px box. */
+   clickable label so the target is bigger than the checkbox. */
 .context-item-select {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--sp-2);
   cursor: pointer;
 }
 
 .context-item-select input {
+  width: auto;
+  height: auto;
   margin: 0;
   accent-color: hsl(var(--primary));
 }
 
 .context-selected {
-  margin: 6px 0 0;
-  font-size: 11px;
+  margin-top: var(--sp-2);
   color: hsl(var(--primary));
+  font-size: var(--fs-micro);
 }
 
 .context-action {
-  height: auto;
-  margin-bottom: 8px;
-  padding: 4px 10px;
-  background: hsl(var(--card));
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-}
-
-.context-action:hover {
-  color: hsl(var(--foreground));
+  height: var(--h-control-sm);
+  margin-bottom: var(--sp-2);
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
 }
 
 .context-empty {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.5;
   color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  line-height: var(--lh-ui);
 }
 
-/* Conversation search and day grouping ------------------------------------ */
+/* --- Narrow windows --------------------------------------------------------- */
+@media (max-width: 980px) {
+  .thread-panel header,
+  .message-list {
+    padding-right: var(--sp-5);
+    padding-left: var(--sp-5);
+  }
 
-.thread-search {
-  padding: 0 16px 10px;
+  .composer,
+  .turn-recovery-card {
+    width: calc(100% - var(--sp-5) * 2);
+  }
 }
 
-.thread-search input {
-  width: 100%;
-  padding: 7px 10px;
-  border: 1px solid hsl(var(--border));
-  border-radius: var(--radius);
-  background: hsl(var(--card));
-  color: hsl(var(--foreground));
-  font-size: 13px;
-}
-
-.thread-search input::placeholder {
-  color: hsl(var(--muted-foreground));
-}
-
-.thread-search input:focus-visible {
-  outline: none;
-  border-color: hsl(var(--ring));
-  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.35);
-}
-
-/* A label, not an item: it must not look clickable next to the buttons it
-   introduces. */
-.thread-group {
-  padding: 12px 16px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: hsl(var(--muted-foreground));
-  list-style: none;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

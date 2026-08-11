@@ -471,20 +471,14 @@ export function canOpenNewThread() {
 const STARTER_PROMPTS = [
   {
     title: "Quarterly business review",
-    icon: "▤",
-    tone: "tone-blue",
     prompt: "Turn my Q3 numbers into an 8-slide business review. Ask me for the figures you need first.",
   },
   {
     title: "Product launch deck",
-    icon: "▶",
-    tone: "tone-violet",
     prompt: "Outline a product launch deck, then draft speaker notes for each slide.",
   },
   {
     title: "Brief from documents",
-    icon: "≡",
-    tone: "tone-green",
     prompt: "Summarize the documents I attach into a one-page executive brief.",
   },
 ];
@@ -496,16 +490,15 @@ export function buildStarterCards() {
     const card = document.createElement("button");
     card.type = "button";
     card.className = "starter-card";
-    const icon = document.createElement("span");
-    icon.className = "starter-icon " + starter.tone;
-    icon.setAttribute("aria-hidden", "true");
-    icon.textContent = starter.icon;
+    // No glyph and no tone colour. Three cards each wearing a different
+    // accent — one blue, one violet, one green — said nothing about the three
+    // prompts and everything about a template. The prompt is the card.
     const title = document.createElement("strong");
     title.textContent = starter.title;
     const preview = document.createElement("span");
     preview.className = "starter-preview";
     preview.textContent = starter.prompt;
-    card.append(icon, title, preview);
+    card.append(title, preview);
     card.addEventListener("click", () => {
       state.starterPrompt = starter.prompt;
       openNewThreadForm();
