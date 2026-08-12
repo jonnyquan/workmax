@@ -218,7 +218,7 @@ async function deleteThread(thread) {
 
 function renderThreadButton(thread) {
   const item = document.createElement("li");
-  item.className = "thread-item";
+  item.className = "thread-item reveal-on-hover-host";
   const button = document.createElement("button");
   button.type = "button";
   button.className = "thread-button";
@@ -240,7 +240,7 @@ function renderThreadButton(thread) {
   item.appendChild(button);
   const pin = document.createElement("button");
   pin.type = "button";
-  pin.className = "thread-pin";
+  pin.className = "thread-pin reveal-on-hover";
   pin.classList.toggle("pinned", thread.pinned === true);
   pin.textContent = thread.pinned ? "Unpin" : "Pin";
   pin.setAttribute(
@@ -256,7 +256,7 @@ function renderThreadButton(thread) {
     const paused = thread.cloud_sync_state === "paused";
     const sync = document.createElement("button");
     sync.type = "button";
-    sync.className = "thread-sync";
+    sync.className = "thread-sync reveal-on-hover";
     sync.classList.toggle("paused", paused);
     sync.textContent = paused ? "Local only" : "Syncing";
     sync.setAttribute(
@@ -276,15 +276,15 @@ function renderThreadButton(thread) {
     // misclick destroys a conversation.
     const del = document.createElement("button");
     del.type = "button";
-    del.className = "thread-delete";
+    del.className = "thread-delete reveal-on-hover";
     del.textContent = "Delete";
     del.setAttribute("aria-label", `Delete ${thread.name || "Untitled thread"}`);
     del.addEventListener("click", () => {
       if (!del.classList.contains("armed")) {
-        del.classList.add("armed");
+        del.classList.add("armed", "revealed");
         del.textContent = "Confirm";
         setTimeout(() => {
-          del.classList.remove("armed");
+          del.classList.remove("armed", "revealed");
           del.textContent = "Delete";
         }, DELETE_ARM_MS);
         return;

@@ -228,6 +228,26 @@ function readAppliedTheme() {
   return THEME_CHOICES.includes(applied) ? applied : "system";
 }
 
+// Suppress colour transitions for exactly as long as the token rewrite takes.
+// The class goes on before the attribute changes and comes off one frame after
+// it, which is the shortest window that still covers the repaint; the rule it
+// enables is in styles.css. Where there is no frame clock (the behaviour
+// harness) the class is dropped immediately: nothing there paints, and a class
+// left on forever would be worse than one that never applied.
+function withoutColourTransitions(rewrite) {
+  const root = document.documentElement;
+  if (!root?.classList) {
+    rewrite();
+    return;
+  }
+  root.classList.add("theme-switching");
+  rewrite();
+  const release = () => root.classList.remove("theme-switching");
+  const raf = globalThis.requestAnimationFrame;
+  if (typeof raf === "function") raf(() => raf(release));
+  else release();
+}
+
 function applyTheme(choice) {
   themeChoice = THEME_CHOICES.includes(choice) ? choice : "system";
   const root = document.documentElement;
@@ -235,8 +255,10 @@ function applyTheme(choice) {
   // "system" removes the attribute rather than writing data-theme="system":
   // the media query already IS the system answer, and an attribute meaning "no
   // opinion" would have to be excluded by hand from every guard in the cascade.
-  if (themeChoice === "system") root.removeAttribute("data-theme");
-  else root.setAttribute("data-theme", themeChoice);
+  withoutColourTransitions(() => {
+    if (themeChoice === "system") root.removeAttribute("data-theme");
+    else root.setAttribute("data-theme", themeChoice);
+  });
 }
 
 export function setTheme(choice) {

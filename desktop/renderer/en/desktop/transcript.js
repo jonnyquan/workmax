@@ -279,7 +279,7 @@ function ensureRegenerateAction(wrapper, regenerateText) {
   );
   if (!actions) {
     actions = document.createElement("div");
-    actions.className = "message-actions";
+    actions.className = "message-actions reveal-on-hover";
     wrapper.appendChild(actions);
   }
   for (const child of Array.from(actions.children || [])) {
@@ -413,7 +413,7 @@ export function formatMessageTime(value) {
 
 function renderMessage(role, text, streamingState = "complete", timestamp = "", actionOptions = {}) {
   const wrapper = document.createElement("article");
-  wrapper.className = `message ${role}`;
+  wrapper.className = `message ${role} reveal-on-hover-host`;
   wrapper.classList.toggle(
     "partial",
     role === "assistant" && streamingState !== "complete"
@@ -473,7 +473,7 @@ export function attachMessageActions(wrapper, role, text, options = {}) {
     if (child.classList?.contains("message-actions")) return;
   }
   const actions = document.createElement("div");
-  actions.className = "message-actions";
+  actions.className = "message-actions reveal-on-hover";
   const copy = buildCopyButton(text, role === "assistant" ? "Copy answer" : "Copy");
   if (copy) actions.appendChild(copy);
   if (role === "assistant" && options.regenerateText) {

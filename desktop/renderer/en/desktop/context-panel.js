@@ -358,6 +358,46 @@ function reasoningCaptionLine(text) {
   return "";
 }
 
+// The one-line gist of a finished thought, for the collapsed label.
+//
+// It reads from the START of the reasoning, deliberately, while the live
+// caption reads the LAST line: mid-turn the useful question is "what is it
+// doing now", and afterwards it is "what was this about". Reading the head
+// also makes the label stable — it says the same thing however much more
+// arrived after it.
+//
+// Markdown is stripped rather than rendered because this is one line of plain
+// text inside a button. A model that opened its reasoning with a heading or a
+// fenced block would otherwise put `###` or ``` on screen as the summary of
+// what it thought.
+const REASONING_SUMMARY_MAX = 80;
+
+function stripReasoningMarkup(text) {
+  return text
+    .replace(/<!--[\s\S]*?-->/gu, " ")
+    .replace(/```[\s\S]*?(?:```|$)/gu, " ") // fenced blocks, including unclosed
+    .replace(/`([^`]*)`/gu, "$1")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/gu, "$1") // links and images keep their text
+    .replace(/^\s{0,3}#{1,6}\s+/gmu, "")
+    .replace(/^\s{0,3}>\s?/gmu, "")
+    .replace(/^\s{0,3}(?:[-*_]\s*){3,}$/gmu, " ") // thematic breaks
+    .replace(/^\s{0,3}[-*+]\s+/gmu, "")
+    .replace(/(\*\*|__|\*|_)/gu, "");
+}
+
+export function reasoningSummaryLine(text) {
+  const flat = stripReasoningMarkup(text).replace(/\s+/gu, " ").trim();
+  if (flat.length <= REASONING_SUMMARY_MAX) return flat;
+  const head = flat.slice(0, REASONING_SUMMARY_MAX);
+  // Back up to a word boundary only when one is near the cut. Chinese prose
+  // carries no spaces at all, so an unconditional "trim to the last space"
+  // either finds one paragraphs back or none, and would throw away the whole
+  // summary for exactly the reader this app is written for.
+  const lastSpace = head.lastIndexOf(" ");
+  const cut = lastSpace >= REASONING_SUMMARY_MAX - 20 ? head.slice(0, lastSpace) : head;
+  return `${cut.trimEnd()}…`;
+}
+
 function ensureReasoningStrip(activeTurn) {
   const wrapper = activeTurn.assistantBubble?.parentNode;
   if (!wrapper) return null;
@@ -418,11 +458,19 @@ function settleReasoningStrip(activeTurn) {
   toggle.type = "button";
   toggle.className = "reasoning-toggle";
   const detail = document.createElement("pre");
-  detail.className = "reasoning-detail";
+  detail.className = "reasoning-detail disclosed";
   detail.textContent = text;
   detail.hidden = true;
+  const summary = reasoningSummaryLine(text);
+  // The gist rides the collapsed label only. Expanded, the full reasoning is
+  // right there underneath, and a head that repeats its own first line is the
+  // kind of duplication that reads as a rendering bug.
   const paint = () => {
-    toggle.textContent = `${detail.hidden ? "▸" : "▾"} Thought`;
+    toggle.textContent = detail.hidden
+      ? summary
+        ? `▸ Thought · ${summary}`
+        : "▸ Thought"
+      : "▾ Thought";
   };
   paint();
   toggle.addEventListener("click", () => {

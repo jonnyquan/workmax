@@ -284,6 +284,87 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   assert.doesNotMatch(rendererSource, /sidebarExpandButton/u);
 }
 
+// --- Three habits that only hold if nothing is allowed to opt out ------------
+//
+// Each of these is one rule that every site has to actually use. The value is
+// not in any single site — it is that a new one cannot get a different answer,
+// which is exactly what a pin can enforce and a screenshot cannot.
+{
+  // A native window points with an arrow. The hand cursor said "hyperlink" on
+  // every button in the app; the policy lives in one zero-specificity rule and
+  // nothing may re-declare the web's answer beside it.
+  assert.match(
+    rendererCSS,
+    /:where\(button, \[role="button"\], a\[href\], summary, label\[for\][^)]*\)\s*\{\s*cursor:\s*default;/u,
+    "the cursor policy is stated once, for all controls",
+  );
+  assert.doesNotMatch(
+    rendererCSS,
+    /cursor:\s*pointer/u,
+    "a control that re-declares the hand cursor puts the web back into the window",
+  );
+
+  // Reveal-on-hover, all three parts. opacity so revealing never reflows the
+  // row; pointer-events because an invisible control is still hit-testable;
+  // :focus-within because a control that only appears on hover is one a
+  // keyboard can reach and never see.
+  assert.match(
+    rendererCSS,
+    /\.reveal-on-hover\s*\{\s*opacity:\s*0;\s*pointer-events:\s*none;/u,
+    "a hidden control must be invisible AND untouchable",
+  );
+  assert.match(
+    rendererCSS,
+    /\.reveal-on-hover-host:focus-within \.reveal-on-hover,/u,
+    "the keyboard must be able to see what the pointer can",
+  );
+  assert.match(
+    rendererCSS,
+    /\.reveal-on-hover:focus-within,\s*\.reveal-on-hover\.revealed\s*\{\s*opacity:\s*1;\s*pointer-events:\s*auto;/u,
+    "revealing restores both halves together",
+  );
+  // The three sites that used to spell this out for themselves. Each kept a
+  // different subset of it, which is how the mechanism drifts.
+  for (const gone of [
+    /\.thread-item:hover \.thread-delete/u,
+    /\.content-topbar:hover \.thread-title-row button/u,
+    /\.message:hover \.message-actions/u,
+  ]) {
+    assert.doesNotMatch(rendererCSS, gone, "no site keeps a private copy of reveal-on-hover");
+  }
+  assert.match(rendererHTML, /id="content-topbar" class="content-topbar reveal-on-hover-host"/u);
+  assert.match(rendererHTML, /id="rename-thread-button" class="ghost reveal-on-hover"/u);
+  assert.match(rendererSource, /item\.className = "thread-item reveal-on-hover-host"/u);
+  assert.match(rendererSource, /wrapper\.className = `message \$\{role\} reveal-on-hover-host`/u);
+  // An armed Delete is waiting for a second click and must not vanish when the
+  // pointer leaves the row it is on — it uses the mechanism's own escape hatch
+  // rather than a rule of its own.
+  assert.match(
+    rendererSource,
+    /del\.classList\.add\("armed", "revealed"\)/u,
+    "an armed delete stays visible through the shared mechanism",
+  );
+  assert.match(rendererSource, /del\.classList\.remove\("armed", "revealed"\)/u);
+
+  // Switching the theme rewrites every colour token at once. Without this the
+  // window spends the transition duration as a wash of half-old colour.
+  assert.match(
+    rendererCSS,
+    /:root\.theme-switching \*,[\s\S]*?\{\s*transition:\s*none\s*!important;/u,
+    "a theme switch must not animate",
+  );
+  assert.doesNotMatch(
+    rendererCSS,
+    /:root\.theme-switching \*[\s\S]{0,120}animation:\s*none/u,
+    "a running animation has nothing to do with the theme and would only jump if frozen",
+  );
+  assert.match(
+    rendererSource,
+    /root\.classList\.add\("theme-switching"\)/u,
+    "the suppression is applied around the token rewrite, by the code that does it",
+  );
+}
+
 // --- The main column's chrome occupies nothing when it has nothing to say -----
 //
 // Same technique, same reason: the welcome screen is centred in the whole
@@ -3684,11 +3765,97 @@ async function testToolApprovalCardsAndReasoningCaption() {
   const toggles = walk(reasoningStrip, (n) => n.classList?.contains("reasoning-toggle"));
   assert.equal(toggles.length, 1, "the settled turn must fold the caption into a Thought label");
   assert.match(toggles[0].textContent, /Thought/u);
+  // Collapsed, the label carries the gist — read from the HEAD of the
+  // reasoning, which is what identifies the subject, and not from the last
+  // line, which is what the live caption showed while the turn was running.
+  assert.match(
+    toggles[0].textContent,
+    /Thought · Consider the outline\./u,
+    "a collapsed thought must say what it was about, not just that there was one",
+  );
   const detail = walk(reasoningStrip, (n) => n.classList?.contains("reasoning-detail"))[0];
   assert.equal(detail.hidden, true, "the full reasoning starts collapsed");
+  assert.equal(
+    detail.classList.contains("disclosed"),
+    true,
+    "an expansion hangs off its control on the shared hairline",
+  );
   toggles[0].click();
   assert.equal(detail.hidden, false, "the label expands on demand");
+  assert.equal(
+    toggles[0].textContent,
+    "▾ Thought",
+    "expanded, the label drops the gist rather than repeating the first line below it",
+  );
   assert.equal(detail.textContent, "Consider the outline.\nPlan the write.");
+}
+
+// --- A collapsed thought is a sentence, not a label ---------------------------
+//
+// The summary is plain text inside a button, so markup that a model opened its
+// reasoning with must not survive into it, and the line must not be able to
+// widen the column it sits in.
+async function testThoughtSummaryReadsAsProse() {
+  const { ns } = await runRenderer(undefined);
+  const { reasoningSummaryLine } = ns;
+
+  assert.equal(reasoningSummaryLine(""), "");
+  assert.equal(reasoningSummaryLine("   \n\n  "), "");
+  assert.equal(
+    reasoningSummaryLine("## Plan\n\nRead the router config first."),
+    "Plan Read the router config first.",
+    "heading markers are stripped, their words kept",
+  );
+  assert.equal(
+    reasoningSummaryLine("Call `main()` in **server.go** and [see docs](http://x/y)."),
+    "Call main() in server.go and see docs.",
+    "inline code, emphasis and links keep their text and lose their syntax",
+  );
+  assert.equal(
+    reasoningSummaryLine("```go\nfunc main() {}\n```\nThen wire it up."),
+    "Then wire it up.",
+    "a fenced block is not a summary of anything",
+  );
+  assert.equal(
+    reasoningSummaryLine("```go\nfunc main() {"),
+    "",
+    "an unclosed fence — the shape a truncated stream leaves — is stripped too",
+  );
+
+  // Length. English backs up to a word boundary; Chinese has none to back up
+  // to and must still return a full-length summary rather than an empty one.
+  const english = reasoningSummaryLine(
+    "The user wants the router configuration inspected before any edit is made to it, so start there.",
+  );
+  assert.ok(english.length <= 81, `summary too long: ${english.length}`);
+  assert.match(english, /…$/u);
+  assert.doesNotMatch(english, / …$/u, "the ellipsis attaches to the word, not to a space");
+  assert.ok(english.split(" ").length > 8, "an English summary keeps whole words");
+
+  const chinese = reasoningSummaryLine("用户希望先检查路由配置再做修改".repeat(12));
+  assert.ok(chinese.length > 60, "Chinese prose has no spaces and must not be trimmed to nothing");
+  assert.ok(chinese.length <= 81, `summary too long: ${chinese.length}`);
+  assert.match(chinese, /…$/u);
+
+  // The case the word-boundary guard actually exists for, and the one a
+  // space-free string cannot reach: Chinese with a stray space near the front.
+  // "Trim to the last space" would find that one space and throw the rest of
+  // the summary away, so backing up is only allowed when the boundary is near
+  // the cut.
+  const mixed = reasoningSummaryLine(`OK ${"用户希望先检查路由配置再做修改".repeat(12)}`);
+  assert.ok(
+    mixed.length > 60,
+    `one early space must not collapse the summary: got ${JSON.stringify(mixed)}`,
+  );
+  assert.ok(mixed.length <= 81, `summary too long: ${mixed.length}`);
+
+  // A summary long enough to be worth having is long enough to blow out the
+  // column, so the control clamps and ellipsises rather than growing.
+  assert.match(
+    rendererCSS,
+    /\.reasoning-toggle\s*\{[\s\S]*?max-width:\s*min\(var\(--measure\), 100%\);[\s\S]*?text-overflow:\s*ellipsis;/u,
+    "the gist may be long; it may not widen the column",
+  );
 }
 
 // An approval question is about a step the log already shows. The CLI
@@ -9155,6 +9322,7 @@ await testFailedTurnStateAndDuration();
 await testModelProtocolHintFollowsTheChoice();
 await testToolLoopActivityAndDeliverables();
 await testToolApprovalCardsAndReasoningCaption();
+await testThoughtSummaryReadsAsProse();
 await testApprovalBecomesTheStepItIsAbout();
 await testDenialFoldsIntoTheRowItAnswers();
 await testStarterPromptLandsInTheComposer();

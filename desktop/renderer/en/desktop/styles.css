@@ -220,6 +220,20 @@
   color-scheme: dark;
 }
 
+/* Switching the theme rewrites every colour token at once, and every element
+   with a colour transition then animates to its new value — so the window
+   spends 100ms as a wash of half-old, half-new colour instead of simply being
+   the other theme. The switch is not a state change to watch; it is supposed
+   to have already happened.
+   Transitions only, not animations: a transition here is *caused* by the token
+   rewrite and is the whole problem, while a running animation (a thinking
+   pulse) has nothing to do with the theme and would only jump if frozen. */
+:root.theme-switching *,
+:root.theme-switching *::before,
+:root.theme-switching *::after {
+  transition: none !important;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -233,6 +247,44 @@
    class of bug, which is why it is !important. */
 [hidden] {
   display: none !important;
+}
+
+/* --- Cursor ----------------------------------------------------------------
+   A native window points at things with an arrow. The hand cursor is a web
+   convention that says "this is a hyperlink to somewhere else", and every
+   button in this app answered it — so the window read as a page in a frame
+   rather than as an application, which is the one impression a local-first
+   desktop tool cannot afford to give.
+   :where() so this carries no specificity and any rule that genuinely needs a
+   different cursor simply states it. Text and resize cursors are untouched:
+   they describe what the pointer can DO there, which is still true. */
+:where(button, [role="button"], a[href], summary, label[for], .worklog-step.produced, .context-item-select) {
+  cursor: default;
+}
+
+/* --- Reveal-on-hover -------------------------------------------------------
+   Controls that stay out of the way until the row they belong to is under the
+   pointer. Three sites used to spell this out separately and each got a
+   slightly different half of it; it is one mechanism now, so the next site
+   cannot inherit two thirds of it.
+   All three parts are load-bearing. opacity rather than display, so revealing
+   never reflows the row underneath. pointer-events, because an element at
+   opacity 0 is still hit-testable — invisible buttons over a clickable row are
+   a trap that only shows up on a device that clicks without hovering first.
+   And :focus-within, because a control that appears only on hover is a control
+   a keyboard can reach but never see. */
+.reveal-on-hover {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 100ms ease;
+}
+
+.reveal-on-hover-host:hover .reveal-on-hover,
+.reveal-on-hover-host:focus-within .reveal-on-hover,
+.reveal-on-hover:focus-within,
+.reveal-on-hover.revealed {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* Native scrollbars read as a web page inside a frame; thin quiet ones read
@@ -320,7 +372,6 @@ button {
   font-weight: var(--fw-medium);
   line-height: 1;
   white-space: nowrap;
-  cursor: pointer;
   transition: background-color 100ms ease, border-color 100ms ease, color 100ms ease;
 }
 
@@ -909,18 +960,9 @@ textarea::placeholder {
   color: hsl(var(--muted-foreground));
   font-size: var(--fs-micro);
   font-weight: var(--fw-normal);
-  opacity: 0;
-  transition: opacity 100ms ease;
-}
-
-.thread-item:hover .thread-delete,
-.thread-item:hover .thread-pin,
-.thread-item:hover .thread-sync,
-.thread-delete:focus-visible,
-.thread-pin:focus-visible,
-.thread-sync:focus-visible,
-.thread-delete.armed {
-  opacity: 1;
+  /* Reveal comes from .reveal-on-hover; the row is the host. `armed` is a
+     delete waiting for its second click and must stay visible with the pointer
+     anywhere — .revealed says so. */
 }
 
 .thread-item:has(.thread-delete) .thread-pin {
@@ -2163,13 +2205,6 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   padding: 0 var(--sp-2);
   font-size: var(--fs-micro);
   font-weight: var(--fw-normal);
-  opacity: 0;
-  transition: opacity 100ms ease;
-}
-
-.content-topbar:hover .thread-title-row button,
-.thread-title-row button:focus-visible {
-  opacity: 1;
 }
 
 #thread-meta {
@@ -2384,13 +2419,6 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   display: flex;
   gap: var(--sp-1);
   min-height: 22px;
-  opacity: 0;
-  transition: opacity 100ms ease;
-}
-
-.message:hover .message-actions,
-.message-actions:focus-within {
-  opacity: 1;
 }
 
 .message.user .message-actions {
@@ -2672,10 +2700,6 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   font-size: var(--fs-micro);
 }
 
-.worklog-step.produced {
-  cursor: pointer;
-}
-
 .worklog-step.produced::before {
   content: "+";
   color: hsl(var(--success));
@@ -2703,8 +2727,49 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   white-space: nowrap;
 }
 
+/* The collapsed label carries the gist of the thought, so it is a whole
+   sentence in a control whose base style is nowrap. It clamps to the reading
+   measure and ellipsises: the label may be long, but it may never widen the
+   column it sits in. */
+.reasoning-toggle {
+  display: block;
+  max-width: min(var(--measure), 100%);
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+
+/* Expanded reasoning hangs off its own toggle on a single hairline rather than
+   inside a box. A card here would draw a second container around content that
+   is already inside the message, and the border would be the loudest thing on
+   a surface whose whole job is to stay quiet. The line does what the card was
+   for — saying "this belongs to the row above" — with one pixel.
+   Its use is deliberately shared: any region that opens out of a control uses
+   this and nothing else, so expansions cannot each acquire a different look. */
+.disclosed {
+  position: relative;
+  margin-left: var(--sp-1);
+  padding-left: var(--sp-3);
+}
+
+.disclosed::before {
+  content: "";
+  position: absolute;
+  top: 1px;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background: hsl(var(--border));
+  pointer-events: none;
+}
+
 .reasoning-detail {
-  margin: var(--sp-1) 0 0;
+  /* Longhands, not the shorthand: the left margin belongs to .disclosed, and a
+     `margin:` here would silently reset it to zero and take the hairline's
+     offset with it. */
+  margin-top: var(--sp-1);
+  margin-right: 0;
+  margin-bottom: 0;
   color: hsl(var(--muted-foreground));
   font-family: inherit;
   font-size: var(--fs-small);
@@ -3291,7 +3356,6 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
-  cursor: pointer;
 }
 
 .context-item-select input {
