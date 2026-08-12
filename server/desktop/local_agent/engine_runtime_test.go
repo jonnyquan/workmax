@@ -102,3 +102,59 @@ func TestChat_ForeignRuntimeErrorSurfaces(t *testing.T) {
 		t.Fatalf("proxy errors = %+v", perrs)
 	}
 }
+
+// A mind picks the model, and the turn says so.
+//
+// This is the point at which a mind stops being a label: the value it names
+// reaches the runtime AND the provenance frame, so the transcript records
+// which brain answered rather than which one is configured right now. The
+// endpoint stays the identity's — a mind chooses a model, not a provider.
+func TestChat_ActiveMindChoosesTheModel(t *testing.T) {
+	run := func(t *testing.T, mind func(uid uint64) string) (agentruntime.TurnInput, []cloudproxy.SSEEvent) {
+		t.Helper()
+		db := openTestDB(t)
+		seedThreadRow(t, db)
+		rt := &fakeRuntime{name: "pi", root: t.TempDir(), events: []agentruntime.Event{
+			{Kind: agentruntime.EventTextDelta, Delta: "answer"},
+		}}
+		engine := NewEngineWithRuntime(
+			stubProfile{baseURL: "http://127.0.0.1:1", modelID: "identity-model"}, db, nil, nil, rt)
+		if mind != nil {
+			engine.UseMindModel(mind)
+		}
+		dst := &memSSEWriter{}
+		if err := engine.Chat(context.Background(), chatReq(), dst); err != nil {
+			t.Fatalf("Chat: %v", err)
+		}
+		frames, _ := dst.snapshot()
+		return rt.gotIn, frames
+	}
+
+	in, frames := run(t, func(uint64) string { return "the-minds-model" })
+	if in.ModelID != "the-minds-model" {
+		t.Errorf("model = %q, want the active mind's", in.ModelID)
+	}
+	if in.BaseURL != "http://127.0.0.1:1" {
+		t.Errorf("base url = %q; a mind chooses a model, not a provider", in.BaseURL)
+	}
+	if frames[0].Type != "turn_meta" || !strings.Contains(frames[0].Data, "the-minds-model") {
+		t.Errorf("the turn must announce the model it was actually told to use: %q", frames[0].Data)
+	}
+
+	// A mind with no opinion, and no mind wiring at all, both leave the
+	// identity's configured model alone. Failing towards the setting is the
+	// only safe direction: a mind that cannot be read should cost a
+	// preference, never an answer.
+	for name, fn := range map[string]func(uint64) string{
+		"no opinion": func(uint64) string { return "" },
+		"whitespace": func(uint64) string { return "   " },
+		"not wired":  nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			in, _ := run(t, fn)
+			if in.ModelID != "identity-model" {
+				t.Errorf("model = %q, want the identity's", in.ModelID)
+			}
+		})
+	}
+}

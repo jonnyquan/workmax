@@ -4,6 +4,7 @@ package desktop
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -214,6 +215,41 @@ func (s *MindStore) Get(uid uint64, id string) (Mind, error) {
 	}
 	m.Active = active == 1
 	return m, nil
+}
+
+// Active returns the identity's active mind.
+//
+// This is the accessor a turn uses, so it is deliberately forgiving in one
+// direction and strict in the other: a store that is missing, a database that
+// predates the mind table, or an identity with no active row all answer
+// (Mind{}, false, nil) — a turn must not fail because nobody has chosen a mind
+// — while a real database error is returned, because silently running an
+// unscoped turn on a broken mind table would be a lie about what the answer
+// was allowed to see.
+func (s *MindStore) Active(uid uint64) (Mind, bool, error) {
+	if s == nil || s.db == nil {
+		return Mind{}, false, nil
+	}
+	if err := s.ensureDefaultMind(uid); err != nil {
+		return Mind{}, false, err
+	}
+	var (
+		m      Mind
+		active int
+	)
+	row := s.db.Raw(
+		`SELECT id, name, description, role_hint, COALESCE(model_override, ''), is_active, created_at, updated_at
+		   FROM w_desktop_mind WHERE uid = ? AND is_active = 1 LIMIT 1`,
+		signedMindUID(uid),
+	).Row()
+	if err := row.Scan(&m.ID, &m.Name, &m.Description, &m.RoleHint, &m.ModelOverride, &active, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Mind{}, false, nil
+		}
+		return Mind{}, false, fmt.Errorf("mind store: read active mind: %w", err)
+	}
+	m.Active = active == 1
+	return m, true, nil
 }
 
 // Create adds a mind. It does NOT activate it — same consent split as local

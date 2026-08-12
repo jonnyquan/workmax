@@ -64,7 +64,7 @@ func TestIndexer_MindFeedMarksAndRetrieves(t *testing.T) {
 
 	// The material participates in retrieval like any other knowledge, and is
 	// labelled with the title it was fed under.
-	hits, err := idx.Retrieve(ctx, indexerTestUID, "compensation bands", 5)
+	hits, err := idx.Retrieve(ctx, indexerTestUID, "", "compensation bands", 5)
 	if err != nil {
 		t.Fatalf("Retrieve: %v", err)
 	}
@@ -107,4 +107,84 @@ func TestIndexer_MindFeedReplacesSameTitle(t *testing.T) {
 	if total != sources[0].Chunks || total >= 10 {
 		t.Fatalf("the replacement must not keep the long version's chunks: total %d", total)
 	}
+}
+
+// The semantics of "separate minds", stated as a test: an active mind sees its
+// own material and the identity's ordinary knowledge, and nothing that belongs
+// to another mind.
+//
+// The second half is what makes minds mean anything — without it every mind
+// would be one mind under several names. The first half is what keeps them
+// useful: a mind ADDS knowledge to an identity, it is not a wall around it, so
+// files and past conversations stay in scope whichever mind is chosen.
+func TestIndexer_ActiveMindScopesOnlyMindMaterial(t *testing.T) {
+	db := openIndexerTestDB(t)
+	kstore, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	idx := NewIndexer(nil, fakeVectorizer{}, kstore)
+	ctx := context.Background()
+
+	const mindA = "mind-de305d54-75b4-431b-adb2-eb6b9e546014"
+	const mindB = "mind-11111111-1111-4111-8111-111111111111"
+	const subject = "the 2026 compensation bands put L4 at one hundred eighty thousand"
+
+	if _, err := idx.IndexMindMaterial(ctx, indexerTestUID, mindA, "A's note", subject); err != nil {
+		t.Fatalf("feed mind A: %v", err)
+	}
+	if _, err := idx.IndexMindMaterial(ctx, indexerTestUID, mindB, "B's note", subject); err != nil {
+		t.Fatalf("feed mind B: %v", err)
+	}
+	// Ordinary identity knowledge on the same subject, owned by no mind.
+	if err := idx.IndexTurn(ctx, indexerTestUID, "turn-compensation",
+		"what are the bands", subject); err != nil {
+		t.Fatalf("index turn: %v", err)
+	}
+
+	labels := func(mindID string) []string {
+		t.Helper()
+		hits, rerr := idx.Retrieve(ctx, indexerTestUID, mindID, "compensation bands", 10)
+		if rerr != nil {
+			t.Fatalf("Retrieve(%q): %v", mindID, rerr)
+		}
+		out := make([]string, 0, len(hits))
+		for _, h := range hits {
+			out = append(out, h.Label)
+		}
+		return out
+	}
+
+	withA := labels(mindA)
+	if !containsLabel(withA, "A's note") {
+		t.Fatalf("the active mind must see its own material: %v", withA)
+	}
+	if containsLabel(withA, "B's note") {
+		t.Fatalf("another mind's material must not be in scope: %v", withA)
+	}
+	if len(withA) < 2 {
+		t.Fatalf("a mind adds to the identity's knowledge, it does not replace it: %v", withA)
+	}
+
+	withB := labels(mindB)
+	if !containsLabel(withB, "B's note") || containsLabel(withB, "A's note") {
+		t.Fatalf("scoping must follow whichever mind is active: %v", withB)
+	}
+
+	// No mind chosen — an older database, or an identity that never picked one
+	// — keeps everything. This is what makes the feature additive rather than
+	// a behaviour change nobody asked for.
+	unscoped := labels("")
+	if !containsLabel(unscoped, "A's note") || !containsLabel(unscoped, "B's note") {
+		t.Fatalf("with no mind chosen nothing is scoped away: %v", unscoped)
+	}
+}
+
+func containsLabel(labels []string, want string) bool {
+	for _, l := range labels {
+		if strings.Contains(l, want) {
+			return true
+		}
+	}
+	return false
 }

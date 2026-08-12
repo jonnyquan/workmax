@@ -194,7 +194,7 @@ func TestRetrieve_LexicalHalfFindsWhatTheVectorHalfCannot(t *testing.T) {
 
 	// Every chunk sits at the same point in embedding space, so the vector
 	// half ranks them by insertion order and has no opinion at all.
-	hits, err := idx.Retrieve(ctx, indexerTestUID, "server/desktop/knowledge/store.go", 3)
+	hits, err := idx.Retrieve(ctx, indexerTestUID, "", "server/desktop/knowledge/store.go", 3)
 	if err != nil {
 		t.Fatalf("Retrieve: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestRetrieve_LexicalHalfFindsWhatTheVectorHalfCannot(t *testing.T) {
 
 	// The same for a two-character Chinese word inside an unbroken sentence —
 	// the case unicode61 alone cannot match and trigram cannot query.
-	hits, err = idx.Retrieve(ctx, indexerTestUID, "薪资结构调整", 3)
+	hits, err = idx.Retrieve(ctx, indexerTestUID, "", "薪资结构调整", 3)
 	if err != nil {
 		t.Fatalf("Retrieve (chinese): %v", err)
 	}
@@ -225,7 +225,7 @@ func TestRetrieve_LexicalHalfFindsWhatTheVectorHalfCannot(t *testing.T) {
 	if _, err := sqlDB.ExecContext(ctx, "DROP TABLE "+ftsTable); err != nil {
 		t.Fatalf("drop fts table: %v", err)
 	}
-	vectorOnly, err := idx.Retrieve(ctx, indexerTestUID, "server/desktop/knowledge/store.go", 3)
+	vectorOnly, err := idx.Retrieve(ctx, indexerTestUID, "", "server/desktop/knowledge/store.go", 3)
 	if err != nil {
 		t.Fatalf("Retrieve vector-only: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestRetrieve_FallsBackToVectorWhenLexicalIndexIsGone(t *testing.T) {
 		t.Fatalf("drop fts table: %v", err)
 	}
 
-	hits, err := idx.Retrieve(ctx, indexerTestUID, "reciprocal rank fusion", 3)
+	hits, err := idx.Retrieve(ctx, indexerTestUID, "", "reciprocal rank fusion", 3)
 	if err != nil {
 		t.Fatalf("Retrieve with no lexical index: %v", err)
 	}
@@ -404,7 +404,7 @@ func TestRetrieve_ThresholdsAndSuppression(t *testing.T) {
 		t.Fatalf("expected several chunks in the store, got %d", len(raw))
 	}
 
-	hits, err := idx.Retrieve(ctx, indexerTestUID, "unrelated question about orthogonal vectors", 10)
+	hits, err := idx.Retrieve(ctx, indexerTestUID, "", "unrelated question about orthogonal vectors", 10)
 	if err != nil {
 		t.Fatalf("Retrieve: %v", err)
 	}
@@ -421,7 +421,7 @@ func TestRetrieve_ThresholdsAndSuppression(t *testing.T) {
 	// claiming a search happened.
 	before := tel.snapshot().Searched
 	for _, q := range []string{"继续", "ok", "好的"} {
-		got, err := idx.Retrieve(ctx, indexerTestUID, q, 4)
+		got, err := idx.Retrieve(ctx, indexerTestUID, "", q, 4)
 		if err != nil {
 			t.Fatalf("Retrieve(%q): %v", q, err)
 		}
@@ -463,7 +463,7 @@ func TestRetrieve_ExperimentSwitchHidesRecallButKeepsIndexing(t *testing.T) {
 		t.Fatal("the experiment switch stopped indexing; the control arm's index would go cold")
 	}
 
-	hits, err := idx.Retrieve(ctx, indexerTestUID, "reciprocal rank fusion", 5)
+	hits, err := idx.Retrieve(ctx, indexerTestUID, "", "reciprocal rank fusion", 5)
 	if err != nil {
 		t.Fatalf("Retrieve: %v", err)
 	}
@@ -476,7 +476,7 @@ func TestRetrieve_ExperimentSwitchHidesRecallButKeepsIndexing(t *testing.T) {
 
 	// Unset: the same query now finds what was indexed while the flag was on.
 	t.Setenv(experimentNoRAGEnv, "")
-	hits, err = idx.Retrieve(ctx, indexerTestUID, "reciprocal rank fusion", 5)
+	hits, err = idx.Retrieve(ctx, indexerTestUID, "", "reciprocal rank fusion", 5)
 	if err != nil {
 		t.Fatalf("Retrieve after clearing the switch: %v", err)
 	}

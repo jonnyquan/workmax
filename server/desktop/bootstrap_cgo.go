@@ -306,7 +306,24 @@ func (l *lazyKnowledge) Retrieve(ctx context.Context, uid uint64, query string, 
 	if err := l.load(); err != nil {
 		return nil, err
 	}
-	hits, err := l.indexer.Retrieve(ctx, uid, query, topK)
+	// Which mind is active is a property of the IDENTITY, not of whichever
+	// engine is asking, so it is resolved here rather than threaded through
+	// KnowledgeHooks. This file is already the one place that knows both
+	// worlds, and doing it here means the local inference path and the agent
+	// path are scoped identically without either having to remember to be.
+	//
+	// A mind table that cannot be read scopes nothing rather than failing the
+	// turn: the cost of answering from the identity's whole memory is a wider
+	// answer, and the cost of erroring is no answer at all.
+	mindID := ""
+	if l.deps.DB != nil {
+		if active, ok, merr := NewMindStore(l.deps.DB).Active(uid); merr != nil {
+			log.Printf("knowledge: active mind for retrieval: %v", merr)
+		} else if ok {
+			mindID = active.ID
+		}
+	}
+	hits, err := l.indexer.Retrieve(ctx, uid, mindID, query, topK)
 	if err != nil {
 		return nil, err
 	}

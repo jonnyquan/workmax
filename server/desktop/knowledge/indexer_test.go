@@ -79,7 +79,7 @@ func TestIndexer_RetrievalIsPartitionedByUID(t *testing.T) {
 		t.Fatalf("IndexTurn: %v", err)
 	}
 
-	mine, err := idx.Retrieve(ctx, accountA, "salary", 5)
+	mine, err := idx.Retrieve(ctx, accountA, "", "salary", 5)
 	if err != nil {
 		t.Fatalf("Retrieve as owner: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestIndexer_RetrievalIsPartitionedByUID(t *testing.T) {
 		t.Fatal("the account that indexed the content cannot retrieve it")
 	}
 
-	theirs, err := idx.Retrieve(ctx, accountB, "salary", 5)
+	theirs, err := idx.Retrieve(ctx, accountB, "", "salary", 5)
 	if err != nil {
 		t.Fatalf("Retrieve as other account: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestIndexer_RetrievalIsPartitionedByUID(t *testing.T) {
 	if n, err := idx.RemoveFile(ctx, saved.FileID); err != nil || n == 0 {
 		t.Fatalf("RemoveFile = (%d, %v), want a positive count", n, err)
 	}
-	after, _ := idx.Retrieve(ctx, accountA, "salary", 5)
+	after, _ := idx.Retrieve(ctx, accountA, "", "salary", 5)
 	for _, h := range after {
 		if h.Kind == "file" {
 			t.Fatalf("deleted file still retrievable: %+v", h)
@@ -154,7 +154,7 @@ func TestIndexer_ReindexAfterSchemaRebuild(t *testing.T) {
 		t.Fatal("the store did not rebuild on a version mismatch")
 	}
 	idx2 := NewIndexer(fileStore, fakeVectorizer{}, rebuilt)
-	if hits, _ := idx2.Retrieve(ctx, accountA, "alpha", 5); len(hits) != 0 {
+	if hits, _ := idx2.Retrieve(ctx, accountA, "", "alpha", 5); len(hits) != 0 {
 		t.Fatalf("chunks survived a rebuild: %+v", hits)
 	}
 
@@ -175,7 +175,7 @@ func TestIndexer_ReindexAfterSchemaRebuild(t *testing.T) {
 		query string
 		label string
 	}{{accountA, "alpha", "a.txt"}, {accountB, "beta", "b.txt"}} {
-		hits, err := idx2.Retrieve(ctx, c.uid, c.query, 5)
+		hits, err := idx2.Retrieve(ctx, c.uid, "", c.query, 5)
 		if err != nil {
 			t.Fatalf("Retrieve as %d: %v", c.uid, err)
 		}
@@ -214,7 +214,7 @@ func TestIndexer_RetrieveLabelsFilesAndScopesNamesToTheOwner(t *testing.T) {
 		t.Fatalf("IndexFile: %v", err)
 	}
 
-	hits, err := idx.Retrieve(ctx, indexerTestUID, "revenue", 5)
+	hits, err := idx.Retrieve(ctx, indexerTestUID, "", "revenue", 5)
 	if err != nil {
 		t.Fatalf("Retrieve: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestIndexer_RetrieveLabelsFilesAndScopesNamesToTheOwner(t *testing.T) {
 	if _, err := fileStore.DeleteThreadFiles(indexerTestUID, 7, "thr-1"); err != nil {
 		t.Fatalf("DeleteThreadFiles: %v", err)
 	}
-	orphan, err := idx.Retrieve(ctx, indexerTestUID, "revenue", 5)
+	orphan, err := idx.Retrieve(ctx, indexerTestUID, "", "revenue", 5)
 	if err != nil {
 		t.Fatalf("Retrieve after the file row went away: %v", err)
 	}
@@ -528,7 +528,7 @@ func TestIndexer_Retrieve_RealEmbedder(t *testing.T) {
 		t.Fatalf("index python: %v", err)
 	}
 
-	chunks, err := idx.Retrieve(ctx, indexerTestUID, "how many hours do cats sleep each day?", 2)
+	chunks, err := idx.Retrieve(ctx, indexerTestUID, "", "how many hours do cats sleep each day?", 2)
 	if err != nil {
 		t.Fatalf("Retrieve: %v", err)
 	}

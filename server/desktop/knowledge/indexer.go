@@ -308,7 +308,16 @@ type Retrieved struct {
 // in under their cloud uid. That is not a special case — threads and files
 // behave the same way, because every local table is keyed by the identity that
 // wrote it. Re-uploading a file re-indexes it under the current identity.
-func (i *Indexer) Retrieve(ctx context.Context, uid uint64, query string, topK int) ([]Retrieved, error) {
+// mindID scopes which MIND material is in play. It is the active mind's id,
+// or "" for "no mind is chosen" — which keeps everything, so a database with
+// no mind table and a turn on an older build behave exactly as before.
+//
+// What it does NOT do is restrict files and conversations. A mind adds
+// knowledge to an identity; it is not a wall around it. The only thing it
+// excludes is material belonging to a DIFFERENT mind, which is the whole
+// content of "separate minds" — otherwise every mind would be one mind with
+// several names.
+func (i *Indexer) Retrieve(ctx context.Context, uid uint64, mindID, query string, topK int) ([]Retrieved, error) {
 	tel := i.telemetry
 	if tel == nil {
 		tel = defaultTelemetry
@@ -353,6 +362,7 @@ func (i *Indexer) Retrieve(ctx context.Context, uid uint64, query string, topK i
 		tel.record(o)
 		return nil, fmt.Errorf("knowledge: retrieve search: %w", err)
 	}
+	vecHits = keepChunksInScope(vecHits, mindID)
 	o.vectorCandidates = len(vecHits)
 
 	// Absolute floor, then relative cut, on the vector half only. These are
@@ -375,6 +385,7 @@ func (i *Indexer) Retrieve(ctx context.Context, uid uint64, query string, topK i
 	// query it was asked for, and a counter that sampled the flag beforehand
 	// would report the search that just degraded as a healthy hybrid one.
 	o.lexicalUnavailable = !i.store.FTSAvailable()
+	lexHits = keepLexicalInScope(lexHits, mindID)
 	o.lexicalCandidates = len(lexHits)
 	terms := queryTermSet(query)
 	lexKept := make([]LexicalResult, 0, len(lexHits))
@@ -515,3 +526,52 @@ func fileSourceID(fileID int64) string { return strconv.FormatInt(fileID, 10) }
 
 // turnSourceID is the stable string key under which a turn's chunks are stored.
 func turnSourceID(turnUUID string) string { return "turn:" + turnUUID }
+
+// keepChunksInScope drops the material of every mind except the active one.
+//
+// Filtered here rather than in SQL, and that is a real trade rather than a
+// convenience. The vector table prunes by uid during the KNN scan because uid
+// is its partition key; source_id is not, so a WHERE on it would be applied
+// AFTER k rows had already been chosen — the candidates would be spent on
+// another mind's material and the filter would return an empty list while
+// pretending to be a search. Filtering the pool in Go has the same ceiling
+// (a pool full of another mind's chunks yields little) but it is a visible
+// ceiling: what comes back is exactly the in-scope part of a real search,
+// and candidatePool already over-fetches for the fusion step below.
+func keepChunksInScope(hits []ChunkResult, mindID string) []ChunkResult {
+	if mindID == "" {
+		return hits
+	}
+	prefix := MindSourcePrefix(mindID)
+	kept := hits[:0]
+	for _, h := range hits {
+		if chunkInScope(h.SourceType, h.SourceID, prefix) {
+			kept = append(kept, h)
+		}
+	}
+	return kept
+}
+
+func keepLexicalInScope(hits []LexicalResult, mindID string) []LexicalResult {
+	if mindID == "" {
+		return hits
+	}
+	prefix := MindSourcePrefix(mindID)
+	kept := hits[:0]
+	for _, h := range hits {
+		if chunkInScope(h.SourceType, h.SourceID, prefix) {
+			kept = append(kept, h)
+		}
+	}
+	return kept
+}
+
+// chunkInScope: everything that is not a mind's memory belongs to the
+// identity and is always in scope. A mind's memory is in scope only for the
+// mind that was taught it.
+func chunkInScope(sourceType, sourceID, activePrefix string) bool {
+	if sourceType != SourceTypeMind {
+		return true
+	}
+	return strings.HasPrefix(sourceID, activePrefix)
+}

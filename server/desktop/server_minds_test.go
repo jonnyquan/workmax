@@ -413,3 +413,47 @@ func TestMindSourceIDConvention(t *testing.T) {
 		t.Fatal("a mind id must be safe inside a source_id prefix")
 	}
 }
+
+// Active is the accessor a turn depends on, so its failure DIRECTION is the
+// property worth pinning: no mind chosen and no store at all must both answer
+// "no opinion" rather than an error, because a turn that could not read a
+// preference should still answer the question it was asked.
+func TestMindStoreActiveFailsTowardsNoOpinion(t *testing.T) {
+	db := openMindsTestDB(t)
+	store := NewMindStore(db)
+
+	// The seeded default is the active one, and it is what a turn sees.
+	active, ok, err := store.Active(0)
+	if err != nil || !ok {
+		t.Fatalf("Active on a fresh identity = %+v %v %v, want the seeded default", active, ok, err)
+	}
+	if active.Name != defaultMindName || !active.Active {
+		t.Fatalf("active mind = %+v, want the seeded default", active)
+	}
+
+	// Selecting moves it, so the turn follows the choice rather than the
+	// creation order.
+	created, err := store.Create(0, MindPut{Name: "Compensation", ModelOverride: "specialist-model"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.Select(0, created.ID); err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	active, ok, err = store.Active(0)
+	if err != nil || !ok || active.ID != created.ID {
+		t.Fatalf("Active after Select = %+v %v %v, want the selected mind", active, ok, err)
+	}
+	if active.ModelOverride != "specialist-model" {
+		t.Fatalf("the model a turn would use = %q", active.ModelOverride)
+	}
+
+	// A store that was never wired answers "no opinion" without touching a
+	// database it does not have.
+	if _, ok, err := (*MindStore)(nil).Active(0); ok || err != nil {
+		t.Fatalf("nil store = %v %v, want no opinion and no error", ok, err)
+	}
+	if _, ok, err := NewMindStore(nil).Active(0); ok || err != nil {
+		t.Fatalf("store without a db = %v %v, want no opinion and no error", ok, err)
+	}
+}

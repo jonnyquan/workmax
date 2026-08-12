@@ -443,6 +443,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 			if approvalBroker != nil {
 				engine.EnableApprovals(approvalBroker)
 			}
+			engine.UseMindModel(activeMindModel(dbRes.DB))
 			localAgent = engine
 			log.Printf("local agent: tool loop available (cli=%s)", cliPath)
 		}
@@ -474,6 +475,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 				// of session/always grants, whichever runtime asks.
 				piEngine.EnableApprovals(approvalBroker)
 			}
+			piEngine.UseMindModel(activeMindModel(dbRes.DB))
 			piAgent = piEngine
 			log.Printf("pi agent: tool loop available (pi=%s)", piPath)
 		}
@@ -756,5 +758,30 @@ func logOpenResult(dbRes *OpenResult) {
 	}
 	if dbRes.InterruptedAgentTurnIntents > 0 {
 		log.Printf("marked %d legacy agent turn intent(s) interrupted", dbRes.InterruptedAgentTurnIntents)
+	}
+}
+
+// activeMindModel resolves "which model has this identity's active mind asked
+// for" for the tool-loop engines, which live in a package that cannot import
+// this one.
+//
+// Every failure answers "" — no opinion — and the turn falls back to the
+// identity's configured model. That is the right direction to fail: a mind
+// that cannot be read should cost the user a preference, never an answer.
+func activeMindModel(db *gorm.DB) func(uid uint64) string {
+	if db == nil {
+		return nil
+	}
+	store := NewMindStore(db)
+	return func(uid uint64) string {
+		active, ok, err := store.Active(uid)
+		if err != nil {
+			log.Printf("minds: active mind for turn: %v", err)
+			return ""
+		}
+		if !ok {
+			return ""
+		}
+		return active.ModelOverride
 	}
 }

@@ -101,7 +101,23 @@ type Engine struct {
 	hooks     localinference.KnowledgeHooks   // 可 nil（RAG off）
 	runtime   agentruntime.Runtime
 	approvals *agentruntime.ApprovalBroker // nil = legacy pre-approved mode
+	// mindModel answers "which model has the active mind asked for", or ""
+	// for "no opinion". Injected rather than read from the database here
+	// because the mind table belongs to the parent package and this one
+	// cannot import it. Nil is the ordinary configuration on any build that
+	// has not wired minds.
+	mindModel func(uid uint64) string
 }
+
+// UseMindModel lets the identity's active mind choose the model for a turn.
+//
+// A mind picks a MODEL, not a provider: base URL and credentials stay the
+// identity's, because they are what the machine is configured to reach and a
+// mind that could redirect them would be choosing where the words go, not
+// which brain reads them. A model the configured endpoint does not serve
+// fails the way any wrong model id fails, which is the same failure the
+// setting itself can already produce.
+func (e *Engine) UseMindModel(fn func(uid uint64) string) { e.mindModel = fn }
 
 // EnableApprovals switches the engine to interactive tool approvals through
 // the given broker. Wired by bootstrap once the renderer's approval card is
@@ -188,6 +204,16 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 			Message:   "本地模型未配置，请在设置中填写 base_url 与 model_id",
 			Retryable: false,
 		})
+	}
+	// A mind's model, when it asked for one, wins over the identity's. This is
+	// the point at which a mind stops being a label and starts changing the
+	// answer — and because the turn announces the model it was told to use
+	// (turn_meta), the transcript then says which brain replied without
+	// anybody having to describe the setting.
+	if e.mindModel != nil {
+		if override := strings.TrimSpace(e.mindModel(req.UID)); override != "" {
+			modelID = override
+		}
 	}
 	// The CLI check is claude-specific wiring: other runtimes (pi) stat
 	// their own binary inside RunTurn and fail as a typed RuntimeError.
