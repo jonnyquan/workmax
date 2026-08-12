@@ -21,6 +21,14 @@ import {
   mindButton,
   mindCreateButton,
   mindCreateName,
+  mindEditCancel,
+  mindEditDelete,
+  mindEditForm,
+  mindEditModel,
+  mindEditName,
+  mindEditNote,
+  mindEditRole,
+  mindEditSave,
   mindFeedButton,
   mindFeedError,
   mindFeedStatus,
@@ -57,6 +65,10 @@ export const mindState = {
   status: null,
   loading: false,
   feeding: false,
+  // Which mind the editor is open on, or null. Held here rather than read off
+  // the DOM because loadMinds repaints the roster and the editor has to know
+  // whether it survived that.
+  editing: null,
   // What the icon is currently saying, or "" for the still, idle state.
   activity: "",
 };
@@ -222,6 +234,113 @@ export async function submitCreateMind(event) {
   await loadMinds();
 }
 
+// --- Editing -----------------------------------------------------------------
+//
+// A mind's describable parts are editable because otherwise a role hint is
+// written once and forever: correcting one would mean creating a new mind,
+// which means losing everything the old one was taught. An identity's memory
+// should not be the price of a typo.
+//
+// Delete lives in here rather than beside the switch button on the row. The
+// two would sit a few pixels apart, they do opposite things, and one of them
+// erases every material this mind was ever fed. Opening the editor is a speed
+// bump, and it is also the one place with room to say so.
+function findMind(id) {
+  return mindState.minds.find((mind) => mind.id === id) || null;
+}
+
+export function openMindEditor(id) {
+  const mind = findMind(id);
+  if (!mind || !mindEditForm) return;
+  mindState.editing = id;
+  if (mindEditName) mindEditName.value = mind.name;
+  if (mindEditRole) mindEditRole.value = mind.role_hint || "";
+  if (mindEditModel) mindEditModel.value = mind.model_override || "";
+  mindEditForm.hidden = false;
+  setMindEditNote("");
+  disarmMindDelete();
+  if (mindEditName?.focus) mindEditName.focus();
+}
+
+export function closeMindEditor() {
+  mindState.editing = null;
+  if (mindEditForm) mindEditForm.hidden = true;
+  setMindEditNote("");
+  disarmMindDelete();
+}
+
+function setMindEditNote(text) {
+  if (!mindEditNote) return;
+  mindEditNote.textContent = text;
+  mindEditNote.hidden = text === "";
+}
+
+function disarmMindDelete() {
+  if (!mindEditDelete) return;
+  mindEditDelete.classList.remove("armed");
+  mindEditDelete.textContent = "Delete";
+}
+
+export async function submitEditMind(event) {
+  event?.preventDefault?.();
+  const bridge = mindBridge();
+  const id = mindState.editing;
+  if (!bridge || !id || !mindEditName) return;
+  const name = mindEditName.value.trim();
+  if (name === "") {
+    setMindEditNote("A mind needs a name.");
+    return;
+  }
+  if (mindEditSave) mindEditSave.disabled = true;
+  try {
+    const result = parseDesktopBridgeResult(
+      await bridge.update(id, {
+        name,
+        role_hint: mindEditRole ? mindEditRole.value.trim() : "",
+        model_override: mindEditModel ? mindEditModel.value.trim() : "",
+      }),
+      "mind.update"
+    );
+    if (!result.ok) throw new Error("could not save this mind");
+    closeMindEditor();
+    setMindRosterError("");
+  } catch (error) {
+    setMindEditNote(sanitizeErrorMessage(String(error.message || error)) || "Could not save this mind.");
+  } finally {
+    if (mindEditSave) mindEditSave.disabled = false;
+  }
+  await loadMinds();
+}
+
+// Two clicks, one control — the same grammar a conversation delete already
+// uses. The first click says what is about to happen, because "delete this
+// mind" and "delete everything it was taught" are different sentences and only
+// the second one is true.
+export async function submitDeleteMind() {
+  const bridge = mindBridge();
+  const id = mindState.editing;
+  if (!bridge || !id || !mindEditDelete) return;
+  if (!mindEditDelete.classList.contains("armed")) {
+    mindEditDelete.classList.add("armed");
+    mindEditDelete.textContent = "Delete for good";
+    setMindEditNote("This also erases everything this mind was taught.");
+    return;
+  }
+  mindEditDelete.disabled = true;
+  try {
+    const result = parseDesktopBridgeResult(await bridge.remove(id), "mind.delete");
+    if (!result.ok) throw new Error("could not delete this mind");
+    closeMindEditor();
+    setMindRosterError("");
+  } catch (error) {
+    setMindEditNote(sanitizeErrorMessage(String(error.message || error)) || "Could not delete this mind.");
+    disarmMindDelete();
+  } finally {
+    mindEditDelete.disabled = false;
+  }
+  await loadMinds();
+}
+
 // Teaching. The material is sent, indexed under this mind's mark, and the
 // panel re-reads its own status — so the count on screen is the sidecar's
 // answer rather than an optimistic increment that could disagree with it.
@@ -300,6 +419,19 @@ function renderMindRoster() {
       void selectMind(mind.id);
     });
     row.appendChild(button);
+
+    // Editing is a second, quieter control on the row rather than a mode the
+    // whole panel enters. It reveals on hover like every other row action in
+    // this app, which also means a keyboard reaches it — see .reveal-on-hover.
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "mind-roster-edit reveal-on-hover";
+    edit.textContent = "Edit";
+    edit.setAttribute("aria-label", `Edit ${mind.name}`);
+    edit.addEventListener("click", () => openMindEditor(mind.id));
+    row.appendChild(edit);
+    row.className = "mind-roster-row reveal-on-hover-host";
+
     mindRoster.appendChild(row);
   }
 }

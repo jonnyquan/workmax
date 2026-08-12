@@ -863,6 +863,37 @@
               />
               <button id="mind-create-button" type="submit">Add</button>
             </form>
+            <!-- Editing a mind, and the only place it can be deleted from.
+                 Delete is deliberately not a control beside the switch button:
+                 the two sit a few pixels apart, they do opposite things, and
+                 one of them erases everything the mind was taught. Opening the
+                 editor first is a speed bump, and it is also where that
+                 consequence can be stated in words. -->
+            <form id="mind-edit-form" class="mind-edit-form" novalidate hidden>
+              <label class="mind-edit-label" for="mind-edit-name">Name</label>
+              <input id="mind-edit-name" type="text" autocomplete="off" maxlength="64" />
+              <label class="mind-edit-label" for="mind-edit-role">How it works</label>
+              <textarea
+                id="mind-edit-role"
+                rows="3"
+                maxlength="280"
+                placeholder="Answer only in bullet points."
+              ></textarea>
+              <label class="mind-edit-label" for="mind-edit-model">Model</label>
+              <input
+                id="mind-edit-model"
+                type="text"
+                autocomplete="off"
+                maxlength="128"
+                placeholder="Use the identity's model"
+              />
+              <div class="mind-edit-actions">
+                <button id="mind-edit-save" class="primary" type="submit">Save</button>
+                <button id="mind-edit-cancel" class="ghost" type="button">Cancel</button>
+                <button id="mind-edit-delete" class="ghost mind-edit-delete" type="button">Delete</button>
+              </div>
+              <p id="mind-edit-note" class="mind-edit-note" hidden></p>
+            </form>
             <p id="mind-roster-error" class="form-error" role="alert" hidden></p>
           </section>
 

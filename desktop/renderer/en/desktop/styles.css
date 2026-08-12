@@ -1810,6 +1810,80 @@ textarea::placeholder {
   white-space: nowrap;
 }
 
+/* The row is a host so its edit control can hide until wanted; the switch
+   button keeps the whole width it had, and the edit sits over its right end
+   rather than shortening every name to make room for a control that is not
+   there most of the time. */
+.mind-roster-row {
+  position: relative;
+}
+
+.mind-roster-edit {
+  position: absolute;
+  top: 50%;
+  right: var(--sp-1);
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-2);
+  transform: translateY(-50%);
+  border-color: transparent;
+  background: hsl(var(--card));
+  box-shadow: 0 0 0 1px hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
+}
+
+.mind-edit-form {
+  display: grid;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+  padding: var(--sp-2);
+  border-radius: var(--r-control);
+  background: hsl(var(--muted) / 0.5);
+}
+
+/* The teach form already says this about its own textarea. A textarea inherits
+   the UA monospace face unless told not to, and a role hint is prose — the
+   only rule this form needs of its own, because a grid stretches its items to
+   the track and the track is the panel. Measured at the rail's real 300px
+   before and after adding width constraints: identical, so they went. */
+.mind-edit-form textarea {
+  resize: vertical;
+  font-family: inherit;
+  font-size: var(--fs-base);
+  line-height: var(--lh-read);
+}
+
+.mind-edit-label {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+}
+
+.mind-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+}
+
+/* Destructive, and it says so before it is armed rather than only after. It
+   is still not filled: the loud thing on this form should be Save. */
+.mind-edit-delete {
+  margin-left: auto;
+  color: hsl(var(--destructive));
+}
+
+.mind-edit-delete.armed {
+  border-color: hsl(var(--destructive) / 0.5);
+  background: hsl(var(--destructive) / 0.1);
+}
+
+.mind-edit-note {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+}
+
 .mind-create-form {
   display: flex;
   gap: var(--sp-2);

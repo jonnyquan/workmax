@@ -895,6 +895,39 @@ func (s *Store) DeleteBySource(ctx context.Context, sourceType, sourceID string)
 	return int(n), nil
 }
 
+// DeleteMindMemory removes every chunk a mind was ever taught, returning the
+// count removed. Used when a mind is deleted.
+//
+// Deliberately NOT scoped by uid, for the same reason DeleteBySource is not:
+// a mind id is a uuid and unique on this machine, and memory left behind
+// under an identity the user has since stopped using would be text they
+// deleted that is still on disk. Over-deleting here is impossible; the prefix
+// names exactly one mind.
+//
+// Deleting the memory with the mind is the only coherent option rather than a
+// choice about tidiness. Retrieval keeps the ACTIVE mind's material and drops
+// every other mind's, so a chunk whose mind no longer exists can never be
+// retrieved by anything again — leaving it is not preserving knowledge, it is
+// keeping unreachable rows forever.
+func (s *Store) DeleteMindMemory(ctx context.Context, mindID string) (int, error) {
+	prefix := MindSourcePrefix(mindID)
+	sqlDB, err := s.sqlDB()
+	if err != nil {
+		return 0, err
+	}
+	res, err := sqlDB.ExecContext(ctx,
+		"DELETE FROM "+chunksTable+" WHERE source_type = ? AND substr(source_id, 1, ?) = ?",
+		SourceTypeMind, len(prefix), prefix)
+	if err != nil {
+		return 0, fmt.Errorf("knowledge: delete mind memory: %w", err)
+	}
+	s.execFTS(ctx, sqlDB, "delete mind memory",
+		"DELETE FROM "+ftsTable+" WHERE source_type = ? AND substr(source_id, 1, ?) = ?",
+		SourceTypeMind, len(prefix), prefix)
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // ReplaceSource atomically replaces all chunks for a source: it deletes any
 // existing chunks for (sourceType, sourceID) then inserts the given ones under
 // uid in the same transaction. Use when re-indexing a file whose contents may

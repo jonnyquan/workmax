@@ -285,6 +285,16 @@ func (l *lazyKnowledge) MindSources(ctx context.Context, uid uint64, mindID stri
 	return out, nil
 }
 
+// ForgetMind removes everything a mind was taught. Straight to the store like
+// the other delete paths: erasing memory must not first load a model.
+func (l *lazyKnowledge) ForgetMind(ctx context.Context, mindID string) (int, error) {
+	if !l.begin() {
+		return 0, errKnowledgeClosed
+	}
+	defer l.end()
+	return l.store.DeleteMindMemory(ctx, mindID)
+}
+
 // Retrieve is also the translation point between the two packages' retrieval
 // types. They are deliberately not shared: local_inference must stay free of
 // cgo, so it cannot name knowledge.Retrieved, and knowledge should not import

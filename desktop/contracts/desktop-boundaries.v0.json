@@ -203,6 +203,14 @@
         "routeId": "minds.create"
       },
       {
+        "bridgeMethod": "mind.update",
+        "routeId": "minds.update"
+      },
+      {
+        "bridgeMethod": "mind.delete",
+        "routeId": "minds.delete"
+      },
+      {
         "bridgeMethod": "mind.select",
         "routeId": "minds.select"
       },
@@ -901,6 +909,33 @@
         ],
         "maxBodyBytes": 4096,
         "bodyTooLargeError": "mind request body too large"
+      }
+    },
+    {
+      "id": "minds.update",
+      "method": "PUT",
+      "path": "/minds/:id",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 4096,
+        "bodyTooLargeError": "mind request body too large"
+      }
+    },
+    {
+      "id": "minds.delete",
+      "method": "DELETE",
+      "path": "/minds/:id",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
       }
     },
     {

@@ -74,6 +74,9 @@ import {
   openWorkspaceButton,
   mindButton,
   mindCreateForm,
+  mindEditCancel,
+  mindEditDelete,
+  mindEditForm,
   mindFeedForm,
   mindPanel,
   quickSwitcher,
@@ -187,7 +190,10 @@ import {
 import {
   mindPanelHidden,
   mindPanelShown,
+  closeMindEditor,
   submitCreateMind,
+  submitDeleteMind,
+  submitEditMind,
   submitFeedMind,
 } from "./mind.js";
 
@@ -3344,6 +3350,19 @@ if (mindPanel) {
 }
 if (mindButton) {
   mindButton.addEventListener("click", () => toggleRightPanel("mind"));
+}
+if (mindEditForm) {
+  mindEditForm.addEventListener("submit", (event) => {
+    void submitEditMind(event);
+  });
+}
+if (mindEditCancel) {
+  mindEditCancel.addEventListener("click", () => closeMindEditor());
+}
+if (mindEditDelete) {
+  mindEditDelete.addEventListener("click", () => {
+    void submitDeleteMind();
+  });
 }
 if (mindCreateForm) {
   mindCreateForm.addEventListener("submit", (event) => {

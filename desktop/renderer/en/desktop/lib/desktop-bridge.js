@@ -48,6 +48,8 @@ const ROUTES = {
     settingsPutAppearance: defineTypedRoute("settings.putAppearance", "settings.appearance.put", "PUT", "/settings/appearance", "json", "application/json"),
     mindList: defineTypedRoute("mind.list", "minds.list", "GET", "/minds", "none", null),
     mindCreate: defineTypedRoute("mind.create", "minds.create", "POST", "/minds", "json", "application/json"),
+    mindUpdate: defineTypedRoute("mind.update", "minds.update", "PUT", "/minds/:id", "json", "application/json"),
+    mindDelete: defineTypedRoute("mind.delete", "minds.delete", "DELETE", "/minds/:id", "none", null),
     mindSelect: defineTypedRoute("mind.select", "minds.select", "POST", "/minds/:id/select", "none", null),
     mindStatus: defineTypedRoute("mind.status", "minds.status", "GET", "/minds/:id/status", "none", null),
     mindFeed: defineTypedRoute("mind.feed", "minds.feed", "POST", "/minds/:id/feed", "json", "application/json"),
@@ -63,6 +65,7 @@ const JSON_BODY_LIMITS = {
     "settings.putAppearance": 1 << 10,
     "agent.setThreadCloudSync": 512,
     "mind.create": 4 << 10,
+    "mind.update": 4 << 10,
     "mind.feed": 1 << 20,
 };
 function createDesktopBridge(deps) {
@@ -284,6 +287,24 @@ function createDesktopBridge(deps) {
                 const result = await execute(deps, ROUTES.mindCreate, undefined, body);
                 return validateMindResult(result);
             },
+            // A full replace rather than a patch: the only caller is a form that
+            // always holds every field, and "the value I did not send" is not a
+            // distinction a form can express.
+            update: async (id, input) => {
+                const path = ROUTES.mindUpdate.path.replace(":id", validateMindID(id));
+                const body = buildMindCreateBody(input);
+                const result = await execute(deps, ROUTES.mindUpdate, path, body);
+                return validateMindResult(result);
+            },
+            // Deleting a mind deletes everything it was taught. That is not this
+            // layer's decision to soften — the sidecar erases the memory first and
+            // the row only if that succeeded — but it is why the renderer asks
+            // twice before calling this.
+            remove: async (id) => {
+                const path = ROUTES.mindDelete.path.replace(":id", validateMindID(id));
+                const result = await execute(deps, ROUTES.mindDelete, path);
+                return validateMindDeletedResult(result);
+            },
             select: async (id) => {
                 const path = ROUTES.mindSelect.path.replace(":id", validateMindID(id));
                 const result = await execute(deps, ROUTES.mindSelect, path);
@@ -374,7 +395,7 @@ function buildCapabilities() {
             },
             mind: {
                 supported: true,
-                methods: ["list", "create", "select", "status", "feed"],
+                methods: ["list", "create", "update", "remove", "select", "status", "feed"],
             },
             artifact: {
                 supported: false,
@@ -1286,6 +1307,21 @@ function validateMindSelectedResult(result) {
         throw new TypeError("mind select response is malformed");
     }
     return { ...result, data: { selected: true } };
+}
+function validateMindDeletedResult(result) {
+    if (!result.ok) {
+        return result;
+    }
+    const data = result.data;
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+        throw new TypeError("mind delete response is malformed");
+    }
+    const record = data;
+    assertExactKeys(record, ["deleted"], "mind delete response");
+    if (record.deleted !== true) {
+        throw new TypeError("mind delete response is malformed");
+    }
+    return { ...result, data: { deleted: true } };
 }
 function validateMindStatusResult(result) {
     if (!result.ok) {

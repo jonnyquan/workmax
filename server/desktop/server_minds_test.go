@@ -43,9 +43,34 @@ func openMindsTestDB(t *testing.T) *gorm.DB {
 // feeds accumulate per (mind, title), and MindSources reports them back the
 // way the store would.
 type fakeMindKnowledge struct {
-	mu       sync.Mutex
-	feeds    []fakeMindFeed
-	failFeed error
+	mu         sync.Mutex
+	feeds      []fakeMindFeed
+	failFeed   error
+	failForget error
+	forgotten  []string
+}
+
+// ForgetMind erases a mind's memory. The fake records the call as well as
+// applying it: the ORDER of erase-then-delete is the property the handler has
+// to get right, and a fake that only applied the effect could not show it.
+func (f *fakeMindKnowledge) ForgetMind(_ context.Context, mindID string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failForget != nil {
+		return 0, f.failForget
+	}
+	f.forgotten = append(f.forgotten, mindID)
+	kept := f.feeds[:0]
+	removed := 0
+	for _, feed := range f.feeds {
+		if feed.mindID == mindID {
+			removed += feed.chunks
+			continue
+		}
+		kept = append(kept, feed)
+	}
+	f.feeds = kept
+	return removed, nil
 }
 
 func (f *fakeMindKnowledge) IndexFile(_ context.Context, _ uint64, _ int64) error { return nil }
@@ -516,4 +541,174 @@ func defaultMindOf(t *testing.T, store *MindStore) Mind {
 	}
 	t.Fatal("the seeded default mind is missing")
 	return Mind{}
+}
+
+// Editing exists so a role hint is not written once and forever: correcting
+// one by recreating the mind would cost everything it was taught.
+func TestMindUpdateReplacesTheDescribablePartsOnly(t *testing.T) {
+	base, tok, _ := bootMindsFixture(t, nil)
+	_, body := mindsRequest(t, http.MethodPost, base+"/minds", tok,
+		`{"name":"Compensation","role_hint":"Be terse.","model_override":"m1"}`)
+	var created Mind
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatalf("parse create: %v", err)
+	}
+	if _, b := mindsRequest(t, http.MethodPost, base+"/minds/"+created.ID+"/select", tok, ""); b == nil {
+		t.Fatal("select failed")
+	}
+
+	resp, body := mindsRequest(t, http.MethodPut, base+"/minds/"+created.ID, tok,
+		`{"name":"Comp","role_hint":"Answer in bullet points.","model_override":""}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update status %d: %s", resp.StatusCode, body)
+	}
+	var updated Mind
+	if err := json.Unmarshal(body, &updated); err != nil {
+		t.Fatalf("parse update: %v", err)
+	}
+	if updated.Name != "Comp" || updated.RoleHint != "Answer in bullet points." {
+		t.Fatalf("update did not take: %+v", updated)
+	}
+	if updated.ModelOverride != "" {
+		t.Fatalf("a form that sends an empty model means the identity's: %+v", updated)
+	}
+	// Being active is its own act with its own endpoint. Folding it in here
+	// would let a rename quietly take over the workspace.
+	if !updated.Active {
+		t.Fatalf("an edit must not change which mind is active: %+v", updated)
+	}
+
+	if resp, _ := mindsRequest(t, http.MethodPut, base+"/minds/"+created.ID, tok, `{"name":""}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("a nameless mind = %d, want 400", resp.StatusCode)
+	}
+	if resp, _ := mindsRequest(t, http.MethodPut, base+"/minds/mind-00000000-0000-4000-8000-000000000000", tok,
+		`{"name":"Ghost"}`); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("editing a mind that does not exist = %d, want 404", resp.StatusCode)
+	}
+}
+
+// Deleting a mind deletes everything it was taught, and the ORDER is the
+// property: memory first, row only if that succeeded.
+//
+// Retrieval keeps the active mind's material and drops every other mind's, so
+// a chunk whose mind no longer exists can never be reached by anything again.
+// Leaving it would not be preserving knowledge; it would be keeping
+// unreachable rows on the user's disk forever.
+func TestMindDeleteTakesItsMemoryWithIt(t *testing.T) {
+	fake := &fakeMindKnowledge{}
+	base, tok, _ := bootMindsFixture(t, fake)
+
+	_, body := mindsRequest(t, http.MethodPost, base+"/minds", tok, `{"name":"Compensation"}`)
+	var created Mind
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatalf("parse create: %v", err)
+	}
+	if resp, b := mindsRequest(t, http.MethodPost, base+"/minds/"+created.ID+"/feed", tok,
+		`{"title":"Bands","text":"L4 is one hundred eighty thousand"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("feed status %d: %s", resp.StatusCode, b)
+	}
+
+	resp, body := mindsRequest(t, http.MethodDelete, base+"/minds/"+created.ID, tok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete status %d: %s", resp.StatusCode, body)
+	}
+	if len(fake.forgotten) != 1 || fake.forgotten[0] != created.ID {
+		t.Fatalf("the mind's memory must be erased with it: %v", fake.forgotten)
+	}
+	if len(fake.feeds) != 0 {
+		t.Fatalf("material survived the delete: %+v", fake.feeds)
+	}
+	if _, listBody := mindsRequest(t, http.MethodGet, base+"/minds", tok, ""); strings.Contains(string(listBody), created.ID) {
+		t.Fatalf("the deleted mind is still listed: %s", listBody)
+	}
+
+	// The last mind cannot go: something has to be active, and reseeding a
+	// default the user just deleted would be stranger than refusing.
+	var list MindListDTO
+	_, listBody := mindsRequest(t, http.MethodGet, base+"/minds", tok, "")
+	if err := json.Unmarshal(listBody, &list); err != nil {
+		t.Fatalf("parse list: %v", err)
+	}
+	if list.Count != 1 {
+		t.Fatalf("expected only the default to remain: %s", listBody)
+	}
+	before := len(fake.forgotten)
+	if resp, _ := mindsRequest(t, http.MethodDelete, base+"/minds/"+list.Items[0].ID, tok, ""); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("deleting the last mind = %d, want 409", resp.StatusCode)
+	}
+	// And a refused delete must not have erased anything on the way to being
+	// refused — the check runs before the memory does.
+	if len(fake.forgotten) != before {
+		t.Fatalf("a refused delete erased memory anyway: %v", fake.forgotten)
+	}
+}
+
+// Deleting the ACTIVE mind hands the flag on. An identity with no active mind
+// falls back to unscoped retrieval, which is a behaviour change nobody asked
+// for arriving silently.
+func TestMindDeleteMovesTheActiveFlag(t *testing.T) {
+	fake := &fakeMindKnowledge{}
+	base, tok, db := bootMindsFixture(t, fake)
+	_, body := mindsRequest(t, http.MethodPost, base+"/minds", tok, `{"name":"Compensation"}`)
+	var created Mind
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatalf("parse create: %v", err)
+	}
+	if resp, _ := mindsRequest(t, http.MethodPost, base+"/minds/"+created.ID+"/select", tok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatal("select failed")
+	}
+	if resp, b := mindsRequest(t, http.MethodDelete, base+"/minds/"+created.ID, tok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete status %d: %s", resp.StatusCode, b)
+	}
+	active, ok, err := NewMindStore(db).Active(0)
+	if err != nil || !ok {
+		t.Fatalf("after deleting the active mind there must still be one: %v %v", ok, err)
+	}
+	if active.Name != defaultMindName {
+		t.Fatalf("the flag should land on the oldest survivor, got %+v", active)
+	}
+}
+
+// The store's own guards, not the handler's. Delete is a public method and the
+// handler is not its only conceivable caller, so its rules are asserted where
+// they live rather than only through the route that happens to check first.
+func TestMindStoreDeleteGuardsItself(t *testing.T) {
+	db := openMindsTestDB(t)
+	store := NewMindStore(db)
+
+	// The seeded default is the only mind, and it may not go.
+	only := defaultMindOf(t, store)
+	if err := store.Delete(0, only.ID); !errors.Is(err, errMindLastOne) {
+		t.Fatalf("deleting the only mind = %v, want errMindLastOne", err)
+	}
+	if err := store.CanDelete(0, only.ID); !errors.Is(err, errMindLastOne) {
+		t.Fatalf("CanDelete on the only mind = %v, want errMindLastOne", err)
+	}
+	if _, err := store.Get(0, only.ID); err != nil {
+		t.Fatalf("a refused delete must leave the mind: %v", err)
+	}
+
+	// With a second one, both succeed — and CanDelete stays a question, not an
+	// action: asking must not delete.
+	second, err := store.Create(0, MindPut{Name: "Second"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.CanDelete(0, second.ID); err != nil {
+		t.Fatalf("CanDelete = %v, want nil", err)
+	}
+	if _, err := store.Get(0, second.ID); err != nil {
+		t.Fatalf("CanDelete must not delete anything: %v", err)
+	}
+	if err := store.Delete(0, second.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := store.Get(0, second.ID); !errors.Is(err, errMindNotFound) {
+		t.Fatalf("after Delete, Get = %v, want not found", err)
+	}
+
+	// An id that is not a mind id never reaches a query.
+	if err := store.Delete(0, "../../etc/passwd"); !errors.Is(err, errMindID) {
+		t.Fatalf("Delete with a malformed id = %v, want errMindID", err)
+	}
 }

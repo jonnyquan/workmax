@@ -80,6 +80,7 @@ var (
 	errMindID          = errors.New("mind: invalid id")
 	errMindNotFound    = errors.New("mind: not found")
 	errMindLimit       = errors.New("mind: too many minds")
+	errMindLastOne     = errors.New("mind: the last mind cannot be deleted")
 )
 
 // mindIDShape is the whole vocabulary of a mind id: the prefix the knowledge
@@ -306,6 +307,153 @@ func (s *MindStore) Create(uid uint64, in MindPut) (Mind, error) {
 		return Mind{}, fmt.Errorf("minds: insert: %w", err)
 	}
 	return m, nil
+}
+
+// Update replaces a mind's describable parts. A full replace rather than a
+// patch, because the only caller is a form that always holds all four fields,
+// and "the value I did not send" is not a distinction a form can express.
+//
+// It exists because without it a role hint is written once and forever: the
+// only way to change one would be to create a new mind, which means losing
+// everything the old one was taught. An identity's memory should not be the
+// price of a typo.
+//
+// Whether the mind is ACTIVE is deliberately not editable here. Selecting is
+// its own act with its own endpoint, and folding it in would let a rename
+// quietly take over the workspace.
+func (s *MindStore) Update(uid uint64, id string, in MindPut) (Mind, error) {
+	if s == nil || s.db == nil {
+		return Mind{}, errors.New("mind store unavailable")
+	}
+	if !mindIDShape.MatchString(id) {
+		return Mind{}, errMindID
+	}
+	name, err := normalizeMindName(in.Name)
+	if err != nil {
+		return Mind{}, err
+	}
+	description, err := normalizeMindFreeText(in.Description, maxMindDescription, errMindDescription)
+	if err != nil {
+		return Mind{}, err
+	}
+	roleHint, err := normalizeMindFreeText(in.RoleHint, maxMindRoleHint, errMindRoleHint)
+	if err != nil {
+		return Mind{}, err
+	}
+	model, err := normalizeMindModel(in.ModelOverride)
+	if err != nil {
+		return Mind{}, err
+	}
+	if err := s.ensureDefaultMind(uid); err != nil {
+		return Mind{}, err
+	}
+	var modelArg any
+	if model != "" {
+		modelArg = model
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res := s.db.Exec(
+		`UPDATE w_desktop_mind
+		    SET name = ?, description = ?, role_hint = ?, model_override = ?, updated_at = ?
+		  WHERE uid = ? AND id = ?`,
+		name, description, roleHint, modelArg, now, signedMindUID(uid), id,
+	)
+	if res.Error != nil {
+		return Mind{}, fmt.Errorf("minds: update: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return Mind{}, errMindNotFound
+	}
+	return s.Get(uid, id)
+}
+
+// CanDelete reports whether Delete would succeed, without deleting anything.
+//
+// It exists because a mind's memory and its row live in different stores: the
+// handler erases the memory first, and a refusal discovered afterwards would
+// have already cost the user everything the mind was taught.
+func (s *MindStore) CanDelete(uid uint64, id string) error {
+	if s == nil || s.db == nil {
+		return errors.New("mind store unavailable")
+	}
+	if !mindIDShape.MatchString(id) {
+		return errMindID
+	}
+	if err := s.ensureDefaultMind(uid); err != nil {
+		return err
+	}
+	var count int64
+	if err := s.db.Raw(
+		`SELECT COUNT(*) FROM w_desktop_mind WHERE uid = ?`, signedMindUID(uid),
+	).Row().Scan(&count); err != nil {
+		return fmt.Errorf("minds: count: %w", err)
+	}
+	if count <= 1 {
+		return errMindLastOne
+	}
+	return nil
+}
+
+// Delete removes a mind's row. Its MEMORY is removed by the caller before
+// this runs — see the handler — because the two live in different stores and
+// only one of them can be transactional here.
+//
+// Two rules, both about not leaving the identity in a state it cannot get out
+// of. The last mind cannot be deleted: something has to be active, and
+// silently reseeding a default the user just deleted would be a stranger
+// answer than refusing. And deleting the ACTIVE mind hands the flag to
+// another, because an identity with no active mind falls back to unscoped
+// retrieval — which is a behaviour change nobody asked for, arriving silently.
+func (s *MindStore) Delete(uid uint64, id string) error {
+	if s == nil || s.db == nil {
+		return errors.New("mind store unavailable")
+	}
+	if !mindIDShape.MatchString(id) {
+		return errMindID
+	}
+	if err := s.ensureDefaultMind(uid); err != nil {
+		return err
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var (
+			count  int64
+			active int
+		)
+		if err := tx.Raw(
+			`SELECT COUNT(*) FROM w_desktop_mind WHERE uid = ?`, signedMindUID(uid),
+		).Row().Scan(&count); err != nil {
+			return err
+		}
+		if err := tx.Raw(
+			`SELECT is_active FROM w_desktop_mind WHERE uid = ? AND id = ?`, signedMindUID(uid), id,
+		).Row().Scan(&active); err != nil {
+			return errMindNotFound
+		}
+		if count <= 1 {
+			return errMindLastOne
+		}
+		if err := tx.Exec(
+			`DELETE FROM w_desktop_mind WHERE uid = ? AND id = ?`, signedMindUID(uid), id,
+		).Error; err != nil {
+			return err
+		}
+		if active != 1 {
+			return nil
+		}
+		// The oldest survivor, which is the seeded default on any identity
+		// that has not deleted it — the least surprising thing to land on.
+		var next string
+		if err := tx.Raw(
+			`SELECT id FROM w_desktop_mind WHERE uid = ? ORDER BY created_at ASC, id ASC LIMIT 1`,
+			signedMindUID(uid),
+		).Row().Scan(&next); err != nil {
+			return err
+		}
+		return tx.Exec(
+			`UPDATE w_desktop_mind SET is_active = 1, updated_at = ? WHERE uid = ? AND id = ?`,
+			time.Now().UTC().Format(time.RFC3339Nano), signedMindUID(uid), next,
+		).Error
+	})
 }
 
 // Select makes one mind the identity's active one — atomically exactly one,

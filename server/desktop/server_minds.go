@@ -41,6 +41,11 @@ const (
 type MindKnowledge interface {
 	IndexMindMaterial(ctx context.Context, uid uint64, mindID, title, text string) (int, error)
 	MindSources(ctx context.Context, uid uint64, mindID string) ([]MindSourceStat, error)
+	// ForgetMind removes everything a mind was taught. Not uid-scoped, for the
+	// same reason the store's other delete paths are not: a mind id is unique
+	// on this machine, and memory left behind under an identity the user has
+	// stopped using would be text they deleted that is still on disk.
+	ForgetMind(ctx context.Context, mindID string) (int, error)
 }
 
 // MindSourceStat is one fed material as the status endpoint reports it.
@@ -311,9 +316,98 @@ func (s *Server) handleFeedMind(c *gin.Context) {
 	c.JSON(http.StatusOK, MindFeedResult{Fed: true, Title: in.Title, Chunks: chunks})
 }
 
+// handleUpdateMind replaces a mind's describable parts. Without it a role
+// hint is written once and forever, and correcting one would mean creating a
+// new mind — which means losing everything the old one was taught.
+func (s *Server) handleUpdateMind(c *gin.Context) {
+	if s.cfg.Minds == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "minds unavailable"})
+		return
+	}
+	identity, ok := s.requestOwner(c)
+	if !ok {
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(c.Request.Body, maxMindBodyBytes+1))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	if int64(len(raw)) > maxMindBodyBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "mind request body too large"})
+		return
+	}
+	in, err := DecodeMindPut(raw)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid mind json"})
+		return
+	}
+	mind, err := s.cfg.Minds.Update(identity.UID, c.Param("id"), in)
+	if err != nil {
+		writeMindError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, mind)
+}
+
+// handleDeleteMind removes a mind and everything it was taught.
+//
+// The memory goes FIRST and the row only if that succeeded. The two live in
+// different stores and cannot share a transaction, so one of the two orders
+// has to be chosen deliberately: deleting the row first and failing on the
+// chunks would leave text on disk that nothing can ever reach or name again,
+// while failing this way leaves the mind intact and the delete retryable.
+//
+// A sidecar with no knowledge store at all still deletes the row, because
+// there is no memory for it to be inconsistent with.
+func (s *Server) handleDeleteMind(c *gin.Context) {
+	if s.cfg.Minds == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "minds unavailable"})
+		return
+	}
+	identity, ok := s.requestOwner(c)
+	if !ok {
+		return
+	}
+	id := c.Param("id")
+	// Existence and the last-mind rule are checked before anything is erased,
+	// so a refused delete never costs a mind its memory.
+	if _, err := s.cfg.Minds.Get(identity.UID, id); err != nil {
+		writeMindError(c, err)
+		return
+	}
+	if mk := s.mindKnowledge(); mk != nil {
+		if err := s.cfg.Minds.CanDelete(identity.UID, id); err != nil {
+			writeMindError(c, err)
+			return
+		}
+		if _, err := mk.ForgetMind(c.Request.Context(), id); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "mind memory could not be erased"})
+			return
+		}
+	}
+	if err := s.cfg.Minds.Delete(identity.UID, id); err != nil {
+		writeMindError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"deleted": true})
+}
+
 func writeMindError(c *gin.Context, err error) {
 	switch {
-	case errors.Is(err, errMindID):
+	case errors.Is(err, errMindLastOne):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	// The validation vocabulary. These reach here from Update, which shares
+	// its normalizers with Create — where they were already answered as 400.
+	// Falling through to 500 would tell the user their machine broke when what
+	// happened is that they left the name blank.
+	case errors.Is(err, errMindID),
+		errors.Is(err, errMindName),
+		errors.Is(err, errMindDescription),
+		errors.Is(err, errMindRoleHint),
+		errors.Is(err, errMindModel):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	case errors.Is(err, errMindNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})

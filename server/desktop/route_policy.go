@@ -168,6 +168,8 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	// body after the file upload: up to 1 MiB of material text.
 	newCurrentSidecarRoutePolicy("minds.list", http.MethodGet, "/minds", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("minds.create", http.MethodPost, "/minds", SidecarBodyRequired, maxMindPolicyBodyBytes, "application/json"),
+	newCurrentSidecarRoutePolicy("minds.update", http.MethodPut, "/minds/:id", SidecarBodyRequired, maxMindPolicyBodyBytes, "application/json"),
+	newCurrentSidecarRoutePolicy("minds.delete", http.MethodDelete, "/minds/:id", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("minds.select", http.MethodPost, "/minds/:id/select", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("minds.status", http.MethodGet, "/minds/:id/status", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("minds.feed", http.MethodPost, "/minds/:id/feed", SidecarBodyRequired, maxMindFeedPolicyBodyBytes, "application/json"),
@@ -258,7 +260,7 @@ func newCurrentSidecarRoutePolicy(
 		bodyTooLargeError = "model settings body too large"
 	case "settings.appearance.put":
 		bodyTooLargeError = "appearance settings body too large"
-	case "minds.create":
+	case "minds.create", "minds.update":
 		bodyTooLargeError = "mind request body too large"
 	case "minds.feed":
 		bodyTooLargeError = "mind feed body too large"
@@ -551,6 +553,10 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handleListMinds, true
 	case "minds.create":
 		return s.handleCreateMind, true
+	case "minds.update":
+		return s.handleUpdateMind, true
+	case "minds.delete":
+		return s.handleDeleteMind, true
 	case "minds.select":
 		return s.handleSelectMind, true
 	case "minds.status":
