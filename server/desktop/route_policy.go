@@ -111,6 +111,9 @@ const (
 	maxModelSettingsPolicyBodyBytes = 8 << 10
 	// maxAppearanceSettingsBodyBytes also defined for handlers; keep in sync.
 	maxAppearanceSettingsPolicyBodyBytes = 1 << 10
+	// maxMindBodyBytes / maxMindFeedBodyBytes also defined for handlers; keep in sync.
+	maxMindPolicyBodyBytes     = 4 << 10
+	maxMindFeedPolicyBodyBytes = 1 << 20
 
 	maxThreadFileUploadBodyBytes = 50 << 20 // 50 MiB, aligned with cloud workagent upload cap
 )
@@ -159,6 +162,15 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	// renderer runs the answer is already on <html>.
 	newCurrentSidecarRoutePolicy("settings.appearance.get", http.MethodGet, "/settings/appearance", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("settings.appearance.put", http.MethodPut, "/settings/appearance", SidecarBodyRequired, maxAppearanceSettingsPolicyBodyBytes, "application/json"),
+	// Minds (心智体): list/create/select over w_desktop_mind, plus the two
+	// that reach the knowledge store — status reads the mind's marked memory,
+	// feed writes new material under the mind's mark. Feed takes the largest
+	// body after the file upload: up to 1 MiB of material text.
+	newCurrentSidecarRoutePolicy("minds.list", http.MethodGet, "/minds", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("minds.create", http.MethodPost, "/minds", SidecarBodyRequired, maxMindPolicyBodyBytes, "application/json"),
+	newCurrentSidecarRoutePolicy("minds.select", http.MethodPost, "/minds/:id/select", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("minds.status", http.MethodGet, "/minds/:id/status", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("minds.feed", http.MethodPost, "/minds/:id/feed", SidecarBodyRequired, maxMindFeedPolicyBodyBytes, "application/json"),
 	newCurrentSidecarRoutePolicy("agent.thread-file-upload", http.MethodPost, "/agent/threads/:uuid/files", SidecarBodyRequired, maxThreadFileUploadBodyBytes, "multipart/form-data"),
 	newCurrentSidecarRoutePolicy("agent.thread-file-list", http.MethodGet, "/agent/threads/:uuid/files", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-workspace-list", http.MethodGet, "/agent/threads/:uuid/workspace", SidecarBodyForbidden, 0),
@@ -246,6 +258,10 @@ func newCurrentSidecarRoutePolicy(
 		bodyTooLargeError = "model settings body too large"
 	case "settings.appearance.put":
 		bodyTooLargeError = "appearance settings body too large"
+	case "minds.create":
+		bodyTooLargeError = "mind request body too large"
+	case "minds.feed":
+		bodyTooLargeError = "mind feed body too large"
 	case "agent.thread-cloud-sync":
 		bodyTooLargeError = "cloud sync request body too large"
 	}
@@ -531,6 +547,16 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handleGetAppearance, true
 	case "settings.appearance.put":
 		return s.handlePutAppearance, true
+	case "minds.list":
+		return s.handleListMinds, true
+	case "minds.create":
+		return s.handleCreateMind, true
+	case "minds.select":
+		return s.handleSelectMind, true
+	case "minds.status":
+		return s.handleMindStatus, true
+	case "minds.feed":
+		return s.handleFeedMind, true
 	default:
 		return nil, false
 	}

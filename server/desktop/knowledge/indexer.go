@@ -213,6 +213,61 @@ func (i *Indexer) RemoveTurn(ctx context.Context, turnUUID string) (int, error) 
 	return i.store.DeleteBySource(ctx, SourceTypeMessage, turnSourceID(turnUUID))
 }
 
+// IndexMindMaterial feeds a mind: text the user gave one mind becomes
+// retrievable knowledge marked as that mind's memory. It is the same
+// extract → chunk → embed → store pipeline IndexFile runs — the only
+// difference is provenance: source_type=mind and a source_id of
+// "mind:<mind-id>:<title>", which is the whole marking convention the mind
+// feature is built on.
+//
+// The title is part of the source id, so re-feeding a title atomically
+// replaces that material (ReplaceSource) and the mind's memory listing needs
+// no registry table of its own. Title and text are already validated by the
+// caller (the feed handler); this method trusts that contract the same way
+// IndexFile trusts the file store.
+func (i *Indexer) IndexMindMaterial(ctx context.Context, uid uint64, mindID, title, text string) (int, error) {
+	sourceID := MindSourcePrefix(mindID) + title
+	pieces := ChunkText(text, 0)
+	if len(pieces) == 0 {
+		if _, err := i.store.ReplaceSource(ctx, uid, SourceTypeMind, sourceID, nil); err != nil {
+			return 0, fmt.Errorf("knowledge: clear mind material %s: %w", mindID, err)
+		}
+		return 0, nil
+	}
+
+	vecs, err := i.vec.EmbedBatch(ctx, pieces)
+	if err != nil {
+		return 0, fmt.Errorf("knowledge: embed mind material %s: %w", mindID, err)
+	}
+	if len(vecs) != len(pieces) {
+		return 0, fmt.Errorf("knowledge: embed count mismatch for mind %s: %d chunks, %d vectors", mindID, len(pieces), len(vecs))
+	}
+
+	chunks := make([]Chunk, len(pieces))
+	for idx, piece := range pieces {
+		chunks[idx] = Chunk{
+			UID:        uid,
+			ChunkUID:   fmt.Sprintf("mind:%s:%s:%d", mindID, title, idx),
+			SourceType: SourceTypeMind,
+			SourceID:   sourceID,
+			Text:       piece,
+			Embedding:  vecs[idx],
+		}
+	}
+	n, err := i.store.ReplaceSource(ctx, uid, SourceTypeMind, sourceID, chunks)
+	if err != nil {
+		return 0, fmt.Errorf("knowledge: store mind material %s: %w", mindID, err)
+	}
+	return n, nil
+}
+
+// MindSources reports what a mind has been fed, straight from the store. It
+// needs no embedding model, so it is served by the boot-time store even on a
+// machine whose assets have not finished downloading.
+func (i *Indexer) MindSources(ctx context.Context, uid uint64, mindID string) ([]MindSourceStat, int, error) {
+	return i.store.MindSources(ctx, uid, mindID)
+}
+
 // Retrieved is one retrieval hit with the provenance needed to say where it
 // came from. Label is resolved here rather than by the caller because this is
 // the only layer that knows a source id is a file row id.
@@ -370,6 +425,16 @@ func (i *Indexer) Retrieve(ctx context.Context, uid uint64, query string, topK i
 				r.Label = name
 			} else {
 				r.Label = "Indexed file"
+			}
+		} else if h.SourceType == SourceTypeMind {
+			// The wire vocabulary of kinds is closed (file | conversation) and
+			// checked at both ends of the bridge; a fed material reads as a
+			// document, so it presents as one, and the label — the title the
+			// user fed it under — carries the real provenance.
+			r.Kind = "file"
+			r.Label = "Mind knowledge"
+			if parts := strings.SplitN(h.SourceID, ":", 3); len(parts) == 3 && parts[2] != "" {
+				r.Label = parts[2]
 			}
 		} else {
 			r.Kind = "conversation"

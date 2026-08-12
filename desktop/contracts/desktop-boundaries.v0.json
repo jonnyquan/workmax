@@ -193,6 +193,26 @@
       {
         "bridgeMethod": "settings.putAppearance",
         "routeId": "settings.appearance.put"
+      },
+      {
+        "bridgeMethod": "mind.list",
+        "routeId": "minds.list"
+      },
+      {
+        "bridgeMethod": "mind.create",
+        "routeId": "minds.create"
+      },
+      {
+        "bridgeMethod": "mind.select",
+        "routeId": "minds.select"
+      },
+      {
+        "bridgeMethod": "mind.status",
+        "routeId": "minds.status"
+      },
+      {
+        "bridgeMethod": "mind.feed",
+        "routeId": "minds.feed"
       }
     ],
     "localMethods": [
@@ -854,6 +874,72 @@
         ],
         "maxBodyBytes": 1024,
         "bodyTooLargeError": "appearance settings body too large"
+      }
+    },
+    {
+      "id": "minds.list",
+      "method": "GET",
+      "path": "/minds",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "minds.create",
+      "method": "POST",
+      "path": "/minds",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 4096,
+        "bodyTooLargeError": "mind request body too large"
+      }
+    },
+    {
+      "id": "minds.select",
+      "method": "POST",
+      "path": "/minds/:id/select",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "minds.status",
+      "method": "GET",
+      "path": "/minds/:id/status",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "minds.feed",
+      "method": "POST",
+      "path": "/minds/:id/feed",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 1048576,
+        "bodyTooLargeError": "mind feed body too large"
       }
     },
     {

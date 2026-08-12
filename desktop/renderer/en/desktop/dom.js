@@ -142,6 +142,36 @@ export const sidebarSearchButton = document.querySelector("#sidebar-search-butto
 
 export const openWorkspaceButton = document.querySelector("#open-workspace-button");
 
+// --- The mind (心智体) --------------------------------------------------------
+// The title-bar icon and the overlay it opens. The icon is a window-level
+// control like the two folds beside it, which is why it lives up there and not
+// in the composer: a mind is not a property of the conversation on screen.
+export const mindButton = document.querySelector("#mind-button");
+export const mindOverlay = document.querySelector("#mind-overlay");
+export const mindCloseButton = document.querySelector("#mind-close-button");
+export const mindSubtitle = document.querySelector("#mind-subtitle");
+export const mindRoster = document.querySelector("#mind-roster");
+export const mindRosterError = document.querySelector("#mind-roster-error");
+export const mindCreateForm = document.querySelector("#mind-create-form");
+export const mindCreateName = document.querySelector("#mind-create-name");
+export const mindCreateButton = document.querySelector("#mind-create-button");
+export const mindAnatomyMeta = document.querySelector("#mind-anatomy-meta");
+export const mindBrainValue = document.querySelector("#mind-brain-value");
+export const mindBrainNote = document.querySelector("#mind-brain-note");
+export const mindSkillsValue = document.querySelector("#mind-skills-value");
+export const mindSkillsNote = document.querySelector("#mind-skills-note");
+export const mindMemoryValue = document.querySelector("#mind-memory-value");
+export const mindMemoryNote = document.querySelector("#mind-memory-note");
+export const mindMemorySection = document.querySelector("#mind-memory-section");
+export const mindMemoryMeta = document.querySelector("#mind-memory-meta");
+export const mindMemoryList = document.querySelector("#mind-memory-list");
+export const mindFeedForm = document.querySelector("#mind-feed-form");
+export const mindFeedTitle = document.querySelector("#mind-feed-title");
+export const mindFeedText = document.querySelector("#mind-feed-text");
+export const mindFeedError = document.querySelector("#mind-feed-error");
+export const mindFeedStatus = document.querySelector("#mind-feed-status");
+export const mindFeedButton = document.querySelector("#mind-feed-button");
+
 // --- Folding the columns ----------------------------------------------------
 // Both folds are one control each, and both controls live in the window's
 // title bar — outside the columns they hide, so the same button that folds a

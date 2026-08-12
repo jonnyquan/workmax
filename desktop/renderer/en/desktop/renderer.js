@@ -69,6 +69,11 @@ import {
   onboardingLocal,
   onboardingSignin,
   openWorkspaceButton,
+  mindButton,
+  mindCloseButton,
+  mindCreateForm,
+  mindFeedForm,
+  mindOverlay,
   quickSwitcher,
   renameThreadButton,
   renameThreadCancel,
@@ -176,6 +181,13 @@ import {
   renderTaskContext,
   settleTurnNarration,
 } from "./context-panel.js";
+import {
+  closeMindPanel,
+  mindState,
+  openMindPanel,
+  submitCreateMind,
+  submitFeedMind,
+} from "./mind.js";
 
 // --- Appearance --------------------------------------------------------------
 //
@@ -3194,11 +3206,44 @@ document.addEventListener("keydown", (event) => {
       closeSettingsPanel();
       return;
     }
+    if (mindOverlay && !mindOverlay.hidden) {
+      closeMindPanel();
+      return;
+    }
     if (state.activeTurn && !state.activeTurn.stopRequested) {
       void stopActiveTurn();
     }
   }
 });
+// The mind. Same dismissal grammar as Settings and the switcher — the icon
+// opens it, the backdrop and ✕ close it, and Escape below prefers it over
+// stopping a turn only while it is the frontmost surface.
+if (mindButton) {
+  mindButton.addEventListener("click", () => {
+    if (mindState.open) closeMindPanel();
+    else openMindPanel(mindButton);
+  });
+}
+if (mindCloseButton) {
+  mindCloseButton.addEventListener("click", () => {
+    closeMindPanel();
+  });
+}
+if (mindOverlay) {
+  mindOverlay.addEventListener("click", (event) => {
+    if (event.target === mindOverlay) closeMindPanel();
+  });
+}
+if (mindCreateForm) {
+  mindCreateForm.addEventListener("submit", (event) => {
+    void submitCreateMind(event);
+  });
+}
+if (mindFeedForm) {
+  mindFeedForm.addEventListener("submit", (event) => {
+    void submitFeedMind(event);
+  });
+}
 if (openWorkspaceButton) {
   openWorkspaceButton.addEventListener("click", () => {
     const threadUUID = state.selectedThreadUUID;

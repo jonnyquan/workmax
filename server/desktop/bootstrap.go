@@ -346,6 +346,11 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 	// per launch by the shell before the window paints.
 	uiPreferences := NewUIPreferenceStore(dbRes.DB)
 
+	// Minds (心智体): identity-scoped personas over the shared knowledge base.
+	// Only the DB — the knowledge half is reached through KnowledgeIndex at
+	// request time, so a RAG-less build still lists and switches minds.
+	minds := NewMindStore(dbRes.DB)
+
 	// Whose settings? The same answer every HTTP handler gets, resolved at the
 	// moment an engine asks rather than frozen at boot — a machine can change
 	// hands (local account switch, connect/disconnect an account) without the
@@ -495,6 +500,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 		IntegrityCheck:   dbRes.IntegrityCheck,
 		ModelSettings:    modelSettings,
 		UIPreferences:    uiPreferences,
+		Minds:            minds,
 		ModelGateway:     modelGateway,
 		LocalInference:   localInference,
 		LocalAgent:       localAgent,

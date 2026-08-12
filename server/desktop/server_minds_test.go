@@ -1,0 +1,415 @@
+//go:build desktop
+
+package desktop
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
+
+	migrationsdesktop "server/desktop/migrations_desktop"
+)
+
+// openMindsTestDB runs the real migrations: the store and the DDL must agree,
+// and the only way to keep that honest is to make the test read the same SQL
+// the boot path applies.
+func openMindsTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "minds.db")), &gorm.Config{
+		Logger: gormlogger.Discard,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := migrationsdesktop.Apply(db); err != nil {
+		t.Fatalf("apply migrations: %v", err)
+	}
+	return db
+}
+
+// fakeMindKnowledge implements KnowledgeIndex + MindKnowledge in memory:
+// feeds accumulate per (mind, title), and MindSources reports them back the
+// way the store would.
+type fakeMindKnowledge struct {
+	mu       sync.Mutex
+	feeds    []fakeMindFeed
+	failFeed error
+}
+
+func (f *fakeMindKnowledge) IndexFile(_ context.Context, _ uint64, _ int64) error { return nil }
+func (f *fakeMindKnowledge) RemoveFile(_ context.Context, _ int64) (int, error)    { return 0, nil }
+func (f *fakeMindKnowledge) RemoveTurn(_ context.Context, _ string) (int, error)   { return 0, nil }
+
+type fakeMindFeed struct {
+	uid    uint64
+	mindID string
+	title  string
+	text   string
+	chunks int
+}
+
+func (f *fakeMindKnowledge) IndexMindMaterial(_ context.Context, uid uint64, mindID, title, text string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failFeed != nil {
+		return 0, f.failFeed
+	}
+	chunks := 1 + len(text)/500
+	f.feeds = append(f.feeds, fakeMindFeed{uid: uid, mindID: mindID, title: title, text: text, chunks: chunks})
+	return chunks, nil
+}
+
+func (f *fakeMindKnowledge) MindSources(_ context.Context, uid uint64, mindID string) ([]MindSourceStat, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	byTitle := map[string]*MindSourceStat{}
+	var order []string
+	for _, feed := range f.feeds {
+		if feed.uid != uid || feed.mindID != mindID {
+			continue
+		}
+		stat, ok := byTitle[feed.title]
+		if !ok {
+			stat = &MindSourceStat{Title: feed.title, IndexedAt: time.Now().Unix()}
+			byTitle[feed.title] = stat
+			order = append(order, feed.title)
+		}
+		stat.Chunks += feed.chunks
+	}
+	out := make([]MindSourceStat, 0, len(order))
+	for _, title := range order {
+		out = append(out, *byTitle[title])
+	}
+	return out, nil
+}
+
+// bootMindsFixture boots the sidecar with a migrated DB, the mind store, and
+// no TokenStore — the unscoped identity (uid 0), which is a resolved identity
+// for requestOwner and keeps the tests independent of keychain stubbing.
+func bootMindsFixture(t *testing.T, knowledge KnowledgeIndex) (baseURL, token string, db *gorm.DB) {
+	t.Helper()
+	db = openMindsTestDB(t)
+	gateway, err := NewModelGateway()
+	if err != nil {
+		t.Fatalf("NewModelGateway: %v", err)
+	}
+	srv, err := NewServer(ServerConfig{
+		SidecarVersion: "minds-test",
+		LocalToken:     "minds-tok",
+		DB:             db,
+		ModelGateway:   gateway,
+		Minds:          NewMindStore(db),
+		KnowledgeIndex: knowledge,
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	go func() { _ = srv.Serve() }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	})
+	return "http://" + srv.listener.Addr().String(), "minds-tok", db
+}
+
+func mindsRequest(t *testing.T, method, url, tok, body string) (*http.Response, []byte) {
+	t.Helper()
+	var reader io.Reader
+	if body != "" {
+		reader = bytes.NewReader([]byte(body))
+	}
+	req, err := http.NewRequest(method, url, reader)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("X-Local-Token", tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(resp.Body)
+	return resp, payload
+}
+
+func TestMindsListSeedsActiveDefault(t *testing.T) {
+	base, tok, _ := bootMindsFixture(t, nil)
+	resp, body := mindsRequest(t, http.MethodGet, base+"/minds", tok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	var parsed MindListDTO
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if parsed.Count != 1 || len(parsed.Items) != 1 {
+		t.Fatalf("expected the seeded default mind, got %s", body)
+	}
+	mind := parsed.Items[0]
+	if mind.Name != defaultMindName || !mind.Active {
+		t.Fatalf("default mind wrong: %s", body)
+	}
+	if !mindIDShape.MatchString(mind.ID) {
+		t.Fatalf("mind id %q does not match the marking convention's shape", mind.ID)
+	}
+}
+
+func TestMindsCreateSelectFlow(t *testing.T) {
+	base, tok, _ := bootMindsFixture(t, nil)
+
+	resp, body := mindsRequest(t, http.MethodPost, base+"/minds", tok,
+		`{"name":"Payroll mind","role_hint":"Owns compensation questions","model_override":"claude-opus-4.1"}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status %d: %s", resp.StatusCode, body)
+	}
+	var created Mind
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if created.Active {
+		t.Fatal("a created mind must not take over on its own")
+	}
+	if created.ModelOverride != "claude-opus-4.1" || created.RoleHint == "" {
+		t.Fatalf("created mind lost its intent: %s", body)
+	}
+
+	resp, body = mindsRequest(t, http.MethodPost, base+"/minds/"+created.ID+"/select", tok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("select status %d: %s", resp.StatusCode, body)
+	}
+
+	resp, body = mindsRequest(t, http.MethodGet, base+"/minds", tok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list status %d: %s", resp.StatusCode, body)
+	}
+	var parsed MindListDTO
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if parsed.Count != 2 || !parsed.Items[0].Active || parsed.Items[0].ID != created.ID {
+		t.Fatalf("the selected mind must lead the list as active: %s", body)
+	}
+
+	// Selecting a mind that does not exist is a 404, not a switch.
+	resp, _ = mindsRequest(t, http.MethodPost,
+		base+"/minds/mind-de305d54-75b4-431b-adb2-eb6b9e546014/select", tok, "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("select unknown: status %d, want 404", resp.StatusCode)
+	}
+	// And a malformed id never reaches the store.
+	resp, _ = mindsRequest(t, http.MethodPost, base+"/minds/nope/select", tok, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("select malformed id: status %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestMindsCreateRejections(t *testing.T) {
+	base, tok, _ := bootMindsFixture(t, nil)
+	cases := []struct {
+		name   string
+		body   string
+		status int
+	}{
+		{"empty name", `{"name":"  "}`, http.StatusBadRequest},
+		{"unknown field", `{"name":"M","skills":["x"]}`, http.StatusBadRequest},
+		{"control character", "{\"name\":\"a\\tb\"}", http.StatusBadRequest},
+		{"model with a space", `{"name":"M","model_override":"two words"}`, http.StatusBadRequest},
+		{"trailing json", `{"name":"M"} {}`, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, body := mindsRequest(t, http.MethodPost, base+"/minds", tok, tc.body)
+			if resp.StatusCode != tc.status {
+				t.Fatalf("status %d, want %d: %s", resp.StatusCode, tc.status, body)
+			}
+		})
+	}
+}
+
+func TestMindStatusWithoutKnowledge(t *testing.T) {
+	base, tok, _ := bootMindsFixture(t, nil)
+	resp, body := mindsRequest(t, http.MethodGet, base+"/minds", tok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list status %d: %s", resp.StatusCode, body)
+	}
+	var list MindListDTO
+	if err := json.Unmarshal(body, &list); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	mind := list.Items[0]
+
+	resp, body = mindsRequest(t, http.MethodGet, base+"/minds/"+mind.ID+"/status", tok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	var status MindStatusDTO
+	if err := json.Unmarshal(body, &status); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if status.Mind.ID != mind.ID {
+		t.Fatalf("status is for %q, want %q", status.Mind.ID, mind.ID)
+	}
+	// No cgo knowledge wiring in this fixture: retrieval says so, and the
+	// memory is an empty list rather than an error.
+	if status.Retrieval != "unavailable" {
+		t.Fatalf("retrieval = %q, want unavailable", status.Retrieval)
+	}
+	if status.Memory.Chunks != 0 || len(status.Memory.Sources) != 0 {
+		t.Fatalf("memory must be empty without a knowledge store: %s", body)
+	}
+	if status.Model.Source != "identity" || status.Model.Label == "" {
+		t.Fatalf("model must fall back to the identity: %s", body)
+	}
+}
+
+func TestMindFeedAndStatusWithKnowledge(t *testing.T) {
+	knowledge := &fakeMindKnowledge{}
+	base, tok, _ := bootMindsFixture(t, knowledge)
+	resp, body := mindsRequest(t, http.MethodGet, base+"/minds", tok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list status %d: %s", resp.StatusCode, body)
+	}
+	var list MindListDTO
+	if err := json.Unmarshal(body, &list); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	mind := list.Items[0]
+
+	resp, body = mindsRequest(t, http.MethodPost, base+"/minds/"+mind.ID+"/feed", tok,
+		`{"title":"Compensation bands","text":"The 2026 bands: L4 starts at 180k base."}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("feed status %d: %s", resp.StatusCode, body)
+	}
+	var fed MindFeedResult
+	if err := json.Unmarshal(body, &fed); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !fed.Fed || fed.Title != "Compensation bands" || fed.Chunks < 1 {
+		t.Fatalf("feed result wrong: %s", body)
+	}
+	if len(knowledge.feeds) != 1 || knowledge.feeds[0].mindID != mind.ID {
+		t.Fatalf("feed reached the knowledge store under the wrong mind: %+v", knowledge.feeds)
+	}
+
+	resp, body = mindsRequest(t, http.MethodGet, base+"/minds/"+mind.ID+"/status", tok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	var status MindStatusDTO
+	if err := json.Unmarshal(body, &status); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if status.Retrieval != "local" {
+		t.Fatalf("retrieval = %q, want local", status.Retrieval)
+	}
+	if status.Memory.Chunks != fed.Chunks || len(status.Memory.Sources) != 1 ||
+		status.Memory.Sources[0].Title != "Compensation bands" {
+		t.Fatalf("the fed material must show up in the mind's memory: %s", body)
+	}
+
+	// Feed validation: neither an untitled nor an empty material may be indexed.
+	for _, bad := range []string{
+		`{"title":"","text":"x"}`,
+		`{"title":"t","text":"  "}`,
+		`{"title":"t","text":"x","extra":1}`,
+	} {
+		resp, _ = mindsRequest(t, http.MethodPost, base+"/minds/"+mind.ID+"/feed", tok, bad)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("feed %s: status %d, want 400", bad, resp.StatusCode)
+		}
+	}
+	if len(knowledge.feeds) != 1 {
+		t.Fatalf("invalid feeds must not reach the store: %+v", knowledge.feeds)
+	}
+}
+
+func TestMindFeedRequiresKnowledge(t *testing.T) {
+	base, tok, _ := bootMindsFixture(t, nil)
+	resp, body := mindsRequest(t, http.MethodGet, base+"/minds", tok, "")
+	var list MindListDTO
+	if err := json.Unmarshal(body, &list); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	resp, body = mindsRequest(t, http.MethodPost, base+"/minds/"+list.Items[0].ID+"/feed", tok,
+		`{"title":"t","text":"x"}`)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("feed without knowledge: status %d, want 503: %s", resp.StatusCode, body)
+	}
+}
+
+// "This machine cannot embed anything" and "this material is bad" are
+// different answers and the user acts on them differently. A build with no
+// embedding model must not tell someone their document was rejected.
+func TestMindFeedSeparatesAMissingModelFromABadMaterial(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		status int
+		says   string
+	}{
+		{"no assets on this platform", errKnowledgeAssetsUnavailable, http.StatusServiceUnavailable, "no embedding model"},
+		{"assets still downloading", errKnowledgeAssetsFetching, http.StatusServiceUnavailable, "still downloading"},
+		{"the indexer really failed", errors.New("vec0 write failed"), http.StatusBadGateway, "could not be indexed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			knowledge := &fakeMindKnowledge{failFeed: tc.err}
+			base, tok, _ := bootMindsFixture(t, knowledge)
+			_, body := mindsRequest(t, http.MethodGet, base+"/minds", tok, "")
+			var list MindListDTO
+			if err := json.Unmarshal(body, &list); err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			resp, body := mindsRequest(t, http.MethodPost, base+"/minds/"+list.Items[0].ID+"/feed", tok,
+				`{"title":"t","text":"some material"}`)
+			if resp.StatusCode != tc.status {
+				t.Fatalf("status %d, want %d: %s", resp.StatusCode, tc.status, body)
+			}
+			if !strings.Contains(string(body), tc.says) {
+				t.Fatalf("error must say %q, got %s", tc.says, body)
+			}
+		})
+	}
+}
+
+func TestMindStatusRejectsUnknownMind(t *testing.T) {
+	base, tok, _ := bootMindsFixture(t, nil)
+	resp, _ := mindsRequest(t, http.MethodGet,
+		base+"/minds/mind-de305d54-75b4-431b-adb2-eb6b9e546014/status", tok, "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status for unknown mind: %d, want 404", resp.StatusCode)
+	}
+	resp, _ = mindsRequest(t, http.MethodGet, base+"/minds/nope/status", tok, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status for malformed id: %d, want 400", resp.StatusCode)
+	}
+}
+
+// The marking convention the whole feature rests on: a mind's memory is the
+// knowledge whose source_id carries its id. Pinned here so a change to either
+// side of the contract fails in this package, not in a user's index.
+func TestMindSourceIDConvention(t *testing.T) {
+	id := "mind-de305d54-75b4-431b-adb2-eb6b9e546014"
+	if !mindIDShape.MatchString(id) {
+		t.Fatal("the canonical mind id shape drifted")
+	}
+	if strings.ContainsAny(id, ":%_") {
+		t.Fatal("a mind id must be safe inside a source_id prefix")
+	}
+}

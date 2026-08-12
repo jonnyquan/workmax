@@ -120,6 +120,11 @@ type ServerConfig struct {
 	// Main always wires a store.
 	UIPreferences *UIPreferenceStore
 
+	// Minds owns w_desktop_mind (migration 0011): the identity's trainable
+	// personas over the shared knowledge base. Nil → the /minds routes return
+	// 503; production Main always wires a store.
+	Minds *MindStore
+
 	// LocalInference runs agent turns against the user-configured local model
 	// when preferred_route=local (L1). Nil → local route is never selected
 	// (shouldUseLocalRoute returns false); production Main wires the engine.

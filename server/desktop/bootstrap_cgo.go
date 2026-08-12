@@ -248,6 +248,43 @@ func (l *lazyKnowledge) IndexTurn(ctx context.Context, uid uint64, turnUUID, use
 	return l.indexer.IndexTurn(ctx, uid, turnUUID, userText, assistantText)
 }
 
+// IndexMindMaterial feeds a mind through the same lazy-load path as a file:
+// the embedder comes up on first use and the store write is atomic per
+// material.
+func (l *lazyKnowledge) IndexMindMaterial(ctx context.Context, uid uint64, mindID, title, text string) (int, error) {
+	if !l.begin() {
+		return 0, errKnowledgeClosed
+	}
+	defer l.end()
+	if err := l.load(); err != nil {
+		return 0, err
+	}
+	return l.indexer.IndexMindMaterial(ctx, uid, mindID, title, text)
+}
+
+// MindSources reads what a mind has been fed. Like the delete paths it goes
+// straight to the store: listing a mind's memory must not load 223MB of
+// ONNX Runtime to answer.
+func (l *lazyKnowledge) MindSources(ctx context.Context, uid uint64, mindID string) ([]MindSourceStat, error) {
+	if !l.begin() {
+		return nil, errKnowledgeClosed
+	}
+	defer l.end()
+	stats, _, err := l.deleter.MindSources(ctx, uid, mindID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MindSourceStat, 0, len(stats))
+	for _, stat := range stats {
+		out = append(out, MindSourceStat{
+			Title:     stat.Title,
+			Chunks:    stat.Chunks,
+			IndexedAt: stat.IndexedAt,
+		})
+	}
+	return out, nil
+}
+
 // Retrieve is also the translation point between the two packages' retrieval
 // types. They are deliberately not shared: local_inference must stay free of
 // cgo, so it cannot name knowledge.Retrieved, and knowledge should not import

@@ -37,6 +37,7 @@ import {
   recordToolResult,
   setRetrievedContext,
 } from "./context-panel.js";
+import { noteMindActivity } from "./mind.js";
 import {
   failActiveTurnProtocol,
   finishActiveTurn,
@@ -552,6 +553,9 @@ export function handleParsedTurnEvent(activeTurn, event) {
     }
     case "reasoning_delta":
       recordReasoningDelta(activeTurn, event.delta);
+      // The mind icon's one honest cue: reasoning tokens really are arriving.
+      // Re-armed per delta and cheap when already lit — see noteMindActivity.
+      noteMindActivity("thinking");
       return;
     case "approval_request":
       presentApprovalRequest(activeTurn, event);

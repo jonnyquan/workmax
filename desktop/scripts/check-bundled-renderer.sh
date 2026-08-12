@@ -47,6 +47,7 @@ const allowed = new Set([
   "composer.js",
   "threads.js",
   "context-panel.js",
+  "mind.js",
   "shim.js",
   "lib/desktop-bridge.js",
 ]);

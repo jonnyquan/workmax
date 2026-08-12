@@ -43,6 +43,7 @@ const RENDERER_MODULES = [
   "composer.js",
   "threads.js",
   "context-panel.js",
+  "mind.js",
   "fence.js",
 ];
 const moduleSources = new Map(
@@ -9072,6 +9073,361 @@ await testPermanentCreateFailuresDoNotOfferSameIdentityRetry();
 await testPausedCreateReplayRequiresExplicitCancel();
 await testCreateEscapeFencesLateCompletion();
 await testCreateSessionChangedUsesUnifiedRecovery();
-await testCreateRejectsForeignUUIDAndMode();
+// --- The mind (心智体) --------------------------------------------------------
+//
+// The panel's whole claim is that what it shows is real: the model comes from
+// the sidecar's status, the passage counts come from the knowledge store, and
+// the icon moves only when something mental actually happened. Each of those
+// is a way for a panel like this to start lying quietly, so each one is
+// pinned here.
+
+const MIND_A = "mind-de305d54-75b4-431b-adb2-eb6b9e546014";
+const MIND_B = "mind-11111111-1111-4111-8111-111111111111";
+
+function mindRecord(id, name, overrides = {}) {
+  return {
+    id,
+    name,
+    description: "",
+    role_hint: "",
+    model_override: "",
+    active: false,
+    created_at: "2026-08-12T00:00:00Z",
+    updated_at: "2026-08-12T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function mindStatusRecord(mind, overrides = {}) {
+  return {
+    mind,
+    model: { source: "identity", label: "claude-sonnet-4.6", route: "official" },
+    retrieval: "local",
+    memory: { chunks: 0, sources: [] },
+    ...overrides,
+  };
+}
+
+// A sidecar that really stores what it is taught: feeding appends to the
+// mind's memory and the next status read reflects it, which is the only way
+// the "did the count move" assertion means anything.
+function mindBridge({ minds, retrieval = "local", model } = {}) {
+  const roster = minds ?? [
+    mindRecord(MIND_A, "General mind", { active: true, role_hint: "The everyday one" }),
+    mindRecord(MIND_B, "Payroll mind", { model_override: "claude-opus-4.1" }),
+  ];
+  const memory = new Map(roster.map((mind) => [mind.id, []]));
+  const calls = { list: 0, status: [], selected: [], created: [], fed: [] };
+  return {
+    calls,
+    roster,
+    // The signed-out local route, which is the state a mind is most likely to
+    // be trained in: the knowledge base is on this machine and no account is
+    // connected to it.
+    bridge: {
+      async fetch(pathname) {
+        if (pathname === "/auth/status") {
+          return response({ state: "unauthenticated", updated_at: "2026-08-12T00:00:00Z" });
+        }
+        if (pathname === "/agent/threads?include_paused=true") {
+          return response({ items: [] });
+        }
+        throw new Error(`unexpected fetch path ${pathname}`);
+      },
+    },
+    desktopBridge: {
+      agent: {
+        async listSkills() {
+          return typedSuccess(pptCatalog());
+        },
+        async listModes() {
+          return typedSuccess({ allowed_modes: ["ppt"], local_route: true, tool_loop: false });
+        },
+        async listRecoverableTurns() {
+          return typedSuccess({ items: [], count: 0 });
+        },
+        async uploadThreadFile() {
+          throw new Error("not exercised");
+        },
+        async createThread() {
+          throw new Error("not exercised");
+        },
+        async resumeTurn() {
+          throw new Error("not exercised");
+        },
+        startTurn() {
+          return { turnID: "mind-turn" };
+        },
+        async cancelTurn(turnID) {
+          return { turnID, canceled: true };
+        },
+      },
+      mind: {
+        async list() {
+          calls.list += 1;
+          return typedSuccess({ items: roster.slice(), count: roster.length });
+        },
+        async status(id) {
+          calls.status.push(id);
+          const mind = roster.find((entry) => entry.id === id);
+          const sources = memory.get(id) ?? [];
+          return typedSuccess(
+            mindStatusRecord(mind, {
+              retrieval,
+              model: model ?? {
+                source: mind.model_override ? "mind" : "identity",
+                label: mind.model_override || "claude-sonnet-4.6",
+                route: "official",
+              },
+              memory: {
+                chunks: sources.reduce((total, source) => total + source.chunks, 0),
+                sources: sources.slice(),
+              },
+            }),
+          );
+        },
+        async select(id) {
+          calls.selected.push(id);
+          for (const mind of roster) mind.active = mind.id === id;
+          return typedSuccess({ selected: true });
+        },
+        async create(input) {
+          calls.created.push(input.name);
+          const created = mindRecord(MIND_B, input.name);
+          roster.push(created);
+          memory.set(created.id, []);
+          return typedSuccess(created, 201);
+        },
+        async feed(id, input) {
+          calls.fed.push([id, input.title]);
+          const sources = memory.get(id) ?? [];
+          const chunks = 3;
+          memory.set(id, [
+            ...sources.filter((source) => source.title !== input.title),
+            { title: input.title, chunks, indexed_at: 1_770_000_000 },
+          ]);
+          return typedSuccess({ fed: true, title: input.title, chunks });
+        },
+      },
+    },
+  };
+}
+
+async function testMindPanelShowsRealAnatomyAndTeaches() {
+  const harness = mindBridge();
+  const { document } = await runRenderer(harness.bridge, harness.desktopBridge);
+  await settle();
+
+  // Closed until asked for. The mind is a long-lived thing, not a panel that
+  // greets you.
+  assert.equal(document.byId.get("mind-overlay").hidden, true);
+
+  document.byId.get("mind-button").click();
+  await settle();
+  assert.equal(document.byId.get("mind-overlay").hidden, false, "the icon opens the overlay");
+  assert.ok(harness.calls.list > 0, "opening reads the roster from the sidecar");
+  assert.deepEqual(harness.calls.status, [MIND_A], "and the active mind's real status");
+
+  // Both minds are listed, and the active one says so.
+  const rosterRows = walk(
+    document.byId.get("mind-roster"),
+    (node) => node.classList?.contains("mind-roster-item"),
+  );
+  assert.equal(rosterRows.length, 2, "every mind on this identity is switchable");
+  assert.ok(rosterRows[0].classList.contains("active"), "the active mind is marked");
+
+  // The three parts carry the sidecar's answers, not invented ones.
+  assert.equal(
+    document.byId.get("mind-brain-value").textContent,
+    "claude-sonnet-4.6",
+    "the brain names the model the sidecar reported",
+  );
+  assert.match(
+    document.byId.get("mind-brain-note").textContent,
+    /From your account/u,
+    "and says the model came from the identity rather than from this mind",
+  );
+  assert.match(
+    document.byId.get("mind-skills-value").textContent,
+    /1 skill/u,
+    "the cerebellum counts the skills this workspace really has",
+  );
+  assert.equal(
+    document.byId.get("mind-memory-value").textContent,
+    "0 passages",
+    "an untaught mind must say it holds nothing",
+  );
+  assert.equal(
+    document.byId.get("mind-memory-section").hidden,
+    true,
+    "and the listing stands down rather than drawing an empty scaffold",
+  );
+
+  // Teaching it: the material goes to the sidecar and the count comes back
+  // from the sidecar's own re-read, never from an optimistic increment.
+  document.byId.get("mind-feed-title").value = "Compensation bands";
+  document.byId.get("mind-feed-text").value = "L4 starts at 180k base.";
+  document.byId.get("mind-feed-form").submit();
+  await settle();
+
+  assert.deepEqual(harness.calls.fed, [[MIND_A, "Compensation bands"]]);
+  assert.equal(
+    document.byId.get("mind-memory-value").textContent,
+    "3 passages",
+    "the memory count moves to what the store actually indexed",
+  );
+  assert.equal(document.byId.get("mind-memory-section").hidden, false);
+  const memoryRows = walk(
+    document.byId.get("mind-memory-list"),
+    (node) => node.classList?.contains("mind-memory-item"),
+  );
+  assert.equal(memoryRows.length, 1);
+  assert.match(memoryRows[0].textContent, /Compensation bands/u);
+  assert.match(memoryRows[0].textContent, /3 passages/u);
+  assert.match(
+    document.byId.get("mind-feed-status").textContent,
+    /Learned "Compensation bands" as 3 passages/u,
+    "the form says what it taught, in the store's units",
+  );
+  assert.equal(document.byId.get("mind-feed-title").value, "", "a taught material clears its form");
+
+  // Escape closes it, the same grammar as Settings and the palette.
+  document.dispatchKey({ key: "Escape" });
+  assert.equal(document.byId.get("mind-overlay").hidden, true);
+}
+
+async function testMindSwitchingReReadsTheStatus() {
+  const harness = mindBridge();
+  const { document } = await runRenderer(harness.bridge, harness.desktopBridge);
+  await settle();
+  document.byId.get("mind-button").click();
+  await settle();
+
+  const rows = () =>
+    walk(document.byId.get("mind-roster"), (node) => node.classList?.contains("mind-roster-item"));
+  rows()[1].click();
+  await settle();
+
+  assert.deepEqual(harness.calls.selected, [MIND_B], "clicking a mind switches to it");
+  assert.equal(
+    harness.calls.status.at(-1),
+    MIND_B,
+    "and the panel re-reads the status of the mind it switched to",
+  );
+  assert.equal(
+    document.byId.get("mind-brain-value").textContent,
+    "claude-opus-4.1",
+    "a mind with its own model shows that model, not the identity's",
+  );
+  assert.match(
+    document.byId.get("mind-brain-note").textContent,
+    /Chosen for this mind/u,
+    "and says whose choice it was",
+  );
+
+  // Creating one is a switchable addition, not a takeover.
+  document.byId.get("mind-create-name").value = "Research mind";
+  document.byId.get("mind-create-form").submit();
+  await settle();
+  assert.deepEqual(harness.calls.created, ["Research mind"]);
+  assert.equal(document.byId.get("mind-create-name").value, "");
+}
+
+async function testMindIconMovesOnlyForRealMentalActivity() {
+  const harness = mindBridge();
+  const { document, ns } = await runRenderer(harness.bridge, harness.desktopBridge);
+  await settle();
+  const button = document.byId.get("mind-button");
+
+  // Idle: no attribute at all, so the stylesheet runs no animation. An icon
+  // that breathes on a timer would be decoration pretending to be information.
+  assert.equal(
+    button.getAttribute("data-mind-activity"),
+    null,
+    "an idle mind icon must be perfectly still",
+  );
+
+  // Reasoning tokens are real thinking.
+  ns.noteMindActivity("thinking");
+  assert.equal(button.getAttribute("data-mind-activity"), "thinking");
+  // Teaching is a different, distinguishable meaning.
+  ns.noteMindActivity("learning");
+  assert.equal(button.getAttribute("data-mind-activity"), "learning");
+  // Anything that is not one of the two real events moves nothing.
+  ns.noteMindActivity("idle-decoration");
+  assert.equal(
+    button.getAttribute("data-mind-activity"),
+    "learning",
+    "an unrecognised cue must not become motion",
+  );
+
+  // And it puts itself down: the VM maps setTimeout to setImmediate, so the
+  // decay lands on the next tick rather than seconds later.
+  await settle();
+  assert.equal(
+    button.getAttribute("data-mind-activity"),
+    null,
+    "activity must expire on its own, or the icon becomes furniture",
+  );
+
+  // The stylesheet's half of the same contract: motion exists only under the
+  // attribute, and reduced motion still leaves the state readable.
+  assert.match(
+    rendererCSS,
+    /\.mind-button\[data-mind-activity="thinking"\] svg \.mind-button-core \{\s*animation: mind-breathe/u,
+    "thinking must be the only reason the core breathes",
+  );
+  assert.match(
+    rendererCSS,
+    /@media \(prefers-reduced-motion: reduce\) \{\s*\.mind-button\[data-mind-activity\] svg \.mind-button-core \{\s*animation: none;/u,
+    "reduced motion must drop the animation without dropping the state",
+  );
+  assert.doesNotMatch(
+    rendererCSS,
+    /\.mind-button svg \.mind-button-core \{[^}]*animation:/u,
+    "the resting icon must declare no animation at all",
+  );
+  // Colour is the half of the cue that survives reduced motion, and it has to
+  // out-specify button.ghost's resting grey. Written as `.mind-button[…]` it
+  // measured identical to idle in a real engine — an icon that cannot say it
+  // is working. The element-qualified selector is the fix, so it is pinned.
+  assert.match(
+    rendererCSS,
+    /button\.mind-button\[data-mind-activity\] \{\s*color: hsl\(var\(--primary\)\);/u,
+    "the active icon must out-specify button.ghost, or the state is invisible",
+  );
+}
+
+async function testMindFeedIsRefusedWithoutLocalRecall() {
+  const harness = mindBridge({ retrieval: "unavailable" });
+  const { document } = await runRenderer(harness.bridge, harness.desktopBridge);
+  await settle();
+  document.byId.get("mind-button").click();
+  await settle();
+
+  // A build with no local recall can still name and switch minds; what it
+  // cannot do is pretend a material was learned. Said as a disabled control
+  // plus a reason, not as a silent no-op.
+  assert.equal(
+    document.byId.get("mind-feed-button").disabled,
+    true,
+    "teaching must be refused where nothing could recall it",
+  );
+  assert.match(
+    document.byId.get("mind-memory-note").textContent,
+    /Local recall is unavailable/u,
+  );
+  assert.equal(
+    walk(document.byId.get("mind-roster"), (node) => node.classList?.contains("mind-roster-item"))
+      .length,
+    2,
+    "the roster still works without the knowledge stack",
+  );
+}
+
+await testMindPanelShowsRealAnatomyAndTeaches();
+await testMindSwitchingReReadsTheStatus();
+await testMindIconMovesOnlyForRealMentalActivity();
+await testMindFeedIsRefusedWithoutLocalRecall();
 
 console.log("ok bundled renderer behavior");

@@ -24,7 +24,7 @@ RELEASE_DIR="${WORKMAX_DESKTOP_RELEASE_DIR:-$REPO_ROOT/desktop/wails/release}"
 # allowlists in check-bundled-renderer.sh and inspect-mac-package.sh: three
 # places must agree, so all three are explicit rather than globbing a
 # directory and hoping.
-RENDERER_FILES=(index.html styles.css renderer.js dom.js fence.js protocol.js events.js markdown.js transcript.js composer.js threads.js context-panel.js shim.js lib/desktop-bridge.js)
+RENDERER_FILES=(index.html styles.css renderer.js dom.js fence.js protocol.js events.js markdown.js transcript.js composer.js threads.js context-panel.js mind.js shim.js lib/desktop-bridge.js)
 
 preflight_only=0
 target_arch=""

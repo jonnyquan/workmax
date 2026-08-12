@@ -24,7 +24,26 @@ import (
 const (
 	SourceTypeFile    = "file"
 	SourceTypeMessage = "message"
+	// SourceTypeMind marks a chunk as one mind's memory: material fed to a
+	// mind through the sidecar's mind feed route. Its source_id carries the
+	// marking convention — "mind:<mind-id>:<title>" — so everything a mind
+	// owns is one metadata-filtered query away, and one identity's minds
+	// share the single uid-partitioned knowledge base.
+	SourceTypeMind = "mind"
 )
+
+// MindSourcePrefix is the source_id prefix every chunk of a mind's memory
+// carries. The title that follows it is what makes a listing of the prefix
+// human-readable without a second table.
+func MindSourcePrefix(mindID string) string { return "mind:" + mindID + ":" }
+
+// MindSourceTitle recovers a material's title from its source_id. The title
+// is bounded and control-free by the feed handler's validation, so what
+// comes back here is always displayable text.
+func MindSourceTitle(mindID, sourceID string) (string, bool) {
+	title, found := strings.CutPrefix(sourceID, MindSourcePrefix(mindID))
+	return title, found && title != ""
+}
 
 // chunksTable is the vec0 virtual table backing the knowledge store.
 const chunksTable = "w_desktop_knowledge_chunk"
@@ -802,6 +821,53 @@ func (s *Store) DistancesFor(ctx context.Context, uid uint64, chunkUIDs []string
 		out[id] = d
 	}
 	return out, rows.Err()
+}
+
+// MindSourceStat is one fed material's footprint in the store: how many
+// chunks it occupies and when the first of them was written.
+type MindSourceStat struct {
+	SourceID  string
+	Title     string
+	Chunks    int
+	IndexedAt int64 // unix seconds
+}
+
+// MindSources lists what a mind has been fed: one row per material, newest
+// first, plus the total chunk count across all of them.
+//
+// It is a plain aggregate scan over metadata columns, no KNN — source_id is a
+// metadata column (store schema v2) precisely so provenance questions like
+// this one can be asked without touching a vector. The uid predicate is the
+// isolation, same as everywhere else in this store: one identity never reads
+// another's rows, and the LIKE pattern is built from a validated mind id
+// (mind-<uuid>), which contains no LIKE metacharacters.
+func (s *Store) MindSources(ctx context.Context, uid uint64, mindID string) ([]MindSourceStat, int, error) {
+	prefix := MindSourcePrefix(mindID)
+	sqlDB, err := s.sqlDB()
+	if err != nil {
+		return nil, 0, err
+	}
+	rows, err := sqlDB.QueryContext(ctx,
+		"SELECT source_id, COUNT(*), MIN(created_at) FROM "+chunksTable+
+			" WHERE uid = ? AND source_type = ? AND substr(source_id, 1, ?) = ?"+
+			" GROUP BY source_id ORDER BY MIN(created_at) DESC",
+		signedUID(uid), SourceTypeMind, len(prefix), prefix)
+	if err != nil {
+		return nil, 0, fmt.Errorf("knowledge: mind sources: %w", err)
+	}
+	defer rows.Close()
+	var out []MindSourceStat
+	total := 0
+	for rows.Next() {
+		var stat MindSourceStat
+		if err := rows.Scan(&stat.SourceID, &stat.Chunks, &stat.IndexedAt); err != nil {
+			return nil, 0, fmt.Errorf("knowledge: scan mind source: %w", err)
+		}
+		stat.Title, _ = MindSourceTitle(mindID, stat.SourceID)
+		total += stat.Chunks
+		out = append(out, stat)
+	}
+	return out, total, rows.Err()
 }
 
 // DeleteBySource removes all chunks for a given source (e.g. a deleted file or

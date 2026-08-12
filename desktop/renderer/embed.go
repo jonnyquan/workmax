@@ -47,6 +47,7 @@ import (
 //go:embed en/desktop/composer.js
 //go:embed en/desktop/threads.js
 //go:embed en/desktop/context-panel.js
+//go:embed en/desktop/mind.js
 //go:embed en/desktop/shim.js
 //go:embed en/desktop/lib/desktop-bridge.js
 var bundled embed.FS

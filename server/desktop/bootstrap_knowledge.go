@@ -103,6 +103,17 @@ const knowledgeAssetRetry = 10 * time.Minute
 // retrieval and a later one will have it.
 var errKnowledgeAssetsFetching = errors.New("knowledge: embedding assets are downloading in the background")
 
+// errKnowledgeAssetsUnavailable marks every OTHER way the native embedding
+// assets are not usable: nothing pinned for this platform, a manifest that
+// will not resolve, a download that failed.
+//
+// It exists so a caller can tell "this material is bad" from "this machine
+// cannot embed anything right now" — a distinction the user feels directly.
+// Feeding a mind on a build with no assets used to answer 502, which reads as
+// "your document was rejected"; the truth is that nothing could have been
+// indexed, and that is a 503 with a reason.
+var errKnowledgeAssetsUnavailable = errors.New("knowledge: embedding assets are unavailable")
+
 // knowledgeAssets acquires the native embedding assets without ever blocking a
 // boot or a turn on the network.
 //
@@ -197,10 +208,10 @@ func (k *knowledgeAssets) describePlanFailure(err error) error {
 				"or by pointing %s at a manifest that pins them (%v)",
 			k.dir, assets.ManifestPathEnv, err)
 		k.logOnce("unsupported", msg)
-		return errors.New(msg)
+		return fmt.Errorf("%w: %s", errKnowledgeAssetsUnavailable, msg)
 	}
 	k.logOnce("plan-error", fmt.Sprintf("knowledge: embedding assets unavailable: %v", err))
-	return err
+	return fmt.Errorf("%w: %w", errKnowledgeAssetsUnavailable, err)
 }
 
 // download runs the acquisition and records its outcome for the next ensure.
@@ -213,7 +224,7 @@ func (k *knowledgeAssets) download(plan assets.Plan) {
 	defer k.mu.Unlock()
 	k.fetching = false
 	if err != nil {
-		k.lastErr = fmt.Errorf("knowledge: downloading embedding assets: %w", err)
+		k.lastErr = fmt.Errorf("%w: downloading embedding assets: %w", errKnowledgeAssetsUnavailable, err)
 		k.retryAt = k.now().Add(knowledgeAssetRetry)
 		log.Printf("knowledge: embedding asset download failed, retrying no sooner than %s: %v", knowledgeAssetRetry, err)
 		return

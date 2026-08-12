@@ -24,7 +24,7 @@ func TestApplyRunsMessageCreatedOrderIndexMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	want := []string{"0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010"}
+	want := []string{"0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011"}
 	if len(applied) != len(want) {
 		t.Fatalf("applied: got %v, want %v", applied, want)
 	}
@@ -86,6 +86,42 @@ func TestApplyRunsMessageCreatedOrderIndexMigration(t *testing.T) {
 	if turnUUIDPrimaryKey != 1 {
 		t.Fatalf("turn_uuid primary key flag=%d, want 1", turnUUIDPrimaryKey)
 	}
+
+	// 0011: the mind table. Identity-scoped, one row per trained mind.
+	var mindTableCount int
+	if err := db.Raw(`
+		SELECT COUNT(*)
+		  FROM sqlite_master
+		 WHERE type = 'table'
+		   AND name = 'w_desktop_mind'
+	`).Row().Scan(&mindTableCount); err != nil {
+		t.Fatalf("scan mind table: %v", err)
+	}
+	if mindTableCount != 1 {
+		t.Fatalf("mind table count: got %d, want 1", mindTableCount)
+	}
+	mindRows, err := db.Raw(`PRAGMA table_info(w_desktop_mind)`).Rows()
+	if err != nil {
+		t.Fatalf("inspect mind columns: %v", err)
+	}
+	var mindColumns []string
+	for mindRows.Next() {
+		var ordinal, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := mindRows.Scan(&ordinal, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan mind column: %v", err)
+		}
+		mindColumns = append(mindColumns, name)
+	}
+	if err := mindRows.Close(); err != nil {
+		t.Fatalf("close mind column rows: %v", err)
+	}
+	wantMindColumns := "id,uid,name,description,role_hint,model_override,is_active,created_at,updated_at"
+	if got := strings.Join(mindColumns, ","); got != wantMindColumns {
+		t.Fatalf("mind columns=%s, want %s", got, wantMindColumns)
+	}
+
 	if err := db.Exec(`
 		INSERT INTO w_desktop_agent_turn_intent
 			(uid, turn_uuid, thread_id, thread_uuid, user_text, chat_mode,

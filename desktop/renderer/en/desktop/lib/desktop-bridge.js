@@ -46,6 +46,11 @@ const ROUTES = {
     settingsGetModelRoute: defineTypedRoute("settings.getModelRoute", "settings.model-route.get", "GET", "/settings/model-route", "none", null),
     settingsPutModelRoute: defineTypedRoute("settings.putModelRoute", "settings.model-route.put", "PUT", "/settings/model-route", "json", "application/json"),
     settingsPutAppearance: defineTypedRoute("settings.putAppearance", "settings.appearance.put", "PUT", "/settings/appearance", "json", "application/json"),
+    mindList: defineTypedRoute("mind.list", "minds.list", "GET", "/minds", "none", null),
+    mindCreate: defineTypedRoute("mind.create", "minds.create", "POST", "/minds", "json", "application/json"),
+    mindSelect: defineTypedRoute("mind.select", "minds.select", "POST", "/minds/:id/select", "none", null),
+    mindStatus: defineTypedRoute("mind.status", "minds.status", "GET", "/minds/:id/status", "none", null),
+    mindFeed: defineTypedRoute("mind.feed", "minds.feed", "POST", "/minds/:id/feed", "json", "application/json"),
     agentUploadThreadFile: defineTypedRoute("agent.uploadThreadFile", "agent.thread-file-upload", "POST", "/agent/threads/:uuid/files", "multipart", null),
     agentListThreadFiles: defineTypedRoute("agent.listThreadFiles", "agent.thread-file-list", "GET", "/agent/threads/:uuid/files", "none", null),
 };
@@ -57,6 +62,8 @@ const JSON_BODY_LIMITS = {
     "settings.putModelRoute": 8 << 10,
     "settings.putAppearance": 1 << 10,
     "agent.setThreadCloudSync": 512,
+    "mind.create": 4 << 10,
+    "mind.feed": 1 << 20,
 };
 function createDesktopBridge(deps) {
     return {
@@ -254,6 +261,33 @@ function createDesktopBridge(deps) {
                 return validateAppearanceSettingsResult(result);
             },
         },
+        mind: {
+            list: async () => {
+                const result = await execute(deps, ROUTES.mindList);
+                return validateMindListResult(result);
+            },
+            create: async (input) => {
+                const body = buildMindCreateBody(input);
+                const result = await execute(deps, ROUTES.mindCreate, undefined, body);
+                return validateMindResult(result);
+            },
+            select: async (id) => {
+                const path = ROUTES.mindSelect.path.replace(":id", validateMindID(id));
+                const result = await execute(deps, ROUTES.mindSelect, path);
+                return validateMindSelectedResult(result);
+            },
+            status: async (id) => {
+                const path = ROUTES.mindStatus.path.replace(":id", validateMindID(id));
+                const result = await execute(deps, ROUTES.mindStatus, path);
+                return validateMindStatusResult(result);
+            },
+            feed: async (id, input) => {
+                const path = ROUTES.mindFeed.path.replace(":id", validateMindID(id));
+                const body = buildMindFeedBody(input);
+                const result = await execute(deps, ROUTES.mindFeed, path, body);
+                return validateMindFeedResult(result);
+            },
+        },
     };
 }
 function buildCapabilities() {
@@ -323,6 +357,10 @@ function buildCapabilities() {
                     "getModelCatalog",
                     "putAppearance",
                 ],
+            },
+            mind: {
+                supported: true,
+                methods: ["list", "create", "select", "status", "feed"],
             },
             artifact: {
                 supported: false,
@@ -1092,6 +1130,225 @@ function assertExactKeys(value, required, label) {
         required.some((key) => !Object.prototype.hasOwnProperty.call(value, key))) {
         throw new TypeError(`${label} must contain exactly ${required.join(", ")}`);
     }
+}
+// --- Minds (心智体) -----------------------------------------------------------
+//
+// The id shape is the sidecar's: the knowledge marking convention
+// ("mind:<id>:...") is built on it, so an id that cannot be one is rejected
+// here rather than becoming a path segment or a query prefix.
+const MIND_ID_SHAPE = /^mind-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+function validateMindID(id) {
+    if (typeof id !== "string" || !MIND_ID_SHAPE.test(id)) {
+        throw new TypeError("mind id is malformed");
+    }
+    return id;
+}
+const MIND_MODEL_SHAPE = /^[A-Za-z0-9._\-:/]+$/u;
+function assertMindText(value, maxRunes, label) {
+    if (typeof value !== "string" ||
+        value.trim() !== value ||
+        [...value].length > maxRunes ||
+        /[\u0000-\u001f\u007f]/u.test(value)) {
+        throw new TypeError(`${label} is malformed`);
+    }
+}
+function buildMindCreateBody(input) {
+    assertPlainObject(input, "mind.create input");
+    assertAllowedKeys(input, ["name", "description", "role_hint", "model_override"], "mind.create input");
+    assertMindText(input.name, 64, "mind.create name");
+    if (input.name === "") {
+        throw new TypeError("mind.create name must not be empty");
+    }
+    const body = { name: input.name };
+    if (input.description !== undefined) {
+        assertMindText(input.description, 280, "mind.create description");
+        body.description = input.description;
+    }
+    if (input.role_hint !== undefined) {
+        assertMindText(input.role_hint, 280, "mind.create role_hint");
+        body.role_hint = input.role_hint;
+    }
+    if (input.model_override !== undefined) {
+        if (typeof input.model_override !== "string" ||
+            input.model_override.trim() !== input.model_override ||
+            input.model_override.length > 128 ||
+            (input.model_override !== "" && !MIND_MODEL_SHAPE.test(input.model_override))) {
+            throw new TypeError("mind.create model_override is malformed");
+        }
+        body.model_override = input.model_override;
+    }
+    return body;
+}
+function buildMindFeedBody(input) {
+    assertPlainObject(input, "mind.feed input");
+    assertAllowedKeys(input, ["title", "text"], "mind.feed input");
+    assertMindText(input.title, 80, "mind.feed title");
+    if (input.title === "") {
+        throw new TypeError("mind.feed title must not be empty");
+    }
+    if (typeof input.text !== "string" ||
+        input.text.trim() === "" ||
+        new TextEncoder().encode(input.text).byteLength > 1 << 20) {
+        throw new TypeError("mind.feed text is malformed");
+    }
+    return { title: input.title, text: input.text };
+}
+function parseMindRecord(value) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        throw new TypeError("mind response is malformed");
+    }
+    const record = value;
+    assertExactKeys(record, [
+        "id",
+        "name",
+        "description",
+        "role_hint",
+        "model_override",
+        "active",
+        "created_at",
+        "updated_at",
+    ], "mind response");
+    if (typeof record.id !== "string" || !MIND_ID_SHAPE.test(record.id)) {
+        throw new TypeError("mind response id is malformed");
+    }
+    for (const key of [
+        "name",
+        "description",
+        "role_hint",
+        "model_override",
+        "created_at",
+        "updated_at",
+    ]) {
+        if (typeof record[key] !== "string") {
+            throw new TypeError(`mind response ${key} is malformed`);
+        }
+    }
+    if (typeof record.active !== "boolean") {
+        throw new TypeError("mind response active is malformed");
+    }
+    return record;
+}
+function validateMindResult(result) {
+    if (!result.ok) {
+        return result;
+    }
+    return { ...result, data: parseMindRecord(result.data) };
+}
+function validateMindListResult(result) {
+    if (!result.ok) {
+        return result;
+    }
+    const data = result.data;
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+        throw new TypeError("mind list response is malformed");
+    }
+    const record = data;
+    assertExactKeys(record, ["items", "count"], "mind list response");
+    if (!Array.isArray(record.items) || typeof record.count !== "number") {
+        throw new TypeError("mind list response is malformed");
+    }
+    return {
+        ...result,
+        data: { items: record.items.map(parseMindRecord), count: record.count },
+    };
+}
+function validateMindSelectedResult(result) {
+    if (!result.ok) {
+        return result;
+    }
+    const data = result.data;
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+        throw new TypeError("mind select response is malformed");
+    }
+    const record = data;
+    assertExactKeys(record, ["selected"], "mind select response");
+    if (record.selected !== true) {
+        throw new TypeError("mind select response is malformed");
+    }
+    return { ...result, data: { selected: true } };
+}
+function validateMindStatusResult(result) {
+    if (!result.ok) {
+        return result;
+    }
+    const data = result.data;
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+        throw new TypeError("mind status response is malformed");
+    }
+    const record = data;
+    assertExactKeys(record, ["mind", "model", "retrieval", "memory"], "mind status response");
+    if (record.retrieval !== "local" && record.retrieval !== "unavailable") {
+        throw new TypeError("mind status retrieval is malformed");
+    }
+    const model = record.model;
+    if (model === null || typeof model !== "object" || Array.isArray(model)) {
+        throw new TypeError("mind status model is malformed");
+    }
+    const modelRecord = model;
+    assertExactKeys(modelRecord, ["source", "label", "route"], "mind status model");
+    if ((modelRecord.source !== "mind" && modelRecord.source !== "identity") ||
+        typeof modelRecord.label !== "string" ||
+        typeof modelRecord.route !== "string") {
+        throw new TypeError("mind status model is malformed");
+    }
+    const memory = record.memory;
+    if (memory === null || typeof memory !== "object" || Array.isArray(memory)) {
+        throw new TypeError("mind status memory is malformed");
+    }
+    const memoryRecord = memory;
+    assertExactKeys(memoryRecord, ["chunks", "sources"], "mind status memory");
+    if (typeof memoryRecord.chunks !== "number" ||
+        !Number.isInteger(memoryRecord.chunks) ||
+        memoryRecord.chunks < 0 ||
+        !Array.isArray(memoryRecord.sources)) {
+        throw new TypeError("mind status memory is malformed");
+    }
+    const sources = memoryRecord.sources.map((entry) => {
+        if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+            throw new TypeError("mind status memory source is malformed");
+        }
+        const source = entry;
+        assertExactKeys(source, ["title", "chunks", "indexed_at"], "mind status memory source");
+        if (typeof source.title !== "string" ||
+            typeof source.chunks !== "number" ||
+            !Number.isInteger(source.chunks) ||
+            typeof source.indexed_at !== "number" ||
+            !Number.isInteger(source.indexed_at)) {
+            throw new TypeError("mind status memory source is malformed");
+        }
+        return source;
+    });
+    return {
+        ...result,
+        data: {
+            mind: parseMindRecord(record.mind),
+            model: modelRecord,
+            retrieval: record.retrieval,
+            memory: { chunks: memoryRecord.chunks, sources },
+        },
+    };
+}
+function validateMindFeedResult(result) {
+    if (!result.ok) {
+        return result;
+    }
+    const data = result.data;
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+        throw new TypeError("mind feed response is malformed");
+    }
+    const record = data;
+    assertExactKeys(record, ["fed", "title", "chunks"], "mind feed response");
+    if (record.fed !== true ||
+        typeof record.title !== "string" ||
+        typeof record.chunks !== "number" ||
+        !Number.isInteger(record.chunks) ||
+        record.chunks < 0) {
+        throw new TypeError("mind feed response is malformed");
+    }
+    return {
+        ...result,
+        data: { fed: true, title: record.title, chunks: record.chunks },
+    };
 }
   window.__workmaxDesktopBridge = { createDesktopBridge, DESKTOP_BRIDGE_VERSION };
 })();

@@ -1583,6 +1583,337 @@ textarea::placeholder {
   font-weight: var(--fw-medium);
 }
 
+/* --- The mind (心智体) -------------------------------------------------------
+   One overlay, borrowing the settings dialog's surface treatment: paper
+   ground, bordered cards on it, the same shadow and radius. What differs is
+   the shape of the content — a single scrolling column instead of a
+   nav-plus-panel split, because a mind is one subject read top to bottom, not
+   four errands you pick between. */
+.mind-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(720px, 100%);
+  height: min(720px, calc(100vh - var(--sp-5) * 2));
+  overflow: hidden;
+  border-radius: var(--r-panel);
+  background: hsl(var(--background));
+  box-shadow:
+    0 0 0 1px hsl(var(--border)),
+    0 24px 64px hsl(40 10% 8% / 0.28);
+}
+
+.mind-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-4) var(--sp-3);
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.mind-head-copy {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.mind-head h2 {
+  font-size: var(--fs-title);
+}
+
+.mind-subtitle {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  line-height: var(--lh-ui);
+}
+
+.mind-body {
+  display: grid;
+  gap: var(--sp-5);
+  align-content: start;
+  padding: var(--sp-4);
+  overflow-y: auto;
+}
+
+.mind-section {
+  display: grid;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.mind-section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
+}
+
+.mind-section-meta {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
+}
+
+/* The roster. Rows, not a select: a mind carries a role line, and a dropdown
+   would strip exactly the sentence that tells two minds apart. */
+.mind-roster {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mind-roster-item {
+  display: grid;
+  gap: 2px;
+  /* The base button centres its content, which is right for a label and wrong
+     for a two-line row: without these the name and its role line float in the
+     middle of the row and the list loses its left edge. */
+  justify-content: start;
+  justify-items: start;
+  width: 100%;
+  height: auto;
+  padding: var(--sp-2) var(--sp-3);
+  border-color: transparent;
+  border-radius: var(--r-control);
+  background: transparent;
+  text-align: left;
+}
+
+.mind-roster-item:hover {
+  background: hsl(var(--muted));
+}
+
+.mind-roster-item.active {
+  border-color: hsl(var(--border));
+  background: hsl(var(--primary) / 0.1);
+}
+
+.mind-roster-name {
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+}
+
+.mind-roster-note {
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mind-create-form {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.mind-create-form input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The anatomy drawing. One stroke weight, currentColor, no fills — the same
+   rules the title-bar icons follow, at a size where the three parts can be
+   told apart. The memory block is the one filled shape: layers are the thing
+   that accumulates, so they read as solid. */
+.mind-figure {
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: var(--sp-3) 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--r-surface);
+  background: hsl(var(--card));
+}
+
+.mind-diagram {
+  width: min(420px, 100%);
+  height: auto;
+  color: hsl(var(--muted-foreground));
+}
+
+.mind-diagram-part path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The cerebrum is the title-bar icon's own path, scaled up — so the thing in
+   the diagram and the thing in the title bar are literally the same drawing
+   rather than two artists' impressions of a brain. The stroke is divided by
+   the group's scale so it still lands on the one weight everything else uses. */
+.mind-diagram-part[data-part="brain"] path {
+  stroke-width: 0.28;
+}
+
+.mind-diagram-part[data-part="memory"] path {
+  fill: hsl(var(--primary) / 0.12);
+}
+
+.mind-diagram-link path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  stroke-linecap: round;
+  opacity: 0.7;
+}
+
+.mind-parts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-2);
+}
+
+.mind-part {
+  display: grid;
+  gap: var(--sp-1);
+  align-content: start;
+  padding: var(--sp-3);
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--r-surface);
+  background: hsl(var(--card));
+}
+
+.mind-part-title {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mind-part-lead {
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+  overflow-wrap: anywhere;
+}
+
+.mind-part-note {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  line-height: var(--lh-ui);
+}
+
+.mind-memory-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--r-surface);
+  background: hsl(var(--card));
+  list-style: none;
+}
+
+.mind-memory-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.mind-memory-item + .mind-memory-item {
+  border-top: 1px solid hsl(var(--border));
+}
+
+.mind-memory-title {
+  overflow: hidden;
+  font-size: var(--fs-base);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mind-memory-meta {
+  flex: none;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+}
+
+.mind-feed-form {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--r-surface);
+  background: hsl(var(--card));
+}
+
+.mind-feed-form textarea {
+  resize: vertical;
+  min-height: 96px;
+  font-family: inherit;
+  font-size: var(--fs-base);
+  line-height: var(--lh-read);
+}
+
+.mind-feed-status {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+}
+
+.mind-feed-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* The title-bar icon's motion.
+   The core dot pulses ONLY while data-mind-activity is set, which happens for
+   exactly two reasons: reasoning tokens are arriving, or a material was just
+   taught. Idle, there is no animation at all — not a paused one, not a slow
+   one. Two speeds so the two meanings are distinguishable without a legend:
+   thinking is a steady breath, learning is one brighter swell.
+   Reduced-motion swaps the pulse for a static filled core, so the state is
+   still readable without anything moving. */
+.mind-button svg .mind-button-core {
+  fill: currentColor;
+  stroke: none;
+  opacity: 0.35;
+  /* The swell scales about the dot's own centre, not the icon's origin —
+     without these the "absorb" keyframe would slide the core off the brain. */
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* Written as button.mind-button[…] rather than .mind-button[…] so it clears
+   button.ghost, which sets the resting grey. Equal-looking specificities are
+   how an icon ends up unable to say it is doing something. */
+button.mind-button[data-mind-activity] {
+  color: hsl(var(--primary));
+}
+
+.mind-button[data-mind-activity="thinking"] svg .mind-button-core {
+  animation: mind-breathe 1.8s ease-in-out infinite;
+}
+
+.mind-button[data-mind-activity="learning"] svg .mind-button-core {
+  animation: mind-absorb 1.3s ease-in-out infinite;
+}
+
+@keyframes mind-breathe {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+@keyframes mind-absorb {
+  0%, 100% { opacity: 0.45; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.35); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mind-button[data-mind-activity] svg .mind-button-core {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 /* --- Content ---------------------------------------------------------------
    The reading surface. */
 /* The chrome strip, then whichever of the two screens is showing. A column
