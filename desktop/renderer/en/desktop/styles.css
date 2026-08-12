@@ -966,51 +966,12 @@ textarea::placeholder {
   color: hsl(var(--foreground));
 }
 
-.sidebar-footer {
-  padding-top: var(--sp-3);
-  color: hsl(var(--muted-foreground) / 0.8);
-  font-size: var(--fs-micro);
-}
-
-.sidebar-footer #runtime-label {
-  margin-bottom: 1px;
-  color: hsl(var(--muted-foreground) / 0.7);
-}
-
-.sidebar-footer a {
-  color: inherit;
-  text-decoration: none;
-}
-
-.sidebar-footer a:hover {
-  color: hsl(var(--foreground));
-  text-decoration: underline;
-}
-
-/* The identity popover: which of this machine's identities owns the work. It
-   floats above the row it belongs to rather than pushing the list around. */
-.account-popover {
-  position: absolute;
-  right: var(--sp-3);
-  bottom: 76px;
-  left: var(--sp-3);
-  z-index: 20;
-  display: grid;
-  gap: var(--sp-2);
-  padding: var(--sp-3);
-  border-radius: var(--r-surface);
-  background: hsl(var(--card));
-  box-shadow:
-    0 0 0 1px hsl(var(--border)),
-    0 12px 32px hsl(40 10% 10% / 0.14);
-}
-
-.account-popover-title {
-  color: hsl(var(--muted-foreground));
-  font-size: var(--fs-small);
-  font-weight: var(--fw-medium);
-}
-
+/* The rail ends at the identity row. Two lines of 11px grey used to sit below
+   it — a version string and a licence link — which is a footer's worth of
+   furniture under the one control in the column that is about you. Both moved
+   to Settings › About, and the floating identity menu that used to sit above
+   this row moved to Settings › Account, which is why the rules that drew it
+   are gone from this file too. */
 .local-account-list {
   display: grid;
   gap: 2px;
@@ -1019,10 +980,24 @@ textarea::placeholder {
   list-style: none;
 }
 
+/* The ENTRY carries the highlight, not the name button inside it. When the
+   fill sat on the button, the identity you are reading as a 640px slab with
+   Rename and Delete hanging off its right edge, as if they belonged to
+   something else. The row is the thing; the controls are part of it. */
 .local-account-entry {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-control);
+}
+
+.local-account-entry:hover {
+  background: hsl(var(--muted) / 0.7);
+}
+
+.local-account-entry:has(.local-account-item.active) {
+  background: hsl(var(--primary) / 0.08);
 }
 
 .local-account-item {
@@ -1032,7 +1007,7 @@ textarea::placeholder {
   overflow: hidden;
   padding: 0 var(--sp-2);
   border-color: transparent;
-  border-radius: var(--r-control);
+  background: transparent;
   font-weight: var(--fw-normal);
   text-align: left;
   text-overflow: ellipsis;
@@ -1040,30 +1015,28 @@ textarea::placeholder {
 }
 
 .local-account-item:hover {
-  background: hsl(var(--muted));
+  background: transparent;
 }
 
 .local-account-item.active {
-  background: hsl(var(--primary) / 0.1);
   font-weight: var(--fw-medium);
 }
 
+/* Rename and Delete used to be invisible until hovered, because the popover
+   they lived in was 270px wide and three controls in a row did not fit. They
+   are in a dialog now, with room, so they are simply there: an action a
+   pointer has to find by sweeping is an action a keyboard user was told about
+   only by :focus-visible, and "delete everything this identity owns" is not a
+   thing to hide and then reveal under the cursor. */
 .local-account-action {
   flex: none;
   height: var(--h-control-sm);
   min-width: auto;
-  padding: 0 var(--sp-1);
+  padding: 0 var(--sp-2);
   border-color: transparent;
   color: hsl(var(--muted-foreground));
   font-size: var(--fs-micro);
   font-weight: var(--fw-normal);
-  opacity: 0;
-}
-
-.local-account-entry:hover .local-account-action,
-.local-account-action:focus-visible,
-.local-account-action.armed {
-  opacity: 1;
 }
 
 .local-account-action:hover {
@@ -1096,6 +1069,10 @@ textarea::placeholder {
 .local-account-create-form {
   display: flex;
   gap: var(--sp-2);
+  /* Not the full width of the card: a name is a few words, and an input as
+     wide as the panel promises a paragraph. */
+  max-width: 360px;
+  margin-top: var(--sp-3);
 }
 
 .local-account-create-form input {
@@ -1218,31 +1195,85 @@ textarea::placeholder {
 
 /* --- Settings --------------------------------------------------------------
    Everything that configures the app, in the one place that is about
-   configuring the app. */
+   configuring the app: a list of sections on the left, one section at a time
+   on the right, one bordered card per group of rows.
+
+   The dialog is 880x620 inside a ~1200x830 window. It is not full-window on
+   purpose — the app it configures stays visible around it, Escape and the
+   backdrop keep working, and no "Back to app" control has to be invented for a
+   screen that was never a screen. */
 .settings-panel {
-  display: flex;
-  flex-direction: column;
-  width: min(520px, 100%);
-  max-height: min(820px, calc(100vh - var(--sp-5) * 2));
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  width: min(880px, 100%);
+  height: min(720px, calc(100vh - var(--sp-5) * 2));
   overflow: hidden;
   border-radius: var(--r-panel);
-  background: hsl(var(--card));
+  /* Paper, so the white cards inside read as cards. Same relationship the
+     shell already has between its rail and its reading column. */
+  background: hsl(var(--background));
   box-shadow:
     0 0 0 1px hsl(var(--border)),
     0 24px 64px hsl(40 10% 8% / 0.28);
 }
 
-.settings-head {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  padding: var(--sp-4) var(--sp-3) var(--sp-4) var(--sp-5);
+.settings-nav {
+  display: grid;
+  gap: var(--sp-4);
+  align-content: start;
+  min-width: 0;
+  padding: var(--sp-4) var(--sp-3);
+  border-right: 1px solid hsl(var(--border));
+  overflow-y: auto;
 }
 
-.settings-head h2 {
+.settings-nav h2 {
+  padding: 0 var(--sp-2);
   font-size: var(--fs-title);
+}
+
+.settings-nav-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-nav-item {
+  justify-content: flex-start;
+  width: 100%;
+  border-color: transparent;
+  color: hsl(var(--muted-foreground));
+  font-weight: var(--fw-normal);
+  text-align: left;
+}
+
+.settings-nav-item:hover:not(:disabled) {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+/* The section you are in. aria-current is the state, so it is also the
+   selector — a class kept in parallel would be a second truth to forget. */
+.settings-nav-item[aria-current="page"],
+.settings-nav-item[aria-current="page"]:hover {
+  background: hsl(var(--primary) / 0.1);
+  color: hsl(var(--foreground));
+  font-weight: var(--fw-medium);
+}
+
+.settings-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.settings-main-head {
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+  padding: var(--sp-2) var(--sp-2) 0;
 }
 
 .settings-body {
@@ -1252,36 +1283,44 @@ textarea::placeholder {
   padding: 0 var(--sp-5) var(--sp-5);
 }
 
-/* Groups are separated by air, not by rules. The one hairline is between
-   groups, at 40% opacity, and only because a scrolling panel needs somewhere
-   for the eye to land. */
-.settings-group {
+.settings-section {
   display: grid;
   gap: var(--sp-3);
-  padding: var(--sp-5) 0;
+  align-content: start;
 }
 
-.settings-group + .settings-group {
-  box-shadow: inset 0 1px 0 hsl(var(--border) / 0.7);
+.settings-section-head {
+  display: grid;
+  gap: var(--sp-1);
+  padding-bottom: var(--sp-1);
 }
 
-.settings-group:first-child {
-  padding-top: 0;
+.settings-section-title {
+  font-size: var(--fs-title);
 }
 
-.settings-group-title {
-  font-size: var(--fs-base);
-  font-weight: var(--fw-strong);
+/* A card title labels the card under it. Only sections with more than one
+   card carry them — a lone card titled with the section name would say the
+   heading twice. */
+.settings-card-title {
+  margin-top: var(--sp-2);
+  margin-bottom: calc(var(--sp-3) - var(--sp-2));
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
+}
+
+.settings-card {
+  display: grid;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--r-surface);
+  background: hsl(var(--card));
 }
 
 .settings-note {
   color: hsl(var(--muted-foreground));
   font-size: var(--fs-small);
   line-height: var(--lh-ui);
-}
-
-.settings-group-title + .settings-note {
-  margin-top: calc(var(--sp-3) * -1 + var(--sp-1));
 }
 
 .settings-actions {
@@ -1291,28 +1330,131 @@ textarea::placeholder {
   margin-top: var(--sp-1);
 }
 
-.account-binding {
-  display: grid;
-  gap: var(--sp-3);
+/* Save and Cancel belong to the section, not to the bottom of a scroll. The
+   model form is taller than the dialog on a 830px window — the endpoint fields
+   alone are three stacked rows — so the one control the form exists for used
+   to be below the fold, found by scrolling past everything you had just
+   finished reading. It rides the bottom of the scrollport instead. */
+.settings-section > .settings-actions {
+  position: sticky;
+  bottom: 0;
+  margin-top: 0;
+  padding: var(--sp-3) 0;
+  background: hsl(var(--background));
 }
 
-.local-account-binding-actions {
+/* --- Settings rows ---------------------------------------------------------
+   Title and one line of explanation on the left, the control on the right.
+   The description is what makes the row readable without touching it, so it is
+   part of the row and not a tooltip. */
+.setting-row {
   display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding: var(--sp-3) var(--sp-4);
+  /* Separators run along the TOP of every row, which is what keeps a group
+     that hides its trailing rows (#model-local-fields on the official route)
+     from leaving a hairline floating above the card's own bottom border. The
+     first row of a card takes it back — directly, or through the wrapper it
+     may be nested in. */
+  border-top: 1px solid hsl(var(--border) / 0.7);
+}
+
+.settings-card > .setting-row:first-child,
+.settings-card > :first-child > .setting-row:first-child,
+.settings-card > .setting-block:first-child {
+  border-top: 0;
+}
+
+.setting-label {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.setting-title {
+  color: hsl(var(--foreground));
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+}
+
+.setting-desc {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  line-height: var(--lh-ui);
+}
+
+/* The stored choice stopped being allowed, or the key could not be read: same
+   line, different colour, so the answer appears where the question was asked. */
+.setting-desc.is-error {
+  color: hsl(var(--destructive));
+}
+
+.setting-control {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
   gap: var(--sp-2);
+  max-width: 280px;
+}
+
+.setting-control select {
+  min-width: 200px;
+}
+
+.setting-value {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.setting-control a {
+  color: hsl(var(--primary));
+  font-size: var(--fs-small);
+  text-decoration: none;
+}
+
+.setting-control a:hover {
+  text-decoration: underline;
+}
+
+/* The one deliberate exception to "control on the right": a base URL, a model
+   id and an API key are typed values, not choices. A 90-character endpoint in
+   a 200px box is a field you cannot read what you pasted into, so these rows
+   put the input under the label at full width. Choices stay inline; typed
+   values stack. */
+.setting-row.stacked {
+  display: grid;
+  align-items: stretch;
+  gap: var(--sp-2);
+}
+
+.setting-row.stacked .setting-control {
+  display: grid;
+  gap: var(--sp-2);
+  justify-content: stretch;
+  max-width: none;
+}
+
+/* A block that spans the card rather than sitting in one of its two columns:
+   the credential form, the identity list. */
+.setting-block {
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid hsl(var(--border) / 0.7);
 }
 
 .login-form {
   display: grid;
   gap: var(--sp-3);
-  padding: var(--sp-3);
-  border-radius: var(--r-surface);
-  background: hsl(var(--muted) / 0.6);
 }
 
 /* A three-way choice reads as one control, not three buttons that happen to be
    adjacent. */
 .segmented {
   display: inline-flex;
+  flex: none;
   justify-self: start;
   gap: 2px;
   padding: 2px;

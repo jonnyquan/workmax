@@ -21,7 +21,10 @@ export const statusDismissButton = document.querySelector("#status-dismiss");
 export const localAccountRow = document.querySelector("#local-account-row");
 export const localAccountAvatar = document.querySelector("#local-account-avatar");
 export const localAccountNameEl = document.querySelector("#local-account-name");
-export const localAccountPanel = document.querySelector("#local-account-panel");
+// There is no #local-account-panel any more. The identity list used to float
+// over the rail in a popover that also carried a rename form and a delete that
+// erases everything an identity owns; it lives in Settings › Account now, and
+// the row above is what opens it.
 export const localAccountListEl = document.querySelector("#local-account-list");
 export const localAccountHint = document.querySelector("#local-account-hint");
 export const localAccountBindingState = document.querySelector("#local-account-binding-state");
@@ -30,7 +33,10 @@ export const localAccountDisconnectButton = document.querySelector("#local-accou
 export const localAccountSwitchNote = document.querySelector("#local-account-switch-note");
 export const localAccountCreateForm = document.querySelector("#local-account-create-form");
 export const localAccountNameInput = document.querySelector("#local-account-name-input");
+// The version line, and the About row it sits in. Both hide together: a source
+// build stamps no number, and "Version —" is a row that exists to say nothing.
 export const runtimeLabel = document.querySelector("#runtime-label");
+export const aboutVersionRow = document.querySelector("#about-version-row");
 // There is no refresh handle here on purpose. Reloading local history is not
 // something the user has to ask for — every mutation repaints the list, and
 // the one state where asking again is the answer is an error, which offers
@@ -41,6 +47,17 @@ export const runtimeLabel = document.querySelector("#runtime-label");
 export const settingsButton = document.querySelector("#settings-button");
 export const settingsOverlay = document.querySelector("#settings-overlay");
 export const settingsCloseButton = document.querySelector("#settings-close-button");
+// The section list and the sections it shows, paired by name in renderer.js
+// (SETTINGS_SECTIONS). Static handles rather than a built list: the sections
+// are markup, not data, and a nav generated from an array would be four
+// buttons of JavaScript to avoid four lines of HTML.
+export const settingsNavModel = document.querySelector("#settings-nav-model");
+export const settingsNavAccount = document.querySelector("#settings-nav-account");
+export const settingsNavAppearance = document.querySelector("#settings-nav-appearance");
+export const settingsNavAbout = document.querySelector("#settings-nav-about");
+export const settingsPanelAccount = document.querySelector("#settings-panel-account");
+export const settingsPanelAppearance = document.querySelector("#settings-panel-appearance");
+export const settingsPanelAbout = document.querySelector("#settings-panel-about");
 export const appearanceSystemButton = document.querySelector("#appearance-system");
 export const appearanceLightButton = document.querySelector("#appearance-light");
 export const appearanceDarkButton = document.querySelector("#appearance-dark");

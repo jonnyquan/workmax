@@ -33,14 +33,30 @@
     </div>
 
     <!-- Settings.
-         A modal, not a drawer. Everything in here is a short errand — pick a
-         route, paste a URL, sign in, choose an appearance — and none of it is
-         something you consult while working, which is the case a drawer exists
-         to serve. A modal also reuses the dismissal grammar the quick switcher
-         already taught this app (backdrop, Escape, one close control) instead
-         of introducing a second one. The shell is a fixed three-column grid
-         with no spare edge; a drawer would have to shove a column aside to
-         appear, which is a lot of motion for "where does my model live". -->
+         A modal, not a drawer and not a full-window screen. Everything in here
+         is a short errand — pick a route, paste a URL, sign in, choose an
+         appearance — and none of it is something you consult while working,
+         which is the case a drawer exists to serve. A modal also reuses the
+         dismissal grammar the quick switcher already taught this app (backdrop,
+         Escape, one close control) instead of introducing a second one. The
+         shell is a fixed three-column grid with no spare edge; a drawer would
+         have to shove a column aside to appear, which is a lot of motion for
+         "where does my model live". A full-window screen with a "Back to app"
+         control would be a third dismissal grammar for four sections' worth of
+         settings, and would hide the window it is configuring.
+
+         What changed is the inside: one scrolling stack of groups became a
+         section list on the left and one section at a time on the right. The
+         stack made Appearance — two clicks a year — sit above the model route,
+         and buried the account binding under a form. Four sections, so no
+         search box: a filter over four labels you can already see is a control
+         that answers a question nobody has.
+
+         Order is by how often a section is the reason you opened this: Model
+         (the gear's own destination, and where the onboarding "use a local
+         model" path lands), Account (reached directly by clicking the identity
+         row in the rail), Appearance, then About — which is last everywhere, in
+         every application, and is where the rail's footer moved to. -->
     <div id="settings-overlay" class="overlay" hidden>
       <div
         class="settings-panel"
@@ -48,142 +64,326 @@
         aria-modal="true"
         aria-labelledby="settings-heading"
       >
-        <header class="settings-head">
+        <nav class="settings-nav" aria-labelledby="settings-heading">
           <h2 id="settings-heading">Settings</h2>
-          <button
-            id="settings-close-button"
-            class="icon-button ghost"
-            type="button"
-            aria-label="Close settings"
-          >✕</button>
-        </header>
-        <div class="settings-body">
-          <section class="settings-group" aria-labelledby="settings-appearance-heading">
-            <h3 id="settings-appearance-heading" class="settings-group-title">Appearance</h3>
-            <div class="segmented" role="group" aria-label="Appearance">
-              <button id="appearance-system" class="segment" type="button">System</button>
-              <button id="appearance-light" class="segment" type="button">Light</button>
-              <button id="appearance-dark" class="segment" type="button">Dark</button>
-            </div>
-          </section>
-
-          <form id="model-settings-form" class="settings-group" hidden novalidate>
-            <h3 id="model-settings-heading" class="settings-group-title">Model</h3>
-            <p class="settings-note">
-              Where a turn runs, and which model answers it.
-            </p>
-            <label class="field" for="model-preferred-route">
-              <span>Route</span>
-              <select id="model-preferred-route" name="preferred_route">
-                <option value="official">Official (workmax.app quota)</option>
-                <option value="local">Local / self-hosted</option>
-              </select>
-            </label>
-            <div id="model-official-fields" class="field-stack" hidden>
-              <label class="field" for="model-official-id">
-                <span>Model</span>
-                <select id="model-official-id" name="official_model_id"></select>
-              </label>
-              <p id="model-official-note" class="field-note" role="note"></p>
-            </div>
-            <div id="model-local-fields" class="field-stack" hidden>
-              <label class="field" for="model-protocol">
-                <span>Protocol</span>
-                <select id="model-protocol" name="protocol">
-                  <option value="openai_compatible">OpenAI-compatible</option>
-                  <option value="anthropic_compatible">Anthropic-compatible</option>
-                </select>
-              </label>
-              <p id="model-protocol-hint" class="field-note" role="note"></p>
-              <label class="field" for="model-base-url">
-                <span>Base URL</span>
-                <input
-                  id="model-base-url"
-                  name="base_url"
-                  type="url"
-                  autocomplete="off"
-                  maxlength="512"
-                  spellcheck="false"
-                  placeholder="http://127.0.0.1:11434/v1"
-                />
-              </label>
-              <p class="field-note">Leave empty to run here on your official model.</p>
-              <label class="field" for="model-id">
-                <span>Model ID</span>
-                <input
-                  id="model-id"
-                  name="model_id"
-                  type="text"
-                  autocomplete="off"
-                  maxlength="128"
-                  spellcheck="false"
-                  placeholder="llama3.2"
-                />
-              </label>
-              <label class="field" for="model-api-key">
-                <span>API key</span>
-                <input
-                  id="model-api-key"
-                  name="api_key"
-                  type="password"
-                  autocomplete="off"
-                  maxlength="4096"
-                  placeholder="Leave blank to keep the stored key"
-                />
-              </label>
-              <label class="check" for="model-clear-api-key">
-                <input id="model-clear-api-key" name="clear_api_key" type="checkbox" />
-                <span>Clear the stored API key</span>
-              </label>
-              <p id="model-key-status" class="field-note" role="status"></p>
-            </div>
-            <p id="model-settings-error" class="form-error" role="alert" hidden></p>
-            <div class="settings-actions">
-              <button id="model-settings-cancel-button" class="ghost" type="button">Cancel</button>
-              <button id="model-settings-submit-button" class="primary" type="submit">Save</button>
-            </div>
-          </form>
-
-          <section class="settings-group" aria-labelledby="settings-account-heading">
-            <h3 id="settings-account-heading" class="settings-group-title">Account</h3>
-            <div id="local-account-binding" class="account-binding">
-              <p id="local-account-binding-state" class="settings-note"></p>
-              <div class="local-account-binding-actions">
-                <button id="local-account-connect" type="button">Connect account</button>
-                <button id="local-account-disconnect" class="ghost" type="button" hidden>Disconnect</button>
+          <ul class="settings-nav-list">
+            <li>
+              <button
+                id="settings-nav-model"
+                class="settings-nav-item"
+                type="button"
+                aria-current="page"
+              >Model</button>
+            </li>
+            <li>
+              <button id="settings-nav-account" class="settings-nav-item" type="button">Account</button>
+            </li>
+            <li>
+              <button id="settings-nav-appearance" class="settings-nav-item" type="button">Appearance</button>
+            </li>
+            <li>
+              <button id="settings-nav-about" class="settings-nav-item" type="button">About</button>
+            </li>
+          </ul>
+        </nav>
+        <div class="settings-main">
+          <div class="settings-main-head">
+            <button
+              id="settings-close-button"
+              class="icon-button ghost"
+              type="button"
+              aria-label="Close settings"
+            >✕</button>
+          </div>
+          <div class="settings-body">
+            <!-- Every row is a title, one line of explanation, and the control
+                 that changes it — so the panel can be read down the left edge
+                 without touching anything. The exception is deliberate: a base
+                 URL, a model id and an API key are typed values, not choices,
+                 and squeezing them into the right-hand column would make a
+                 96-character endpoint scroll inside a 200px box. Those three
+                 rows put the input under the label, full width. Choices stay
+                 inline; typed values stack. -->
+            <form
+              id="model-settings-form"
+              class="settings-section"
+              aria-labelledby="model-settings-heading"
+              novalidate
+            >
+              <div class="settings-section-head">
+                <h3 id="model-settings-heading" class="settings-section-title">Model</h3>
+                <p class="settings-note">Where a turn runs, and which model answers it.</p>
               </div>
-            </div>
-            <form id="login-form" class="login-form" hidden novalidate>
-              <label class="field" for="login-email">
-                <span>Email</span>
-                <input
-                  id="login-email"
-                  name="email"
-                  type="email"
-                  inputmode="email"
-                  autocomplete="username"
-                  maxlength="320"
-                  spellcheck="false"
-                  required
-                />
-              </label>
-              <label class="field" for="login-password">
-                <span>Password</span>
-                <input
-                  id="login-password"
-                  name="password"
-                  type="password"
-                  autocomplete="current-password"
-                  maxlength="1024"
-                  required
-                />
-              </label>
+              <div class="settings-card">
+                <div class="setting-row">
+                  <span class="setting-label">
+                    <label class="setting-title" for="model-preferred-route">Route</label>
+                    <span class="setting-desc">
+                      Official runs on your workmax.app quota. Local runs on an
+                      endpoint you host.
+                    </span>
+                  </span>
+                  <span class="setting-control">
+                    <select id="model-preferred-route" name="preferred_route">
+                      <option value="official">Official (workmax.app quota)</option>
+                      <option value="local">Local / self-hosted</option>
+                    </select>
+                  </span>
+                </div>
+                <div id="model-official-fields" hidden>
+                  <div class="setting-row">
+                    <span class="setting-label">
+                      <label class="setting-title" for="model-official-id">Model</label>
+                      <span id="model-official-note" class="setting-desc" role="note"></span>
+                    </span>
+                    <span class="setting-control">
+                      <select id="model-official-id" name="official_model_id"></select>
+                    </span>
+                  </div>
+                </div>
+                <div id="model-local-fields" hidden>
+                  <div class="setting-row">
+                    <span class="setting-label">
+                      <label class="setting-title" for="model-protocol">Protocol</label>
+                      <span id="model-protocol-hint" class="setting-desc" role="note"></span>
+                    </span>
+                    <span class="setting-control">
+                      <select id="model-protocol" name="protocol">
+                        <option value="openai_compatible">OpenAI-compatible</option>
+                        <option value="anthropic_compatible">Anthropic-compatible</option>
+                      </select>
+                    </span>
+                  </div>
+                  <div class="setting-row stacked">
+                    <span class="setting-label">
+                      <label class="setting-title" for="model-base-url">Base URL</label>
+                      <span class="setting-desc">
+                        Leave empty to run here on your official model.
+                      </span>
+                    </span>
+                    <span class="setting-control">
+                      <input
+                        id="model-base-url"
+                        name="base_url"
+                        type="url"
+                        autocomplete="off"
+                        maxlength="512"
+                        spellcheck="false"
+                        placeholder="http://127.0.0.1:11434/v1"
+                      />
+                    </span>
+                  </div>
+                  <div class="setting-row stacked">
+                    <span class="setting-label">
+                      <label class="setting-title" for="model-id">Model ID</label>
+                      <span class="setting-desc">
+                        The name your endpoint answers to, spelled its way.
+                      </span>
+                    </span>
+                    <span class="setting-control">
+                      <input
+                        id="model-id"
+                        name="model_id"
+                        type="text"
+                        autocomplete="off"
+                        maxlength="128"
+                        spellcheck="false"
+                        placeholder="llama3.2"
+                      />
+                    </span>
+                  </div>
+                  <div class="setting-row stacked">
+                    <span class="setting-label">
+                      <label class="setting-title" for="model-api-key">API key</label>
+                      <span id="model-key-status" class="setting-desc" role="status"></span>
+                    </span>
+                    <span class="setting-control">
+                      <input
+                        id="model-api-key"
+                        name="api_key"
+                        type="password"
+                        autocomplete="off"
+                        maxlength="4096"
+                        placeholder="Leave blank to keep the stored key"
+                      />
+                      <label class="check" for="model-clear-api-key">
+                        <input id="model-clear-api-key" name="clear_api_key" type="checkbox" />
+                        <span>Clear the stored API key</span>
+                      </label>
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <p id="model-settings-error" class="form-error" role="alert" hidden></p>
               <div class="settings-actions">
-                <button id="login-cancel-button" class="ghost" type="button">Cancel</button>
-                <button id="login-submit-button" class="primary" type="submit">Continue</button>
+                <button id="model-settings-cancel-button" class="ghost" type="button">Cancel</button>
+                <button id="model-settings-submit-button" class="primary" type="submit">Save</button>
               </div>
             </form>
-          </section>
+
+            <!-- Account is one section, not two, because the two halves are one
+                 fact: the machine's identity owns the local work, and a WorkMax
+                 account is a binding ON that identity. Splitting them would put
+                 "disconnect to switch identities again" in a different tab from
+                 the identities it is talking about. -->
+            <section
+              id="settings-panel-account"
+              class="settings-section"
+              aria-labelledby="settings-account-heading"
+              hidden
+            >
+              <div class="settings-section-head">
+                <h3 id="settings-account-heading" class="settings-section-title">Account</h3>
+                <p class="settings-note">
+                  Who you are on this machine, and what that identity is connected to.
+                </p>
+              </div>
+              <h4 class="settings-card-title">WorkMax connection</h4>
+              <div class="settings-card">
+                <div class="setting-row">
+                  <span class="setting-label">
+                    <span class="setting-title">Connection</span>
+                    <span id="local-account-binding-state" class="setting-desc"></span>
+                  </span>
+                  <span class="setting-control">
+                    <button id="local-account-connect" type="button">Connect account</button>
+                    <button id="local-account-disconnect" class="ghost" type="button" hidden>Disconnect</button>
+                  </span>
+                </div>
+                <form id="login-form" class="login-form setting-block" hidden novalidate>
+                  <label class="field" for="login-email">
+                    <span>Email</span>
+                    <input
+                      id="login-email"
+                      name="email"
+                      type="email"
+                      inputmode="email"
+                      autocomplete="username"
+                      maxlength="320"
+                      spellcheck="false"
+                      required
+                    />
+                  </label>
+                  <label class="field" for="login-password">
+                    <span>Password</span>
+                    <input
+                      id="login-password"
+                      name="password"
+                      type="password"
+                      autocomplete="current-password"
+                      maxlength="1024"
+                      required
+                    />
+                  </label>
+                  <div class="settings-actions">
+                    <button id="login-cancel-button" class="ghost" type="button">Cancel</button>
+                    <button id="login-submit-button" class="primary" type="submit">Continue</button>
+                  </div>
+                </form>
+              </div>
+
+              <!-- The identities used to live in a popover anchored to the rail:
+                   a 300px-wide floating layer holding a list, an inline rename
+                   form, and a delete that erases every conversation an identity
+                   owns behind a hover-revealed 11px button. Destroying data is
+                   not a thing to do inside a menu that closes when the mouse
+                   leaves it. The list is here now, with room for what each row
+                   actually does — and the rail keeps the identity ROW, which is
+                   who you are, not a place to configure it. -->
+              <h4 class="settings-card-title">Identities on this machine</h4>
+              <div class="settings-card">
+                <div class="setting-block">
+                  <p id="local-account-switch-note" class="setting-desc" hidden></p>
+                  <ol id="local-account-list" class="local-account-list"></ol>
+                  <form id="local-account-create-form" class="local-account-create-form" novalidate>
+                    <input
+                      id="local-account-name-input"
+                      type="text"
+                      autocomplete="off"
+                      maxlength="64"
+                      placeholder="New identity"
+                      aria-label="New account name"
+                    />
+                    <button id="local-account-create-button" type="submit">Add</button>
+                  </form>
+                </div>
+              </div>
+            </section>
+
+            <section
+              id="settings-panel-appearance"
+              class="settings-section"
+              aria-labelledby="settings-appearance-heading"
+              hidden
+            >
+              <div class="settings-section-head">
+                <h3 id="settings-appearance-heading" class="settings-section-title">Appearance</h3>
+                <p class="settings-note">How this window looks, whatever the desktop does.</p>
+              </div>
+              <div class="settings-card">
+                <div class="setting-row">
+                  <span class="setting-label">
+                    <span class="setting-title">Theme</span>
+                    <span class="setting-desc">
+                      System follows the desktop. Light and dark stay put.
+                    </span>
+                  </span>
+                  <span class="setting-control">
+                    <span class="segmented" role="group" aria-label="Appearance">
+                      <button id="appearance-system" class="segment" type="button">System</button>
+                      <button id="appearance-light" class="segment" type="button">Light</button>
+                      <button id="appearance-dark" class="segment" type="button">Dark</button>
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </section>
+
+            <!-- What used to be two lines of 11px grey under the rail's account
+                 row. A version and a licence are things you look up once, which
+                 is the definition of something that belongs in About and not in
+                 the column you navigate with. -->
+            <section
+              id="settings-panel-about"
+              class="settings-section"
+              aria-labelledby="settings-about-heading"
+              hidden
+            >
+              <div class="settings-section-head">
+                <h3 id="settings-about-heading" class="settings-section-title">About</h3>
+                <p class="settings-note">
+                  What is running here, and the terms it ships under.
+                </p>
+              </div>
+              <div class="settings-card">
+                <div id="about-version-row" class="setting-row">
+                  <span class="setting-label">
+                    <span class="setting-title">Version</span>
+                    <span class="setting-desc">This app and the sidecar it launched.</span>
+                  </span>
+                  <span class="setting-control">
+                    <span id="runtime-label" class="setting-value"></span>
+                  </span>
+                </div>
+                <div class="setting-row">
+                  <span class="setting-label">
+                    <span class="setting-title">License</span>
+                    <span class="setting-desc">
+                      WorkMax is free software: read it, change it, run your own.
+                    </span>
+                  </span>
+                  <span class="setting-control">
+                    <a
+                      id="source-code-link"
+                      href="https://github.com/jonnyquan/workmax"
+                      target="_blank"
+                      rel="noreferrer"
+                    >Source code · AGPL-3.0</a>
+                  </span>
+                </div>
+              </div>
+            </section>
+          </div>
         </div>
       </div>
     </div>
@@ -283,38 +483,27 @@
             </span>
           </div>
 
-          <div id="local-account-panel" class="account-popover" hidden>
-            <p class="account-popover-title">This machine</p>
-            <p id="local-account-switch-note" class="settings-note" hidden></p>
-            <ol id="local-account-list" class="local-account-list"></ol>
-            <form id="local-account-create-form" class="local-account-create-form" novalidate>
-              <input
-                id="local-account-name-input"
-                type="text"
-                autocomplete="off"
-                maxlength="64"
-                placeholder="New identity"
-                aria-label="New account name"
-              />
-              <button id="local-account-create-button" type="submit">Add</button>
-            </form>
-          </div>
-
           <!-- Who you are here, what that identity is connected to, and the
-               way to change it. The second line used to read "Switch", which
-               is a verb sitting where a description goes: "Local / Switch"
-               parses as a name before it parses as an action, and the row was
-               already clickable in its entirety, so the word was labelling a
-               control that did not exist. The subtitle now carries the state —
-               connected, expired, local route — and the chevron carries the
-               fact that the row opens something. The gear stays outside the
-               row because it opens Settings, which is not switching identity. -->
+               way in to everything about it. The second line used to read
+               "Switch", which is a verb sitting where a description goes:
+               "Local / Switch" parses as a name before it parses as an action,
+               and the row was already clickable in its entirety, so the word
+               was labelling a control that did not exist. The subtitle carries
+               the state — connected, expired, local route.
+
+               The row used to open a popover holding the identity list, an
+               inline rename and a delete-everything button; it opens Settings ›
+               Account now, which is the same two clicks to switch and a great
+               deal more room for the things that are not switching. The rail
+               ends here: the version and licence lines that sat below moved to
+               Settings › About. The gear stays outside the row because it opens
+               Settings at the section the row does not: Model. -->
           <div class="identity-row">
             <button
               id="local-account-row"
               class="local-account-row"
               type="button"
-              aria-expanded="false"
+              aria-haspopup="dialog"
               hidden
             >
               <span id="local-account-avatar" class="local-account-avatar">L</span>
@@ -332,16 +521,6 @@
               title="Settings"
             >⚙&#xFE0E;</button>
           </div>
-
-          <footer class="sidebar-footer">
-            <p id="runtime-label">Bundled renderer</p>
-            <a
-              id="source-code-link"
-              href="https://github.com/jonnyquan/workmax"
-              target="_blank"
-              rel="noreferrer"
-            >Source code · AGPL-3.0</a>
-          </footer>
         </div>
       </aside>
 

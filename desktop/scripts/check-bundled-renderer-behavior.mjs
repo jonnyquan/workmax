@@ -156,9 +156,30 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
 assert.doesNotMatch(rendererHTML, /id=["']refresh-button["']/u);
 assert.doesNotMatch(rendererSource, /refreshButton/u);
 
-assert.match(rendererHTML, /id=["']source-code-link["']/u);
-assert.match(rendererHTML, /href=["']https:\/\/github\.com\/jonnyquan\/workmax["']/u);
-assert.match(rendererHTML, /Source code\s*·\s*AGPL-3\.0/u);
+// The AGPL offer of source, and the version of what is running. Both used to
+// be a two-line footer under the rail's identity row; both are in Settings ›
+// About now, which is where a thing you look up once belongs. The offer has to
+// keep existing wherever it lives, so it is pinned to the settings dialog
+// rather than to the document as a whole — "somewhere in index.html" would
+// have passed while the rail still carried it.
+{
+  const overlayAt = rendererHTML.indexOf('id="settings-overlay"');
+  const shellAt = rendererHTML.indexOf('<main class="shell">');
+  assert.ok(overlayAt > 0 && shellAt > overlayAt, "the settings dialog precedes the shell");
+  const settingsHTML = rendererHTML.slice(overlayAt, shellAt);
+  assert.match(settingsHTML, /id=["']source-code-link["']/u);
+  assert.match(settingsHTML, /href=["']https:\/\/github\.com\/jonnyquan\/workmax["']/u);
+  assert.match(settingsHTML, /Source code\s*·\s*AGPL-3\.0/u);
+  assert.match(settingsHTML, /id=["']runtime-label["']/u);
+  // The rail ends at the identity row.
+  assert.doesNotMatch(rendererHTML, /sidebar-footer/u);
+  assert.doesNotMatch(rendererCSS, /\.sidebar-footer/u);
+  // And the identity popover it used to sit under is gone with it: the list,
+  // the rename and the delete-everything button live in Settings › Account.
+  assert.doesNotMatch(rendererHTML, /id=["']local-account-panel["']/u);
+  assert.doesNotMatch(rendererSource, /localAccountPanel/u);
+  assert.doesNotMatch(rendererCSS, /\.account-popover/u);
+}
 
 assert.doesNotMatch(rendererSource, /["']\/auth\/start["']/u);
 assert.doesNotMatch(rendererSource, /["']\/auth\/login-transaction(?:\/password)?["']/u);
@@ -4335,15 +4356,28 @@ async function testLocalAccountSwitcherSwitchesAndReloads() {
   assert.equal(document.byId.get("local-account-name").textContent, "Local");
   assert.equal(document.byId.get("local-account-avatar").textContent, "L");
   assert.equal(
-    document.byId.get("local-account-panel").hidden,
+    document.byId.get("settings-overlay").hidden,
     true,
-    "the panel opens on demand, not by default",
+    "the identities open on demand, not by default",
   );
 
   row.click();
   await settle();
-  const panel = document.byId.get("local-account-panel");
-  assert.equal(panel.hidden, false, "clicking the row opens the switcher");
+  assert.equal(
+    document.byId.get("settings-overlay").hidden,
+    false,
+    "clicking the identity row opens Settings",
+  );
+  assert.equal(
+    document.byId.get("settings-panel-account").hidden,
+    false,
+    "and lands on Account, where the identities live",
+  );
+  assert.equal(
+    document.byId.get("settings-nav-account").getAttribute("aria-current"),
+    "page",
+    "the section list has to say which section that is",
+  );
   const items = walk(
     document.byId.get("local-account-list"),
     (node) => node.classList?.contains("local-account-item"),
@@ -4371,18 +4405,23 @@ async function testLocalAccountSwitcherSwitchesAndReloads() {
   assert.equal(document.byId.get("local-account-name").textContent, "Ming");
   assert.equal(document.byId.get("local-account-avatar").textContent, "M");
   assert.equal(
-    document.byId.get("local-account-panel").hidden,
+    document.byId.get("settings-overlay").hidden,
     true,
-    "the panel closes once the switch lands",
+    "the dialog closes once the switch lands: the session reloads underneath it",
+  );
+  assert.equal(
+    document.byId.get("local-account-row").focused,
+    true,
+    "and focus goes back to the control that opened it",
   );
 }
 
-// The gear sits inside the identity row, so "open the switcher, then decide
-// you wanted Settings" is a normal path rather than a corner case. The popover
-// lives in the sidebar, which the modal's backdrop covers without closing — it
-// was left stranded under the scrim, visible and unclickable, which reads as a
-// stuck menu rather than as a layer that has been dismissed.
-async function testOpeningSettingsDismissesTheIdentityPopover() {
+// The two doors into Settings open it at different sections — the gear at
+// Model, the identity row at Account — and the section list moves between them
+// without closing anything. Exactly one section is on screen at a time, and
+// exactly one nav item claims to be current: two visible panels, or a nav that
+// marks a section it is not showing, is the failure this pins.
+async function testSettingsSectionsAreOneAtATime() {
   const { bridge, desktopBridge } = localModeBridge({
     localRoute: true,
     accounts: [{ id: 1, name: "Local", active: true }],
@@ -4390,23 +4429,126 @@ async function testOpeningSettingsDismissesTheIdentityPopover() {
   const { document } = await runRenderer(bridge, desktopBridge);
   await settle();
 
+  const panels = {
+    model: document.byId.get("model-settings-form"),
+    account: document.byId.get("settings-panel-account"),
+    appearance: document.byId.get("settings-panel-appearance"),
+    about: document.byId.get("settings-panel-about"),
+  };
+  const navItems = {
+    model: document.byId.get("settings-nav-model"),
+    account: document.byId.get("settings-nav-account"),
+    appearance: document.byId.get("settings-nav-appearance"),
+    about: document.byId.get("settings-nav-about"),
+  };
+  const onlyVisible = (expected) => {
+    for (const [name, panel] of Object.entries(panels)) {
+      assert.equal(
+        panel.hidden,
+        name !== expected,
+        `${name} must be ${name === expected ? "shown" : "hidden"} while ${expected} is the section`,
+      );
+      assert.equal(
+        navItems[name].getAttribute("aria-current"),
+        name === expected ? "page" : null,
+        `only ${expected} may be aria-current`,
+      );
+    }
+  };
+
   document.byId.get("local-account-row").click();
   await settle();
-  assert.equal(document.byId.get("local-account-panel").hidden, false, "the switcher is open");
+  assert.equal(document.byId.get("settings-overlay").hidden, false, "the row opens settings");
+  onlyVisible("account");
+  assert.equal(
+    navItems.account.focused,
+    true,
+    "focus moves into the dialog, onto the section it opened at",
+  );
 
+  // The gear, with the dialog already open: it retargets the section rather
+  // than reopening a dialog that is already there.
   document.byId.get("settings-button").click();
   await settle();
+  assert.equal(document.byId.get("settings-overlay").hidden, false);
+  onlyVisible("model");
 
-  assert.equal(document.byId.get("settings-overlay").hidden, false, "settings opened");
+  navItems.about.click();
+  await settle();
+  onlyVisible("about");
+
+  navItems.appearance.click();
+  await settle();
+  onlyVisible("appearance");
+
+  // Escape closes, and the section it closed on is the one it reopens at.
+  document.dispatchKey({ key: "Escape" });
+  await settle();
+  assert.equal(document.byId.get("settings-overlay").hidden, true, "Escape closes the dialog");
+  document.byId.get("local-account-row").click();
+  await settle();
+  onlyVisible("account");
+}
+
+// Reaching Model through the section list, rather than through the gear, must
+// still be reaching a form that knows what is saved. The form is filled when
+// the section is SHOWN — the load used to hang off the gear's own handler, so
+// "identity row → Model" opened a form full of defaults sitting over a stored
+// local route, one Save away from writing those defaults back.
+async function testModelSectionLoadsWhenReachedFromTheNav() {
+  const { bridge, desktopBridge } = localModeBridge({
+    localRoute: true,
+    accounts: [{ id: 1, name: "Local", active: true }],
+  });
+  desktopBridge.settings = {
+    async getModelRoute() {
+      return typedSuccess({
+        preferred_route: "local",
+        official_model_id: "",
+        local: {
+          protocol: "anthropic_compatible",
+          base_url: "http://127.0.0.1:11434/v1",
+          model_id: "llama3.2",
+          api_key_configured: true,
+        },
+        updated_at: "2026-08-11T00:00:00Z",
+      });
+    },
+    async putModelRoute() { throw new Error("not exercised"); },
+    async getModelCatalog() { throw new Error("no catalog without an account"); },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  document.byId.get("local-account-row").click();
+  await settle();
   assert.equal(
-    document.byId.get("local-account-panel").hidden,
-    true,
-    "the identity popover must not survive under the settings backdrop",
+    document.byId.get("model-base-url").value,
+    "",
+    "opening at Account must not have touched the model form yet",
   );
+
+  document.byId.get("settings-nav-model").click();
+  await settle();
+  await settle();
+
+  assert.equal(document.byId.get("model-preferred-route").value, "local");
   assert.equal(
-    document.byId.get("local-account-row").getAttribute("aria-expanded"),
-    "false",
-    "the row that opened it has to stop claiming it is expanded",
+    document.byId.get("model-base-url").value,
+    "http://127.0.0.1:11434/v1",
+    "the endpoint the sidecar has stored, in the field that would overwrite it",
+  );
+  assert.equal(document.byId.get("model-id").value, "llama3.2");
+  assert.equal(
+    document.byId.get("model-local-fields").hidden,
+    false,
+    "the local route shows the fields it runs on",
+  );
+  assert.match(
+    document.byId.get("model-key-status").textContent,
+    /stored in Keychain/i,
+    "and says a key is stored rather than showing a blank box that means nothing",
   );
 }
 
@@ -5151,9 +5293,9 @@ async function testLocalIdentityIsNamedWithoutAnyModel() {
     "the subtitle states what this identity is connected to, never what to do to it",
   );
   assert.equal(
-    document.byId.get("local-account-row").getAttribute("aria-expanded"),
-    "false",
-    "the row is what opens the identity popover, so it has to say whether it is open",
+    document.byId.get("settings-overlay").hidden,
+    true,
+    "nothing about the identity is on screen until it is asked for",
   );
 
   document.byId.get("local-account-row").click();
@@ -5161,7 +5303,7 @@ async function testLocalIdentityIsNamedWithoutAnyModel() {
   assert.match(
     document.byId.get("local-account-binding-state").textContent,
     /No WorkMax account connected/i,
-    "the panel states the binding, not a login state",
+    "the section states the binding, not a login state",
   );
   assert.equal(
     document.byId.get("local-account-connect").hidden,
@@ -5179,9 +5321,9 @@ async function testLocalIdentityIsNamedWithoutAnyModel() {
   ).map((node) => node.textContent);
   assert.equal(switcherNames.length, 2, "both local identities are switchable without any model");
   assert.equal(
-    document.byId.get("local-account-row").getAttribute("aria-expanded"),
-    "true",
-    "and it says so once the popover is open",
+    document.byId.get("settings-panel-account").hidden,
+    false,
+    "the row opens the section its contents live in, not a floating copy of them",
   );
 }
 
@@ -8548,7 +8690,8 @@ await testMessageActionsAbsentWithoutAClipboard();
 await testStreamedAnswerGainsActionsWhenReconcileFails();
 await testSignedOutLocalRouteCanDriveTheAgent();
 await testLocalAccountSwitcherSwitchesAndReloads();
-await testOpeningSettingsDismissesTheIdentityPopover();
+await testSettingsSectionsAreOneAtATime();
+await testModelSectionLoadsWhenReachedFromTheNav();
 await testLocalAccountCreateDoesNotSwitch();
 await testLocalAccountRenameIsALabelChange();
 await testLocalAccountDeleteIsArmedAndScoped();

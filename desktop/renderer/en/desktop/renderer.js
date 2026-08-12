@@ -15,6 +15,7 @@
 // fence.js for how the counters that used to do exactly that are shared now.
 import { fences } from "./fence.js";
 import {
+  aboutVersionRow,
   agentMode,
   appearanceDarkButton,
   appearanceLightButton,
@@ -35,7 +36,6 @@ import {
   localAccountListEl,
   localAccountNameEl,
   localAccountNameInput,
-  localAccountPanel,
   localAccountRow,
   localAccountSwitchNote,
   loginCancelButton,
@@ -75,7 +75,14 @@ import {
   runtimeLabel,
   settingsButton,
   settingsCloseButton,
+  settingsNavAbout,
+  settingsNavAccount,
+  settingsNavAppearance,
+  settingsNavModel,
   settingsOverlay,
+  settingsPanelAbout,
+  settingsPanelAccount,
+  settingsPanelAppearance,
   statusBar,
   statusCard,
   statusDismissButton,
@@ -317,7 +324,16 @@ export const state = {
   // True while a disconnect (logout) is in flight, so the button cannot be
   // pressed twice into two revocations of the same session.
   disconnecting: false,
-  localAccountPanelOpen: false,
+  // The settings dialog: whether it is on screen, which section it is showing,
+  // and the control that opened it so focus can go back where it came from.
+  // The identity list is painted only while this is open — it is a list of
+  // machine identities, not a thing the rail keeps up to date behind a scrim.
+  settingsOpen: false,
+  settingsSection: "model",
+  settingsOpener: null,
+  // Whether the model form has been filled from the sidecar since this dialog
+  // opened. Reset on close, so a route changed elsewhere is never shown stale.
+  settingsModelLoaded: false,
   // Whether the credential form is on screen. The connect control and the
   // form are the same invitation; only one of them is shown at a time.
   loginFormOpen: false,
@@ -675,41 +691,109 @@ function fillModelSettingsForm(settings) {
   setModelSettingsError("");
 }
 
-// The settings panel. Opening it is always safe and never depends on a bridge:
-// appearance and the account binding are readable without the sidecar, and the
-// model section fills itself in — or says why it cannot — once it is on screen.
-export function openSettingsPanel() {
-  if (!settingsOverlay) return;
-  // The identity popover is dismissed on the way in. It lives in the sidebar,
-  // which the modal's backdrop covers but does not close, so leaving it open
-  // stranded a menu under the scrim: visible, greyed, and unclickable. The
-  // gear sits right next to the row that opens it, so this is a normal way to
-  // arrive here rather than a corner case.
-  if (state.localAccountPanelOpen) {
-    state.localAccountPanelOpen = false;
-    state.localAccountRenamingID = null;
-    renderLocalAccountArea();
+// The dialog's sections, in nav order: the name, the button that selects it,
+// and the panel it shows. Four entries, which is also why there is no search
+// box in the nav — a filter over four labels already on screen answers a
+// question nobody has, and an empty result would be the only thing it could
+// ever teach.
+//
+// A function rather than a constant for the same reason APPEARANCE_BUTTONS is
+// one: dom.js handles are module-level consts, and a top-level array built
+// from them here would read them during this module's own evaluation.
+const SETTINGS_SECTIONS = () => [
+  ["model", settingsNavModel, modelSettingsForm],
+  ["account", settingsNavAccount, settingsPanelAccount],
+  ["appearance", settingsNavAppearance, settingsPanelAppearance],
+  ["about", settingsNavAbout, settingsPanelAbout],
+];
+
+// One section on screen, one nav item marked. aria-current is the whole
+// accessible story here: these are not tabs (no arrow-key roving, no
+// tabpanel), they are a list of destinations inside a dialog, and the one you
+// are looking at says so.
+export function showSettingsSection(name) {
+  const sections = SETTINGS_SECTIONS();
+  state.settingsSection = sections.some(([id]) => id === name) ? name : "model";
+  for (const [id, navItem, panel] of sections) {
+    const current = id === state.settingsSection;
+    if (panel) panel.hidden = !current;
+    if (!navItem) continue;
+    if (current) navItem.setAttribute("aria-current", "page");
+    else navItem.removeAttribute("aria-current");
+    navItem.classList.toggle("active", current);
   }
+  // The model form is filled from the sidecar the first time it is SHOWN, not
+  // when the dialog opens: arriving at Account and then clicking Model used to
+  // be the one path that reached the form without loading it, which is a form
+  // full of defaults sitting over a saved route — and a Save away from writing
+  // those defaults back.
+  if (state.settingsSection === "model" && !state.settingsModelLoaded) {
+    state.settingsModelLoaded = true;
+    void loadModelSettingsIntoForm();
+  }
+}
+
+// The settings panel. Opening it is always safe and never depends on a bridge:
+// appearance, the identities and the account binding are readable without the
+// sidecar, and the model section fills itself in — or says why it cannot —
+// once it is on screen.
+//
+// `opener` is the control that asked for it, so Escape and ✕ can put focus
+// back where the user left it instead of on <body>.
+export function openSettingsPanel(section = state.settingsSection, opener = null) {
+  if (!settingsOverlay) return;
+  const wasOpen = state.settingsOpen;
+  if (!wasOpen) state.settingsOpener = opener;
+  state.settingsOpen = true;
   settingsOverlay.hidden = false;
+  showSettingsSection(section);
   renderAppearanceChoice();
-  renderLocalAccountBinding();
+  // The identity list only exists while this dialog does, so it is painted on
+  // the way in rather than kept warm behind a closed door.
+  renderLocalAccountArea();
+  if (wasOpen) return;
+  const active = SETTINGS_SECTIONS().find(([id]) => id === state.settingsSection);
+  const navItem = active ? active[1] : null;
+  if (navItem && typeof navItem.focus === "function") navItem.focus();
 }
 
 function closeSettingsPanel() {
   if (!settingsOverlay) return;
   settingsOverlay.hidden = true;
-  closeModelSettings();
+  state.settingsOpen = false;
+  // A half-typed rename does not survive the dialog it was typed into: the
+  // list is rebuilt from the sidecar's answer next time it opens.
+  state.localAccountRenamingID = null;
+  // Next time it opens it reads the route again rather than showing whatever
+  // this session left in the fields.
+  state.settingsModelLoaded = false;
+  clearModelAPIKeyField();
+  setModelSettingsError("");
+  const opener = state.settingsOpener;
+  state.settingsOpener = null;
+  if (opener && opener.hidden !== true && typeof opener.focus === "function") {
+    opener.focus();
+  }
 }
 
-export async function openModelSettings() {
+// The gear, the onboarding "use a local model" card and the quick switcher all
+// mean the same thing: settings, at Model. Filling the form is showSettingsSection's
+// job now, so all three ask for the same one thing.
+export async function openModelSettings(opener = null) {
   if (!modelSettingsForm) return;
-  openSettingsPanel();
+  openSettingsPanel("model", opener);
+}
+
+async function loadModelSettingsIntoForm() {
   const settings = desktopSettingsBridge();
   if (!settings) {
-    setStatus("Model settings require desktopBridge.settings (alpha.7+).", "error");
+    // Said in the section that cannot work rather than on the status strip:
+    // the strip is for what just happened, and this is a property of the
+    // build, still true the next time the panel opens.
+    setModelSettingsError("Model settings need a newer Desktop shell (desktopBridge.settings, alpha.7+).");
+    if (modelSettingsSubmitButton) modelSettingsSubmitButton.disabled = true;
     return;
   }
-  modelSettingsForm.hidden = false;
   if (modelSettingsSubmitButton) modelSettingsSubmitButton.disabled = true;
   setModelSettingsError("");
   try {
@@ -731,12 +815,6 @@ export async function openModelSettings() {
   } finally {
     if (modelSettingsSubmitButton) modelSettingsSubmitButton.disabled = false;
   }
-}
-
-function closeModelSettings() {
-  if (modelSettingsForm) modelSettingsForm.hidden = true;
-  clearModelAPIKeyField();
-  setModelSettingsError("");
 }
 
 async function submitModelSettings(event) {
@@ -1015,18 +1093,16 @@ export function activeLocalAccount() {
 // explains where the work is going, and hiding it made connecting and
 // disconnecting feel like signing in and out of the app itself.
 export function renderLocalAccountArea() {
-  // The binding moved to Settings, which is open or closed independently of
-  // this rail, so it is repainted whenever the state behind it changes rather
-  // than only when the identity popover happens to be open.
+  // The binding line lives in Settings, which is open or closed independently
+  // of this rail, so it is repainted whenever the state behind it changes
+  // rather than only when the dialog happens to be on screen.
   renderLocalAccountBinding();
-  if (!localAccountRow || !localAccountPanel) return;
+  if (!localAccountRow) return;
   const active = activeLocalAccount();
   const visible = active !== null;
   localAccountRow.hidden = !visible;
   if (!visible) {
-    state.localAccountPanelOpen = false;
     state.localAccountRenamingID = null;
-    localAccountPanel.hidden = true;
     return;
   }
   if (localAccountNameEl) localAccountNameEl.textContent = active.name;
@@ -1053,9 +1129,11 @@ export function renderLocalAccountArea() {
             ? "Local model · this machine"
             : "This machine only";
   }
-  localAccountRow.setAttribute("aria-expanded", String(state.localAccountPanelOpen === true));
-  localAccountPanel.hidden = !state.localAccountPanelOpen;
-  if (!state.localAccountPanelOpen) return;
+  // Everything below paints the identity list, which lives in Settings ›
+  // Account. A closed dialog is not a reason to rebuild it — and while a
+  // rename is in flight, a background repaint rebuilding it would eat the
+  // half-typed name.
+  if (!state.settingsOpen) return;
   if (!localAccountListEl) return;
   if (state.localAccountRenamingID !== null) return;
   // Switching identities decides who owns LOCAL work. While an account is
@@ -1334,20 +1412,21 @@ async function disconnectCloudAccount() {
     return;
   }
   state.disconnecting = false;
-  state.localAccountPanelOpen = false;
   setStatus("Account disconnected. You are working as this machine's identity again.");
   // A full reload, for the same reason an account switch is: every loaded
   // thread belonged to the identity that just left.
   await refresh();
 }
 
-function toggleLocalAccountPanel() {
-  state.localAccountPanelOpen = !state.localAccountPanelOpen;
+// The identity row's job. It used to toggle a popover in the rail; it opens
+// the section that popover's contents moved into — same two clicks to switch,
+// and the destructive half (delete an identity and everything it owns) is no
+// longer a hover-revealed glyph inside a menu that closes when the pointer
+// leaves it.
+function openLocalAccountSettings() {
   state.localAccountRenamingID = null;
-  renderLocalAccountArea();
-  if (state.localAccountPanelOpen && localAccountNameInput) {
-    localAccountNameInput.value = "";
-  }
+  if (localAccountNameInput) localAccountNameInput.value = "";
+  openSettingsPanel("account", localAccountRow);
 }
 
 // Switching accounts is a full session reload: every loaded thread, message
@@ -1358,8 +1437,9 @@ async function selectLocalAccountByID(id) {
   if (!local) return;
   const current = activeLocalAccount();
   if (current && current.id === id) {
-    state.localAccountPanelOpen = false;
-    renderLocalAccountArea();
+    // Choosing who you already are is an answered question: close the dialog
+    // rather than leave it open as if something were still being asked.
+    closeSettingsPanel();
     return;
   }
   try {
@@ -1375,7 +1455,9 @@ async function selectLocalAccountByID(id) {
     setStatus(String(error.message || error), "error");
     return;
   }
-  state.localAccountPanelOpen = false;
+  // The session reloads under the dialog — every thread on screen belonged to
+  // the identity that just left — so the dialog gets out of the way.
+  closeSettingsPanel();
   const chosen = state.localAccounts.find((account) => account.id === id);
   setStatus(chosen ? 'Switched to "' + chosen.name + '"' : "Switched account");
   await refresh();
@@ -2432,7 +2514,7 @@ function setLoginFormState(visible, submitting = false) {
   // Signing in is a settings errand and the form lives in the settings panel,
   // so asking for it has to bring the panel with it — otherwise the form is
   // shown inside a dialog nobody opened.
-  if (visible) openSettingsPanel();
+  if (visible) openSettingsPanel("account", null);
   renderLocalAccountBinding();
   loginEmail.disabled = submitting;
   loginPassword.disabled = submitting;
@@ -2764,6 +2846,9 @@ export async function refresh() {
   ].filter(Boolean);
   runtimeLabel.textContent = versions.join(" · ");
   runtimeLabel.hidden = versions.length === 0;
+  // The whole About row goes with it: a "Version" label next to nothing is
+  // the same claim of a fault, just with a heading on it.
+  if (aboutVersionRow) aboutVersionRow.hidden = versions.length === 0;
   setStatus("Checking auth status...");
   try {
     const auth = await loadAuthStatus(generation);
@@ -2838,9 +2923,18 @@ if (statusDismissButton) {
     setStatus("");
   });
 }
+// The gear opens Settings at Model, which is what it opened before there were
+// sections: the route is the setting this app is actually opened for. The
+// identity row beside it opens the same dialog at Account.
 if (settingsButton) {
   settingsButton.addEventListener("click", () => {
-    void openModelSettings();
+    void openModelSettings(settingsButton);
+  });
+}
+for (const [name, navItem] of SETTINGS_SECTIONS()) {
+  if (!navItem) continue;
+  navItem.addEventListener("click", () => {
+    showSettingsSection(name);
   });
 }
 if (settingsCloseButton) {
@@ -2888,7 +2982,7 @@ if (onboardingSignin) {
 }
 if (onboardingLocal) {
   onboardingLocal.addEventListener("click", () => {
-    void openModelSettings();
+    void openModelSettings(onboardingLocal);
   });
 }
 loginForm.addEventListener("submit", (event) => {
@@ -3010,7 +3104,7 @@ turnRecoveryDismissButton.addEventListener("click", () => {
 });
 if (localAccountRow) {
   localAccountRow.addEventListener("click", () => {
-    toggleLocalAccountPanel();
+    openLocalAccountSettings();
   });
 }
 if (localAccountCreateForm) {
