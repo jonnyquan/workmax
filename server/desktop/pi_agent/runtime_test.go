@@ -562,3 +562,45 @@ func TestRunTurn_TheDenialTestFollowsTheTurnsOwnProfile(t *testing.T) {
 		t.Fatalf("event kinds = %v, want %v; write is enabled in approval mode", got, want)
 	}
 }
+
+// pi has no system-prompt channel — one "prompt" command is the whole
+// interface — so the mind rides the head of the message. That is weaker than
+// the claude runtime's system prompt, and deliberately not equalised by
+// demoting both engines to the weakest slot they share.
+func TestPromptCarriesThePersonaAtItsHead(t *testing.T) {
+	// The wiring first, on the command that actually goes down stdin. A helper
+	// that is tested and never called is the failure this catches: deleting
+	// the call site left the unit assertions below green.
+	rt, _, proc := newTestRuntime(t, promptOK+"\n"+`{"type":"agent_settled"}`+"\n", nil)
+	in := turnInput()
+	in.Persona = "Answer only in bullet points."
+	sink := &captured{}
+	if err := rt.RunTurn(context.Background(), in, sink.emit); err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	var cmd map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(proc.stdin.String())), &cmd); err != nil {
+		t.Fatalf("stdin not one JSON line: %q (%v)", proc.stdin.String(), err)
+	}
+	message, _ := cmd["message"].(string)
+	if !strings.Contains(message, "bullet points") || !strings.HasSuffix(message, in.Prompt) {
+		t.Fatalf("the active mind must lead the prompt this runtime sends: %q", message)
+	}
+
+	if got := promptWithPersona("", "do the thing"); got != "do the thing" {
+		t.Errorf("no mind must leave the prompt untouched: %q", got)
+	}
+	if got := promptWithPersona("  \n ", "do the thing"); got != "do the thing" {
+		t.Errorf("a hint that is only whitespace is not a hint: %q", got)
+	}
+	got := promptWithPersona("Answer only in bullet points.", "do the thing")
+	if !strings.HasPrefix(got, "The user has chosen a mind") {
+		t.Fatalf("the mind must lead the message: %q", got)
+	}
+	if !strings.HasSuffix(got, "do the thing") {
+		t.Fatalf("and the user's turn must still end it: %q", got)
+	}
+	if !strings.Contains(got, "---") {
+		t.Fatalf("the two must be separated, or the turn reads as part of the instruction: %q", got)
+	}
+}

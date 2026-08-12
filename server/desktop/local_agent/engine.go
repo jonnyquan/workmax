@@ -101,23 +101,37 @@ type Engine struct {
 	hooks     localinference.KnowledgeHooks   // 可 nil（RAG off）
 	runtime   agentruntime.Runtime
 	approvals *agentruntime.ApprovalBroker // nil = legacy pre-approved mode
-	// mindModel answers "which model has the active mind asked for", or ""
-	// for "no opinion". Injected rather than read from the database here
-	// because the mind table belongs to the parent package and this one
-	// cannot import it. Nil is the ordinary configuration on any build that
-	// has not wired minds.
-	mindModel func(uid uint64) string
+	// mind answers "what has the identity's active mind asked for". Injected
+	// rather than read from the database here because the mind table belongs
+	// to the parent package and this one cannot import it. Nil is the ordinary
+	// configuration on any build that has not wired minds.
+	mind func(uid uint64) MindPolicy
 }
 
-// UseMindModel lets the identity's active mind choose the model for a turn.
-//
-// A mind picks a MODEL, not a provider: base URL and credentials stay the
-// identity's, because they are what the machine is configured to reach and a
-// mind that could redirect them would be choosing where the words go, not
-// which brain reads them. A model the configured endpoint does not serve
-// fails the way any wrong model id fails, which is the same failure the
-// setting itself can already produce.
-func (e *Engine) UseMindModel(fn func(uid uint64) string) { e.mindModel = fn }
+// MindPolicy is what an active mind asks of one turn. Both fields are
+// optional; a zero value is "no opinion" and leaves the turn exactly as the
+// identity configured it.
+type MindPolicy struct {
+	// Model wins over the identity's configured model.
+	//
+	// A mind picks a MODEL, not a provider: base URL and credentials stay the
+	// identity's, because they are what the machine is configured to reach and
+	// a mind that could redirect them would be choosing where the words go,
+	// not which brain reads them. A model the configured endpoint does not
+	// serve fails the way any wrong model id fails, which is the same failure
+	// the setting itself can already produce.
+	Model string
+
+	// Persona is the mind's role hint, handed to the runtime as system-level
+	// instruction. It changes how the model works; the mind's memory changes
+	// what it knows. Keeping them separate is why a mind can be a specialist
+	// without being taught anything, and can be taught without being told how
+	// to behave.
+	Persona string
+}
+
+// UseMind lets the identity's active mind govern a turn.
+func (e *Engine) UseMind(fn func(uid uint64) MindPolicy) { e.mind = fn }
 
 // EnableApprovals switches the engine to interactive tool approvals through
 // the given broker. Wired by bootstrap once the renderer's approval card is
@@ -210,10 +224,12 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	// answer — and because the turn announces the model it was told to use
 	// (turn_meta), the transcript then says which brain replied without
 	// anybody having to describe the setting.
-	if e.mindModel != nil {
-		if override := strings.TrimSpace(e.mindModel(req.UID)); override != "" {
-			modelID = override
-		}
+	var mind MindPolicy
+	if e.mind != nil {
+		mind = e.mind(req.UID)
+	}
+	if override := strings.TrimSpace(mind.Model); override != "" {
+		modelID = override
 	}
 	// The CLI check is claude-specific wiring: other runtimes (pi) stat
 	// their own binary inside RunTurn and fail as a typed RuntimeError.
@@ -292,6 +308,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 		BaseURL:    baseURL,
 		APIKey:     apiKey,
 		ModelID:    modelID,
+		Persona:    strings.TrimSpace(mind.Persona),
 		SessionRef: sessionRef,
 		Approvals:  e.approvalConfig(req),
 	}, bridge.Emit)

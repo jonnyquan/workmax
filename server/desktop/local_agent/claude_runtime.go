@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 
 	claudesdk "github.com/jonnyquan/claude-agent-sdk-go/pkg/claudesdk"
 
@@ -91,6 +92,28 @@ func (r *claudeRuntime) RunTurn(ctx context.Context, in agentruntime.TurnInput, 
 // sits at the very front of every request, so any churn here invalidates the
 // endpoint's prompt cache for every thread at once.
 const localAgentSystemPrompt = `You are WorkMax's local agent. You work inside the thread workspace directory using the provided tools; files you create or edit there are the deliverables the user sees. Stay inside the workspace. Reply in the language the user writes in.`
+
+// systemPromptFor appends the active mind's role hint to the loop's own system
+// prompt. A mind is a way of working, so it belongs here rather than in the
+// user's turn, where it would be one more thing the model was told rather than
+// something it is.
+//
+// This does partition the endpoint's prompt cache by mind, and that is the
+// point rather than the churn the constant above warns about: the suffix is
+// fixed for a given mind, so each mind keeps its own warm prefix instead of
+// every mind invalidating one shared one. The hint is bounded to 280 runes by
+// the create handler, so the shared prefix is still most of the prompt.
+//
+// The label matters. Without it a role hint reads as a continuation of the
+// sentence before it, and a hint like "answer only in bullet points" would
+// arrive as an instruction about staying inside the workspace.
+func systemPromptFor(persona string) string {
+	persona = strings.TrimSpace(persona)
+	if persona == "" {
+		return localAgentSystemPrompt
+	}
+	return localAgentSystemPrompt + "\n\nThe user has chosen a mind for this conversation. Work in the way it describes:\n" + persona
+}
 
 // placeholderAPIKey is sent when the user configured no key. Local endpoints
 // (llama.cpp, vLLM) typically ignore the credential entirely — but the CLI
@@ -217,7 +240,7 @@ func (r *claudeRuntime) buildQueryOptions(in agentruntime.TurnInput, emit agentr
 			"DISABLE_AUTOUPDATER":                      "1",
 		}),
 		claudesdk.WithMaxTurns(maxAgentTurns),
-		claudesdk.WithSystemPrompt(localAgentSystemPrompt),
+		claudesdk.WithSystemPrompt(systemPromptFor(in.Persona)),
 		// Partial messages turn the CLI's block stream into token deltas —
 		// without them a long answer arrives as one frame per block and the
 		// renderer reads as frozen.

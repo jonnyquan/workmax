@@ -275,6 +275,25 @@ func TestChat_QueryOptionContract(t *testing.T) {
 	if opts.SystemPrompt != localAgentSystemPrompt {
 		t.Errorf("system prompt = %v", opts.SystemPrompt)
 	}
+
+	// And with a mind chosen, the SAME option carries its role hint. Asserted
+	// on the launch contract rather than on systemPromptFor alone, because a
+	// helper that is tested and never called is the failure this catches:
+	// deleting the call site left the unit test green.
+	engine.UseMind(func(uint64) MindPolicy {
+		return MindPolicy{Persona: "Answer only in bullet points."}
+	})
+	_, opts, err = scriptedTurn(t, engine, chatReq(), &scriptedIterator{messages: []claudesdk.Message{
+		text("hi"),
+		resultWithSession(""),
+	}}, &memSSEWriter{})
+	if err != nil {
+		t.Fatalf("Chat with a mind: %v", err)
+	}
+	prompt, _ := opts.SystemPrompt.(string)
+	if !strings.HasPrefix(prompt, localAgentSystemPrompt) || !strings.Contains(prompt, "bullet points") {
+		t.Errorf("the active mind must reach the subprocess as system-level instruction: %q", prompt)
+	}
 	if !opts.IncludePartialMessages {
 		t.Error("partial messages must be requested")
 	}
@@ -300,5 +319,33 @@ func TestChat_CancellationKeepsSessionRef(t *testing.T) {
 	}
 	if got := loadSessionRef(db, "thr_l2", "claude"); got != "sess-keep" {
 		t.Errorf("ref after cancel = %q, want sess-keep", got)
+	}
+}
+
+// A mind is a way of working, so it rides the system prompt — not the user's
+// turn, where it would be one more thing the model was told rather than
+// something it is.
+func TestClaudeSystemPromptCarriesTheMind(t *testing.T) {
+	if got := systemPromptFor(""); got != localAgentSystemPrompt {
+		t.Errorf("no mind must leave the prompt byte-identical:\n%s", got)
+	}
+	if got := systemPromptFor("   \n  "); got != localAgentSystemPrompt {
+		t.Errorf("a hint that is only whitespace is not a hint:\n%s", got)
+	}
+
+	const hint = "Answer only in bullet points."
+	got := systemPromptFor(hint)
+	if !strings.HasPrefix(got, localAgentSystemPrompt) {
+		t.Fatalf("the loop's own prompt must stay at the front, so a mind partitions the\nendpoint cache rather than invalidating one shared prefix:\n%s", got)
+	}
+	if !strings.Contains(got, hint) {
+		t.Fatalf("the hint must reach the model: %s", got)
+	}
+	// Without a label the hint reads as a continuation of the sentence before
+	// it — "stay inside the workspace. Answer only in bullet points." is a
+	// different instruction from the one the user wrote.
+	tail := strings.TrimPrefix(got, localAgentSystemPrompt)
+	if !strings.Contains(tail, "mind") || strings.HasPrefix(tail, " ") {
+		t.Fatalf("the hint must be introduced, not run on: %q", tail)
 	}
 }

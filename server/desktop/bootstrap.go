@@ -443,7 +443,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 			if approvalBroker != nil {
 				engine.EnableApprovals(approvalBroker)
 			}
-			engine.UseMindModel(activeMindModel(dbRes.DB))
+			engine.UseMind(activeMindPolicy(dbRes.DB))
 			localAgent = engine
 			log.Printf("local agent: tool loop available (cli=%s)", cliPath)
 		}
@@ -475,7 +475,7 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 				// of session/always grants, whichever runtime asks.
 				piEngine.EnableApprovals(approvalBroker)
 			}
-			piEngine.UseMindModel(activeMindModel(dbRes.DB))
+			piEngine.UseMind(activeMindPolicy(dbRes.DB))
 			piAgent = piEngine
 			log.Printf("pi agent: tool loop available (pi=%s)", piPath)
 		}
@@ -761,27 +761,35 @@ func logOpenResult(dbRes *OpenResult) {
 	}
 }
 
-// activeMindModel resolves "which model has this identity's active mind asked
-// for" for the tool-loop engines, which live in a package that cannot import
-// this one.
+// activeMindPolicy resolves what this identity's active mind asks of a turn,
+// for the tool-loop engines, which live in a package that cannot import this
+// one.
 //
-// Every failure answers "" — no opinion — and the turn falls back to the
-// identity's configured model. That is the right direction to fail: a mind
-// that cannot be read should cost the user a preference, never an answer.
-func activeMindModel(db *gorm.DB) func(uid uint64) string {
+// Every failure answers the zero policy — no opinion — and the turn runs
+// exactly as the identity configured it. That is the right direction to fail:
+// a mind that cannot be read should cost the user a preference, never an
+// answer.
+func activeMindPolicy(db *gorm.DB) func(uid uint64) localagent.MindPolicy {
 	if db == nil {
 		return nil
 	}
 	store := NewMindStore(db)
-	return func(uid uint64) string {
+	return func(uid uint64) localagent.MindPolicy {
 		active, ok, err := store.Active(uid)
 		if err != nil {
 			log.Printf("minds: active mind for turn: %v", err)
-			return ""
+			return localagent.MindPolicy{}
 		}
 		if !ok {
-			return ""
+			return localagent.MindPolicy{}
 		}
-		return active.ModelOverride
+		return localagent.MindPolicy{
+			Model: active.ModelOverride,
+			// The role hint is what the user wrote to say what this mind is
+			// for. It is bounded and control-free by the create handler's
+			// validation, so what reaches a system prompt here is text the
+			// user typed and nothing else.
+			Persona: active.RoleHint,
+		}
 	}
 }

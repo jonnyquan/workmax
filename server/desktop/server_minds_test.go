@@ -457,3 +457,63 @@ func TestMindStoreActiveFailsTowardsNoOpinion(t *testing.T) {
 		t.Fatalf("store without a db = %v %v, want no opinion and no error", ok, err)
 	}
 }
+
+// activeMindPolicy is the bridge between the mind table and the tool-loop
+// engines, which cannot import this package. It is small, and it is the only
+// place that decides WHICH of a mind's fields govern a turn — so an omission
+// here is a mind that exists, is selected, and changes nothing.
+func TestActiveMindPolicyCarriesBothHalves(t *testing.T) {
+	db := openMindsTestDB(t)
+	store := NewMindStore(db)
+	created, err := store.Create(0, MindPut{
+		Name:          "Compensation",
+		RoleHint:      "Answer only in bullet points.",
+		ModelOverride: "specialist-model",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.Select(0, created.ID); err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+
+	policy := activeMindPolicy(db)(0)
+	if policy.Model != "specialist-model" {
+		t.Errorf("model = %q, want the mind's", policy.Model)
+	}
+	// The half that changes how the model WORKS, as opposed to what it knows.
+	// Dropping it leaves a mind that can be created, selected and taught, and
+	// that never once behaves differently.
+	if policy.Persona != "Answer only in bullet points." {
+		t.Errorf("persona = %q, want the mind's role hint", policy.Persona)
+	}
+
+	// The seeded default mind asks for nothing, so the identity's own
+	// configuration governs — which is what "a mind is optional" has to mean.
+	if err := store.Select(0, defaultMindOf(t, store).ID); err != nil {
+		t.Fatalf("Select default: %v", err)
+	}
+	if policy := activeMindPolicy(db)(0); policy.Model != "" {
+		t.Errorf("the default mind must not choose a model: %+v", policy)
+	}
+
+	// No database is not an error path a turn should notice.
+	if activeMindPolicy(nil) != nil {
+		t.Error("a nil database must produce no resolver at all")
+	}
+}
+
+func defaultMindOf(t *testing.T, store *MindStore) Mind {
+	t.Helper()
+	all, err := store.List(0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, m := range all {
+		if m.Name == defaultMindName {
+			return m
+		}
+	}
+	t.Fatal("the seeded default mind is missing")
+	return Mind{}
+}

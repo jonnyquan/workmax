@@ -63,6 +63,17 @@ type TurnInput struct {
 	APIKey  string
 	ModelID string
 
+	// Persona is the active mind's role hint: a sentence or two saying what
+	// this mind is for. Empty when no mind is chosen or the mind said nothing.
+	//
+	// Where it lands is each runtime's own decision, because the runtimes do
+	// not offer the same slots. It is system-level instruction — it changes
+	// how the model works, not what it knows — so a runtime that has a system
+	// prompt puts it there, and one that does not carries it at the head of
+	// the prompt. Picking the lowest common denominator would have put it in
+	// the weakest slot both engines share.
+	Persona string
+
 	// SessionRef is the runtime-interpreted continuity handle from the last
 	// turn on this thread ("" = fresh session). The runtime reports the ref
 	// to store for next time through Event{Kind: EventSessionRef}.

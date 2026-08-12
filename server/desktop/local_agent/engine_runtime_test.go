@@ -110,7 +110,7 @@ func TestChat_ForeignRuntimeErrorSurfaces(t *testing.T) {
 // which brain answered rather than which one is configured right now. The
 // endpoint stays the identity's — a mind chooses a model, not a provider.
 func TestChat_ActiveMindChoosesTheModel(t *testing.T) {
-	run := func(t *testing.T, mind func(uid uint64) string) (agentruntime.TurnInput, []cloudproxy.SSEEvent) {
+	run := func(t *testing.T, mind func(uid uint64) MindPolicy) (agentruntime.TurnInput, []cloudproxy.SSEEvent) {
 		t.Helper()
 		db := openTestDB(t)
 		seedThreadRow(t, db)
@@ -120,7 +120,7 @@ func TestChat_ActiveMindChoosesTheModel(t *testing.T) {
 		engine := NewEngineWithRuntime(
 			stubProfile{baseURL: "http://127.0.0.1:1", modelID: "identity-model"}, db, nil, nil, rt)
 		if mind != nil {
-			engine.UseMindModel(mind)
+			engine.UseMind(mind)
 		}
 		dst := &memSSEWriter{}
 		if err := engine.Chat(context.Background(), chatReq(), dst); err != nil {
@@ -130,7 +130,9 @@ func TestChat_ActiveMindChoosesTheModel(t *testing.T) {
 		return rt.gotIn, frames
 	}
 
-	in, frames := run(t, func(uint64) string { return "the-minds-model" })
+	in, frames := run(t, func(uint64) MindPolicy {
+		return MindPolicy{Model: "the-minds-model", Persona: "Answer only in bullet points."}
+	})
 	if in.ModelID != "the-minds-model" {
 		t.Errorf("model = %q, want the active mind's", in.ModelID)
 	}
@@ -140,20 +142,32 @@ func TestChat_ActiveMindChoosesTheModel(t *testing.T) {
 	if frames[0].Type != "turn_meta" || !strings.Contains(frames[0].Data, "the-minds-model") {
 		t.Errorf("the turn must announce the model it was actually told to use: %q", frames[0].Data)
 	}
+	// The role hint reaches the runtime as system-level instruction, separate
+	// from the prompt: a mind's memory changes what the model knows, its
+	// persona changes how it works, and the two travel in different fields.
+	if in.Persona != "Answer only in bullet points." {
+		t.Errorf("persona = %q, want the active mind's role hint", in.Persona)
+	}
+	if strings.Contains(in.Prompt, "bullet points") {
+		t.Error("the persona must not be folded into the user's turn by the engine")
+	}
 
 	// A mind with no opinion, and no mind wiring at all, both leave the
 	// identity's configured model alone. Failing towards the setting is the
 	// only safe direction: a mind that cannot be read should cost a
 	// preference, never an answer.
-	for name, fn := range map[string]func(uint64) string{
-		"no opinion": func(uint64) string { return "" },
-		"whitespace": func(uint64) string { return "   " },
+	for name, fn := range map[string]func(uint64) MindPolicy{
+		"no opinion": func(uint64) MindPolicy { return MindPolicy{} },
+		"whitespace": func(uint64) MindPolicy { return MindPolicy{Model: "   ", Persona: "  "} },
 		"not wired":  nil,
 	} {
 		t.Run(name, func(t *testing.T) {
 			in, _ := run(t, fn)
 			if in.ModelID != "identity-model" {
 				t.Errorf("model = %q, want the identity's", in.ModelID)
+			}
+			if in.Persona != "" {
+				t.Errorf("persona = %q, want none", in.Persona)
 			}
 		})
 	}

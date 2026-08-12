@@ -227,7 +227,7 @@ func (r *Runtime) RunTurn(ctx context.Context, in agentruntime.TurnInput, emit a
 	if werr := writeCommand(proc.Stdin(), map[string]any{
 		"id":      promptCommandID,
 		"type":    "prompt",
-		"message": in.Prompt,
+		"message": promptWithPersona(in.Persona, in.Prompt),
 	}); werr != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -558,4 +558,26 @@ func (t *tailBuffer) String() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return strings.Join(t.lines, "\n")
+}
+
+// promptWithPersona puts the active mind's role hint at the head of the
+// prompt, because this runtime has nowhere better to put it.
+//
+// pi is driven over `pi --mode rpc` with a single "prompt" command and no
+// system-prompt channel, so the strongest slot available here is the front of
+// the message. That is weaker than the claude runtime's system prompt, and
+// deliberately not equalised by moving BOTH engines to the weak slot — each
+// one carries it as high as it can.
+//
+// Sent on every turn rather than only the first of a session. It repeats in
+// the session file, which is a real cost; the alternative is that switching
+// minds mid-conversation silently does nothing on this runtime, which is a
+// worse thing to be true than a repeated paragraph.
+func promptWithPersona(persona, prompt string) string {
+	persona = strings.TrimSpace(persona)
+	if persona == "" {
+		return prompt
+	}
+	return "The user has chosen a mind for this conversation. Work in the way it describes:\n" +
+		persona + "\n\n---\n\n" + prompt
 }
