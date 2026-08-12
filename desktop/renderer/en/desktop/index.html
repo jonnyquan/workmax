@@ -445,49 +445,47 @@
         </div>
       </section>
 
+      <!-- The rail is the thread's materials ledger, not a second work log.
+           Every section is present only when it has rows; the run narrates
+           itself on the message it belongs to, and the one line below is a
+           live pointer at what the loop is on, not a summary of it. -->
       <aside class="context-panel" id="context-panel">
         <header class="context-header">
-          <h2 class="context-title">Task context</h2>
-          <span class="context-count" id="context-count">0</span>
+          <h2 class="context-title">Workspace</h2>
         </header>
 
-        <section class="context-section" id="context-run">
-          <h3 class="context-section-title">
-            Run overview
-            <span class="context-section-meta" id="run-overview-meta">0/4</span>
-          </h3>
-          <ol class="run-steps" id="run-overview-list"></ol>
-        </section>
+        <p class="context-empty" id="context-empty-note" hidden>
+          Files you attach and files the agent writes appear here.
+        </p>
 
-        <section class="context-section" id="context-sources">
-          <h3 class="context-section-title">
-            Sources
-            <span class="context-section-meta" id="sources-meta">0</span>
-          </h3>
-          <ul class="context-list" id="sources-list"></ul>
-          <p class="context-selected" id="sources-selected" hidden></p>
-          <p class="context-empty" id="sources-empty">No source files yet.</p>
-        </section>
+        <p class="context-run" id="context-run-line" role="status" aria-live="polite" hidden></p>
 
-        <section class="context-section" id="context-retrieved">
+        <section class="context-section" id="context-deliverables" hidden>
           <h3 class="context-section-title">
-            Retrieved context
-            <span class="context-section-meta" id="retrieved-meta">0</span>
+            Produced
+            <span class="context-section-meta" id="deliverables-meta"></span>
           </h3>
-          <ul class="context-list" id="retrieved-list"></ul>
-          <p class="context-empty" id="retrieved-empty">Nothing retrieved yet.</p>
-        </section>
-
-        <section class="context-section" id="context-deliverables">
-          <h3 class="context-section-title">
-            Deliverables
-            <span class="context-section-meta" id="deliverables-meta">0</span>
-          </h3>
+          <ul class="context-list" id="deliverables-list"></ul>
           <button id="open-workspace-button" type="button" class="ghost context-action" hidden>
             Open folder
           </button>
-          <ul class="context-list" id="deliverables-list"></ul>
-          <p class="context-empty" id="deliverables-empty">No files produced yet.</p>
+        </section>
+
+        <section class="context-section" id="context-sources" hidden>
+          <h3 class="context-section-title">
+            Attached
+            <span class="context-section-meta" id="sources-meta"></span>
+          </h3>
+          <ul class="context-list" id="sources-list"></ul>
+          <p class="context-selected" id="sources-selected" hidden></p>
+        </section>
+
+        <section class="context-section" id="context-retrieved" hidden>
+          <h3 class="context-section-title">
+            Retrieved
+            <span class="context-section-meta" id="retrieved-meta"></span>
+          </h3>
+          <ul class="context-list" id="retrieved-list"></ul>
         </section>
       </aside>
     </main>

@@ -1717,31 +1717,36 @@ async function testThreadSearchIsHiddenWithNothingToFilter() {
   );
 }
 
+// With nothing in it, the rail is one sentence. Every section is absent —
+// not present-and-empty — and the run line is down, because there is no run.
 async function testTaskContextPanelRendersOnLoad() {
   const { document, ns } = await runRenderer(undefined);
-  const steps = document.byId.get("run-overview-list");
-  assert.ok(steps, "the run overview list must exist");
+  for (const id of ["context-deliverables", "context-sources", "context-retrieved"]) {
+    assert.equal(
+      document.byId.get(id).hidden,
+      true,
+      `${id} must stand down rather than explain its own emptiness`,
+    );
+  }
   assert.equal(
-    steps.children.length,
-    4,
-    "all four run-overview steps must be rendered on load; static markup would leave this empty",
-  );
-  assert.match(
-    document.byId.get("run-overview-meta").textContent,
-    /^\d\/4$/,
-    "the step counter must be computed, not left at its markup default",
-  );
-  assert.equal(
-    document.byId.get("sources-empty").hidden,
+    document.byId.get("context-empty-note").hidden,
     false,
-    "with no sources the empty note must be visible",
+    "the whole empty state is one line",
+  );
+  assert.equal(
+    document.byId.get("context-run-line").hidden,
+    true,
+    "no run, no live line",
   );
   assert.equal(
     document.byId.get("open-workspace-button").hidden,
     true,
     "nothing to open, no button",
   );
-  assert.equal(document.byId.get("sources-meta").textContent, "0");
+  // The panel is rendered by JS on load, not left at its markup default: a
+  // static rail would leave these counts as the empty strings the markup ships.
+  assert.equal(document.byId.get("sources-meta").textContent, "0 files");
+  assert.equal(document.byId.get("deliverables-meta").textContent, "0 files");
 }
 
 async function testShimInterceptsExternalLinks() {
@@ -3006,10 +3011,13 @@ async function testFailedTurnStateAndDuration() {
     "the pill must carry the real elapsed time, minutes and all",
   );
   assert.equal(document.byId.get("turn-state").classList.contains("is-error"), true);
-  assert.match(
-    document.byId.get("run-overview-list").textContent,
-    /Failed/,
-    "the execution step must flip to Failed — it reads the tone class, not the pill's prose",
+  // The outcome is the pill's job and only the pill's. The rail's live line
+  // is a pointer at a running loop, so a settled turn puts it down rather
+  // than restating "Failed" a second time in a second vocabulary.
+  assert.equal(
+    document.byId.get("context-run-line").hidden,
+    true,
+    "a turn that ended takes the live line with it",
   );
 }
 
@@ -3103,7 +3111,7 @@ async function testToolLoopActivityAndDeliverables() {
 
   assert.equal(
     document.byId.get("deliverables-meta").textContent,
-    "1",
+    "1 file",
     "the pre-existing file is inventory",
   );
 
@@ -3116,9 +3124,9 @@ async function testToolLoopActivityAndDeliverables() {
   emit({ type: "tool_use", name: "Write", target: "outline.md" });
   await settle();
   assert.match(
-    document.byId.get("run-overview-list").textContent,
-    /Write…/,
-    "a running tool must be narrated in the execution step",
+    document.byId.get("context-run-line").textContent,
+    /Step 1.*Write · outline\.md/su,
+    "while a turn runs the rail points at what the loop is on",
   );
 
   // The step also lands inline: the transcript is a work log, not a chat
@@ -3131,11 +3139,6 @@ async function testToolLoopActivityAndDeliverables() {
 
   emit({ type: "tool_denied", name: "Write", target: "escape.txt", reason: "outside the workspace" });
   await settle();
-  assert.match(
-    document.byId.get("run-overview-list").textContent,
-    /Write blocked/,
-    "a denial must be visible, not silently absorbed",
-  );
   {
     const denied = walk(document.byId.get("message-list"), (n) => n.classList?.contains("denied"));
     assert.equal(denied.length, 1, "the denial must appear inline too");
@@ -3162,17 +3165,36 @@ async function testToolLoopActivityAndDeliverables() {
   emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
   await settle();
 
-  assert.match(
-    document.byId.get("run-overview-list").textContent,
-    /4 tool calls · 1 blocked/,
-    "the finished step must count what ran and what was blocked",
-  );
-  assert.equal(document.byId.get("deliverables-meta").textContent, "3");
-  assert.match(document.byId.get("deliverables-list").textContent, /deck\/outline\.md/);
+  // The finished run is counted once, on the message that produced it (the
+  // "5 steps · 1 blocked" receipt asserted below). The rail counts files.
   assert.equal(
-    document.byId.get("deliverables-empty").hidden,
+    document.byId.get("context-run-line").hidden,
     true,
-    "with files present the empty note must give way",
+    "the live line goes down when the turn settles — the story stays on the message",
+  );
+  assert.equal(document.byId.get("deliverables-meta").textContent, "3 files");
+  assert.match(document.byId.get("deliverables-list").textContent, /deck\/outline\.md/);
+  // The two files this turn touched are marked; the one that predates it is
+  // listed without a mark, because the section is the workspace, not the turn.
+  {
+    const rows = document.byId.get("deliverables-list").children;
+    assert.equal(rows.length, 3, "the section lists the whole workspace");
+    assert.match(rows[0].textContent, /deck\/outline\.mdNew/u, "a file this turn wrote is marked");
+    assert.doesNotMatch(
+      rows[2].textContent,
+      /New/u,
+      "a file that predates the turn is inventory, not this turn's work",
+    );
+  }
+  assert.equal(
+    document.byId.get("context-empty-note").hidden,
+    true,
+    "with files present the empty line must give way",
+  );
+  assert.equal(
+    document.byId.get("context-deliverables").hidden,
+    false,
+    "and the section must appear",
   );
   assert.equal(
     document.byId.get("open-workspace-button").hidden,
@@ -3233,13 +3255,13 @@ async function testToolLoopActivityAndDeliverables() {
   document.byId.get("chat-form").submit();
   await settle();
   // With activity reset, a fresh running turn with no events yet reads
-  // "In progress" — stale entries would surface as the last tool's name.
+  // "Running" — stale entries would surface as the last tool's name.
+  assert.equal(document.byId.get("context-run-line").hidden, false, "a new run raises the line again");
   assert.match(
-    document.byId.get("run-overview-list").textContent,
-    /In progress/,
+    document.byId.get("context-run-line").textContent,
+    /^Running$/u,
     "activity must reset per turn",
   );
-  assert.doesNotMatch(document.byId.get("run-overview-list").textContent, /Edit…|blocked/);
 
   // One call is one row. The sidecar announces a tool the moment the model
   // asks for it and only then does the guard refuse it or the user decline
@@ -3474,9 +3496,14 @@ async function testApprovalBecomesTheStepItIsAbout() {
   assert.equal(buttonsIn(steps()[0]).length, 4, "the row offers all four decisions");
   assert.equal(buttonsIn(steps()[1]).length, 0, "and only that row");
   assert.match(
-    document.byId.get("run-overview-list").textContent,
-    /Write · awaiting approval/,
+    document.byId.get("context-run-line").textContent,
+    /Needs your approval.*Write · outline\.md/su,
     "a run blocked on the user must not read as a tool making progress",
+  );
+  assert.equal(
+    document.byId.get("context-run-line").classList.contains("is-blocked"),
+    true,
+    "and it must be the one thing in the rail that raises its voice",
   );
 
   // A second question in the same turn is its own question on its own row.
@@ -3622,10 +3649,17 @@ async function testDenialFoldsIntoTheRowItAnswers() {
   assert.equal(steps()[0].classList.contains("denied"), true);
   assert.match(steps()[0].textContent, /blocked — 用户拒绝了此操作/su);
   assert.doesNotMatch(steps()[0].textContent, /Denied/u, "and states the outcome once");
+  // The question is answered, so the rail stops asking and goes back to
+  // naming the step the loop is on. The refusal itself is told once, inline.
   assert.match(
-    document.byId.get("run-overview-list").textContent,
-    /Write blocked/,
-    "the panel follows the row",
+    document.byId.get("context-run-line").textContent,
+    /Step 1.*Write · secret\.md/su,
+    "the rail follows the row",
+  );
+  assert.equal(
+    document.byId.get("context-run-line").classList.contains("is-blocked"),
+    false,
+    "an answered question is no longer blocking",
   );
 
   // What the real chain actually sends: the CLI feeds a refusal back as an
@@ -5607,7 +5641,7 @@ async function testRetrievedContextIsShownAndResetPerTurn() {
   emit({ type: "text_delta", delta: "Revenue was up." });
   await settle();
 
-  assert.equal(document.byId.get("retrieved-meta").textContent, "2");
+  assert.equal(document.byId.get("retrieved-meta").textContent, "2 passages");
   assert.equal(
     document.byId.get("context-retrieved").hidden,
     false,

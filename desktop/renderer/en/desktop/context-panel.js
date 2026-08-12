@@ -4,7 +4,7 @@
 // produced deliverables. Everything here is a projection of a turn that
 // events.js is already narrating — this module owns no turn state of its own,
 // which is why it can be re-rendered at any moment without consulting anyone.
-import { messageList, turnState } from "./dom.js";
+import { messageList } from "./dom.js";
 import {
   MAX_TURN_TEXT_BYTES,
   isRecord,
@@ -16,16 +16,33 @@ import { formatMessageTime, scrollMessagesToEnd } from "./transcript.js";
 import { desktopAgentBridge, state } from "./renderer.js";
 
 // ---------------------------------------------------------------------------
-// Task context panel
+// Workspace panel
 // ---------------------------------------------------------------------------
 //
-// The right rail describes the current run: which steps have happened, what
-// the agent was given, and what it produced. Every value here is derived from
-// state this renderer already holds or reads back from the sidecar.
+// The right rail is the thread's materials ledger: what the agent produced,
+// what you gave it, what the answer was grounded in. It narrates nothing about
+// the run.
 //
-// Deliverables is deliberately an empty state with a reason rather than a
-// hidden section. A local turn produces text, not files — the panel says so
-// instead of showing an empty box that looks broken.
+// That is the split, and it is deliberate. A tool step is read against the
+// words it produced, so the work log stays on the message — it is the same
+// object as the answer. A file is read against the thread, because turn 1
+// wrote it and turn 5 rewrote it and only the current version matters; the
+// rail is the only place that can say that once. The old panel tried to be
+// both and ended up disagreeing with itself: "Agent execution · 4 tool calls"
+// beside an inline strip reading "5 steps" (it counted denials differently),
+// Sources and Deliverables each stated twice, and four fixed phases —
+// Brief captured / Sources / Agent execution / Deliverables — imposed on a
+// pure-chat turn that has no phases and on a fifteen-tool turn that has
+// fifteen.
+//
+// What survives from the run is one live line, and only while the turn is
+// running: what the loop is on, loudest when the loop is blocked on the user.
+// A reader who has scrolled away cannot afford to miss that one, and it is a
+// pointer rather than a summary — it disappears when the turn settles, and the
+// finished story stays on the message.
+//
+// Sections appear only when they have rows, so a fresh thread is one sentence
+// rather than three boxes explaining their own emptiness.
 
 // Looked up on use rather than bound at module scope. These functions are
 // called from code that runs earlier in the file, and a const initialised down
@@ -659,109 +676,70 @@ function formatFileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// Mirrors the reference implementation's four steps. "Brief captured" is true
-// once the thread has any message or a turn is running, because that is the
-// point at which the agent has actually been told something.
-function buildRunSteps() {
-  const running = Boolean(state.activeTurn);
-  const messageCount = messageList ? messageList.children.length : 0;
-  const sourceCount = contextState.sources.length + state.pendingFiles.length;
-  // The tone class, not the text: the pill's label now carries a duration
-  // suffix, and deriving state from prose is how this comparison silently
-  // broke the moment the label grew.
-  const failed = turnState && turnState.classList?.contains("is-error");
-
-  const brief = messageCount > 0 || running;
-  return [
-    {
-      label: "Brief captured",
-      state: brief ? "complete" : "pending",
-      detail: brief ? "Complete" : "Waiting",
-    },
-    {
-      label: "Sources",
-      // No sources is a valid way to run, so this is never "pending" —
-      // reporting it as incomplete would imply the run is blocked on it.
-      state: sourceCount > 0 ? "complete" : "neutral",
-      detail: sourceCount > 0
-        ? `${sourceCount} source${sourceCount === 1 ? "" : "s"}`
-        : "None attached",
-    },
-    {
-      label: "Agent execution",
-      state: failed ? "failed" : running ? "active" : brief ? "complete" : "pending",
-      detail: agentExecutionDetail(running, failed, brief),
-    },
-    {
-      label: "Deliverables",
-      state: contextState.deliverables.length > 0 ? "complete" : "neutral",
-      detail: contextState.deliverables.length > 0
-        ? `${contextState.deliverables.length} file${contextState.deliverables.length === 1 ? "" : "s"}`
-        : "None yet",
-    },
-  ];
-}
-
-// The execution step used to be a binary; with a tool loop it has a story.
-// While running it names the latest tool; finished, it counts what ran and
-// what was blocked.
-function agentExecutionDetail(running, failed, brief) {
+// The live line. One sentence about a turn that is happening, and nothing at
+// all otherwise — a finished run is told on the message it produced, and a
+// second telling here was the duplication this panel is being rid of.
+//
+// The step number is the only count in the rail with a moving referent, and it
+// is spelled out ("Step 4") because a bare 4 beside a tool name is unreadable.
+// A question the loop is blocked on wins over the latest call wherever it sits
+// in the list: saying "Write…" while nothing can proceed reads as progress
+// that is not happening.
+function renderRunLine() {
+  const line = ctxEl("context-run-line");
+  if (!line) return;
+  if (!state.activeTurn) {
+    line.hidden = true;
+    line.textContent = "";
+    line.className = "context-run";
+    return;
+  }
   const activity = contextState.toolActivity;
-  const denied = activity.filter((a) => a.denied).length;
-  if (running) {
-    // A step holding an unanswered question is what the run is actually
-    // waiting on, wherever it sits in the list — saying "Write…" while the
-    // loop is blocked on the user reads as progress that is not happening.
-    const asking = activity.find((a) => a.approval && !a.approval.settled);
-    if (asking) return `${asking.name} · awaiting approval`;
-    const last = activity[activity.length - 1];
-    if (last) return last.denied ? `${last.name} blocked` : `${last.name}…`;
-    return "In progress";
+  const asking = activity.find((a) => a.approval && !a.approval.settled);
+  const last = activity[activity.length - 1];
+  line.hidden = false;
+  line.textContent = "";
+  line.className = asking ? "context-run is-blocked" : "context-run";
+
+  const label = document.createElement("span");
+  label.className = "context-run-label";
+  const detail = document.createElement("span");
+  detail.className = "context-run-detail";
+  if (asking) {
+    label.textContent = "Needs your approval";
+    detail.textContent = asking.target ? `${asking.name} · ${asking.target}` : asking.name;
+  } else if (last) {
+    label.textContent = `Step ${activity.length}`;
+    detail.textContent = last.target ? `${last.name} · ${last.target}` : last.name;
+  } else {
+    label.textContent = "Running";
+    detail.textContent = "";
   }
-  if (failed) return "Failed";
-  if (!brief) return "Waiting";
-  if (activity.length === 0) return "Complete";
-  const calls = `${activity.length - denied} tool call${activity.length - denied === 1 ? "" : "s"}`;
-  return denied > 0 ? `${calls} · ${denied} blocked` : calls;
+  line.append(label, detail);
 }
 
-const RUN_STEP_MARKS = {
-  complete: "✓",
-  active: "◐",
-  failed: "✕",
-  pending: "○",
-  neutral: "–",
-};
-
-function renderRunOverview() {
-  if (!ctxEl("run-overview-list")) return;
-  const steps = buildRunSteps();
-  ctxEl("run-overview-list").innerHTML = "";
-  for (const step of steps) {
-    const item = document.createElement("li");
-    item.className = `run-step is-${step.state}`;
-
-    const mark = document.createElement("span");
-    mark.className = "run-step-mark";
-    mark.textContent = RUN_STEP_MARKS[step.state] ?? "–";
-
-    const label = document.createElement("span");
-    label.className = "run-step-label";
-    label.textContent = step.label;
-
-    const detail = document.createElement("span");
-    detail.className = "run-step-detail";
-    detail.textContent = step.detail;
-
-    item.append(mark, label, detail);
-    ctxEl("run-overview-list").appendChild(item);
-  }
-  const done = steps.filter((s) => s.state === "complete").length;
-  if (ctxEl("run-overview-meta")) ctxEl("run-overview-meta").textContent = `${done}/${steps.length}`;
+// One row of the rail: a name on the left, its facts on the right, nothing
+// drawn around it. The old rows were cards — a background, an inset border and
+// eight pixels of padding each — which in a 300px column meant three files
+// filled the screen. Alignment groups them at a fraction of the height.
+function buildContextLine(name, meta) {
+  const line = document.createElement("div");
+  line.className = "context-line";
+  line.append(name, meta);
+  return line;
 }
 
+function contextMeta(text) {
+  const meta = document.createElement("span");
+  meta.className = "context-item-meta";
+  meta.textContent = text;
+  return meta;
+}
+
+// renderSources draws the attachments and returns how many rows it drew, which
+// is what decides whether the rail has anything to say at all.
 function renderSources() {
-  if (!ctxEl("sources-list")) return;
+  if (!ctxEl("sources-list")) return 0;
   // Files uploaded in this session but not yet reloaded from the sidecar are
   // shown alongside the persisted ones, so a just-attached file appears
   // immediately rather than after the next refresh.
@@ -800,6 +778,7 @@ function renderSources() {
     // fresh upload is already armed through the tray, and a file whose bytes
     // are gone has nothing to attach — neither gets a checkbox.
     const checkable = !file.pending && file.on_disk !== false && persistedIds.has(file.file_id);
+    let nameNode;
     if (checkable) {
       const label = document.createElement("label");
       label.className = "context-item-select";
@@ -816,37 +795,45 @@ function renderSources() {
       name.className = "context-item-name";
       name.textContent = file.file_name;
       label.append(box, name);
-      item.appendChild(label);
+      nameNode = label;
     } else {
-      const name = document.createElement("span");
-      name.className = "context-item-name";
-      name.textContent = file.file_name;
-      item.appendChild(name);
+      nameNode = document.createElement("span");
+      nameNode.className = "context-item-name";
+      nameNode.textContent = file.file_name;
     }
 
-    const meta = document.createElement("span");
-    meta.className = "context-item-meta";
-    meta.textContent = file.on_disk === false
-      // The row survives but the bytes do not, which is a different problem
-      // from "no attachments" and needs to be visible.
-      ? "Missing on disk"
-      : file.pending
-        ? "Uploading…"
-        : formatFileSize(file.file_size);
-
-    item.appendChild(meta);
+    item.appendChild(
+      buildContextLine(
+        nameNode,
+        contextMeta(
+          file.on_disk === false
+            // The row survives but the bytes do not, which is a different
+            // problem from "no attachments" and needs to be visible.
+            ? "Missing on disk"
+            : file.pending
+              ? "Uploading…"
+              : formatFileSize(file.file_size)
+        )
+      )
+    );
     ctxEl("sources-list").appendChild(item);
   }
 
-  if (ctxEl("sources-empty")) ctxEl("sources-empty").hidden = items.length > 0;
-  if (ctxEl("sources-meta")) ctxEl("sources-meta").textContent = String(items.length);
+  // The count says what it counts. A bare "2" beside a heading was a number
+  // whose referent you had to guess at, and this rail had four of them.
+  if (ctxEl("sources-meta")) ctxEl("sources-meta").textContent = fileCountLabel(items.length);
   if (ctxEl("sources-selected")) {
     const chosen = contextState.selectedFileIDs.size;
     ctxEl("sources-selected").hidden = chosen === 0;
     ctxEl("sources-selected").textContent =
       `${chosen} selected for the next request`;
   }
-  if (ctxEl("context-count")) ctxEl("context-count").textContent = String(items.length);
+  if (ctxEl("context-sources")) ctxEl("context-sources").hidden = items.length === 0;
+  return items.length;
+}
+
+function fileCountLabel(count, truncated = false) {
+  return `${count}${truncated ? "+" : ""} file${count === 1 && !truncated ? "" : "s"}`;
 }
 
 // What the answer was actually grounded in. Until this existed the retrieval
@@ -864,11 +851,7 @@ function renderRetrieved() {
     name.className = "context-item-name";
     name.textContent = source.label;
 
-    const meta = document.createElement("span");
-    meta.className = "context-item-meta";
-    meta.textContent = formatRetrievalScore(source.score);
-
-    item.append(name, meta);
+    item.appendChild(buildContextLine(name, contextMeta(formatRetrievalScore(source.score))));
 
     // The passage itself, not a summary of it — a summary would be a second
     // thing that could be wrong about the thing being checked.
@@ -880,34 +863,37 @@ function renderRetrieved() {
     }
     ctxEl("retrieved-list").appendChild(item);
   }
-  if (ctxEl("retrieved-empty")) ctxEl("retrieved-empty").hidden = items.length > 0;
-  if (ctxEl("retrieved-meta")) ctxEl("retrieved-meta").textContent = String(items.length);
+  if (ctxEl("retrieved-meta")) {
+    ctxEl("retrieved-meta").textContent =
+      `${items.length} passage${items.length === 1 ? "" : "s"}`;
+  }
   // The whole section stands down when there is nothing retrieved: it is
   // per-turn transient, and an empty module whose body explains its own
   // emptiness costs more attention than it returns.
   if (ctxEl("context-retrieved")) ctxEl("context-retrieved").hidden = items.length === 0;
 }
 
-// What the agent produced: the workspace listing, newest first. Until L2
-// this panel could only explain its own emptiness; now local tool-loop turns
-// put real files here.
+// What the agent produced: the workspace listing, newest first. Cumulative,
+// not per-turn — a file written in the first turn and rewritten in the fifth
+// is one row here, which is the thing the inline work log cannot say.
+//
+// The rows this turn actually touched are marked, from the diff finishActiveTurn
+// already computes against the pre-turn snapshot. That mark is why the section
+// can be cumulative without burying today's work in last week's: the list is
+// the whole workspace and the eye still finds the two files that just changed.
 function renderDeliverables() {
   if (!ctxEl("deliverables-list")) return;
   const items = contextState.deliverables;
+  const log = contextState.lastTurnLog;
+  const fresh = new Set(
+    log && log.threadUUID === state.selectedThreadUUID
+      ? log.produced.map((file) => file.path)
+      : []
+  );
   ctxEl("deliverables-list").innerHTML = "";
   for (const file of items) {
-    const item = document.createElement("li");
-    item.className = "context-item";
-    const name = document.createElement("span");
-    name.className = "context-item-name";
-    name.textContent = file.path;
-    const meta = document.createElement("span");
-    meta.className = "context-item-meta";
-    meta.textContent = `${formatFileSize(file.size)} · ${formatMessageTime(file.modified_at)}`;
-    item.append(name, meta);
-    ctxEl("deliverables-list").appendChild(item);
+    ctxEl("deliverables-list").appendChild(buildDeliverableRow(file, fresh.has(file.path)));
   }
-  if (ctxEl("deliverables-empty")) ctxEl("deliverables-empty").hidden = items.length > 0;
   if (ctxEl("open-workspace-button")) {
     // Offered only when there is something to open, and only when the bridge
     // can actually open it — a button that silently fails is worse than none.
@@ -916,17 +902,82 @@ function renderDeliverables() {
       typeof window.desktopBridge?.agent?.revealWorkspace !== "function";
   }
   if (ctxEl("deliverables-meta")) {
-    ctxEl("deliverables-meta").textContent = contextState.deliverablesTruncated
-      ? `${items.length}+`
-      : String(items.length);
+    ctxEl("deliverables-meta").textContent = fileCountLabel(
+      items.length,
+      contextState.deliverablesTruncated
+    );
   }
+  if (ctxEl("context-deliverables")) ctxEl("context-deliverables").hidden = items.length === 0;
+}
+
+// One produced file. The directory is set in muted type ahead of the name so
+// the filename is what the eye lands on — in a 300px column a list of
+// "deck/section-two/outline.md" reads as a list of "deck/section-two/".
+//
+// The row is a button, and what it opens is the workspace FOLDER: the sidecar
+// exposes exactly one reveal route and it takes a thread uuid, no path. So the
+// row promises what it can keep — its title says folder — rather than
+// pretending to a per-file open that does not exist on this side of the
+// bridge. Same behaviour as the inline "Produced" rows, deliberately: one
+// gesture, one outcome, wherever the file is named.
+function buildDeliverableRow(file, isNew) {
+  const item = document.createElement("li");
+  item.className = "context-item";
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "context-line deliverable-row";
+  row.setAttribute("title", "Open the workspace folder");
+
+  const name = document.createElement("span");
+  name.className = "context-item-name";
+  const cut = file.path.lastIndexOf("/");
+  if (cut >= 0) {
+    const dir = document.createElement("span");
+    dir.className = "context-item-dir";
+    dir.textContent = file.path.slice(0, cut + 1);
+    name.appendChild(dir);
+  }
+  name.appendChild(document.createTextNode(file.path.slice(cut + 1)));
+
+  const meta = contextMeta(
+    `${formatFileSize(file.size)} · ${formatMessageTime(file.modified_at)}`
+  );
+  row.append(name, meta);
+  if (isNew) {
+    const tag = document.createElement("span");
+    tag.className = "context-tag";
+    tag.textContent = "New";
+    name.appendChild(tag);
+  }
+  row.addEventListener("click", () => {
+    const agent = window.desktopBridge?.agent;
+    if (state.selectedThreadUUID && typeof agent?.revealWorkspace === "function") {
+      void agent.revealWorkspace(state.selectedThreadUUID);
+    }
+  });
+  item.appendChild(row);
+  return item;
+}
+
+// The rail's whole empty state, in one line. Three sections each explaining
+// their own emptiness was most of what a 300px column showed on a thread that
+// had not run yet; a thread that has run needs no explanation at all.
+function renderContextEmpty(sourceCount) {
+  const note = ctxEl("context-empty-note");
+  if (!note) return;
+  note.hidden =
+    Boolean(state.activeTurn) ||
+    sourceCount > 0 ||
+    contextState.deliverables.length > 0 ||
+    contextState.retrieved.length > 0;
 }
 
 export function renderTaskContext() {
-  renderRunOverview();
-  renderSources();
+  renderRunLine();
+  const sourceCount = renderSources();
   renderRetrieved();
   renderDeliverables();
+  renderContextEmpty(sourceCount);
 }
 
 // Reads what the tool loop produced in this thread's workspace. Failure

@@ -2206,6 +2206,11 @@ export function finishActiveTurn(activeTurn, label, canceled) {
   const duration = activeTurn.startedAt ? formatTurnDuration(Date.now() - activeTurn.startedAt) : "";
   setTurnState(label, duration);
   updateComposerState();
+  // The rail's live line is the only thing it says about a run, so a settled
+  // turn has to put it down here rather than waiting on the workspace refresh
+  // below — which returns early on a bridge with no listWorkspaceFiles and
+  // would leave "Step 4 · Write" standing over a finished turn.
+  renderTaskContext();
   // Freeze the turn's work log. The in-place reconcile keeps the live strip's
   // nodes, but the fallback full repaint erases them — the survivor copy is
   // what re-hangs the story in that case, and re-folds it in both.
@@ -2231,6 +2236,10 @@ export function finishActiveTurn(activeTurn, label, canceled) {
       (f) => before.get(f.path) !== f.modified_at
     );
     attachLastTurnLog();
+    // The same diff marks the rows in the Produced section. It is computed
+    // after the listing was painted, so the panel has to be told again — the
+    // marks are the only reason a cumulative list stays readable.
+    renderTaskContext();
   });
 }
 

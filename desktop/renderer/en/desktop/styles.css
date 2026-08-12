@@ -2405,15 +2405,21 @@ textarea::placeholder {
   background: transparent;
 }
 
-/* --- Task context panel -----------------------------------------------------
-   The right rail answers "what is this run made of": which steps have run,
-   what it was given, what it produced. Everything here is derived from state
-   the renderer already holds or reads back from the sidecar — nothing is
-   displayed that the desktop cannot actually supply.
+/* --- Workspace panel --------------------------------------------------------
+   The right rail is the thread's materials ledger — produced files, attached
+   files, retrieved passages — and it says nothing about the run except one
+   live line. The run is narrated on the message that produced it, where the
+   steps sit beside the words they explain; a second copy over here disagreed
+   with the first about how many steps there had been.
 
-   It used to be four boxes stacked between four hairlines. The rules are gone;
-   the sections are held apart by space and named by a quiet label, which is
-   how the eye groups things anyway. */
+   Sections exist only when they have rows, so the rail's floor is one
+   sentence rather than three boxes about nothing. Rows are lines, not cards:
+   a background, an inset border and eight pixels of padding each meant three
+   files filled a 300px column, and alignment groups them just as well.
+
+   Everything here is derived from state the renderer already holds or reads
+   back from the sidecar — nothing is displayed that the desktop cannot
+   actually supply. */
 .context-panel {
   display: flex;
   flex-direction: column;
@@ -2427,7 +2433,6 @@ textarea::placeholder {
 .context-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--sp-2);
   padding: var(--sp-4) var(--sp-4) var(--sp-2);
 }
@@ -2436,12 +2441,6 @@ textarea::placeholder {
   color: hsl(var(--foreground));
   font-size: var(--fs-base);
   font-weight: var(--fw-strong);
-}
-
-.context-count {
-  color: hsl(var(--muted-foreground));
-  font-size: var(--fs-small);
-  font-variant-numeric: tabular-nums;
 }
 
 .context-section {
@@ -2466,63 +2465,124 @@ textarea::placeholder {
   font-variant-numeric: tabular-nums;
 }
 
-.run-steps,
+/* The live line: what the loop is on, while it is on it. Quiet by default and
+   coloured only when the run is blocked on the user, because that is the one
+   state a reader who has scrolled away cannot afford to miss. */
+.context-run {
+  display: flex;
+  /* Stacked, not side by side: a real target is a path, and a path beside a
+     label in a 300px column wraps into a second line that starts nowhere. */
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin: 0 var(--sp-4);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-control);
+  background: hsl(var(--muted) / 0.6);
+  font-size: var(--fs-small);
+}
+
+.context-run-label {
+  color: hsl(var(--foreground));
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.context-run-detail {
+  min-width: 0;
+  color: hsl(var(--muted-foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--fs-micro);
+  overflow-wrap: anywhere;
+}
+
+.context-run.is-blocked {
+  background: hsl(var(--warning) / 0.16);
+}
+
+.context-run.is-blocked .context-run-label {
+  color: hsl(var(--warning));
+}
+
 .context-list {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
+  gap: 1px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.run-step {
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
-  align-items: baseline;
-  gap: var(--sp-2);
-  color: hsl(var(--foreground));
-  font-size: var(--fs-small);
-}
-
-/* The marker carries the state, so it must not rely on colour alone. */
-.run-step-mark {
-  color: hsl(var(--muted-foreground));
-  font-size: var(--fs-small);
-  line-height: var(--lh-ui);
-}
-
-.run-step.is-complete .run-step-mark { color: hsl(var(--success)); }
-.run-step.is-active .run-step-mark { color: hsl(var(--info)); }
-.run-step.is-failed .run-step-mark { color: hsl(var(--destructive)); }
-.run-step.is-pending .run-step-label { color: hsl(var(--muted-foreground)); }
-
-.run-step-detail {
-  color: hsl(var(--muted-foreground));
-  font-size: var(--fs-micro);
-  text-align: right;
-  white-space: nowrap;
-}
-
+/* A row is a stack of one thing, unless it carries a passage under it. */
 .context-item {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: var(--sp-2);
-  border-radius: var(--r-control);
-  background: hsl(var(--card));
-  box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.8);
+}
+
+/* Name left, facts right, on one baseline. */
+.context-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  width: 100%;
+  min-width: 0;
+  padding: 3px 0;
 }
 
 .context-item-name {
+  min-width: 0;
   color: hsl(var(--foreground));
   font-size: var(--fs-small);
+  line-height: var(--lh-ui);
   overflow-wrap: anywhere;
 }
 
+/* The path a file sits at is context for its name, not part of it. */
+.context-item-dir {
+  color: hsl(var(--muted-foreground));
+}
+
 .context-item-meta {
+  flex-shrink: 0;
   color: hsl(var(--muted-foreground));
   font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A produced row opens the workspace folder — the only reveal the sidecar
+   offers — so it is a real button, styled back down to a line of text. */
+.deliverable-row {
+  height: auto;
+  margin: 0 calc(var(--sp-2) * -1);
+  padding: 3px var(--sp-2);
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  font-size: var(--fs-small);
+  font-weight: var(--fw-normal);
+  line-height: var(--lh-ui);
+  text-align: left;
+  /* Controls do not wrap; this one has to. Without the override the base
+     button rule's nowrap wins and a long path runs straight across its own
+     size and timestamp — the rail is 300px and real filenames are longer. */
+  white-space: normal;
+}
+
+.deliverable-row:hover {
+  background: hsl(var(--muted) / 0.7);
+}
+
+/* Which of these files this turn actually wrote. The listing is cumulative on
+   purpose; without the mark, today's two files would be lost in last week's
+   twenty. */
+.context-tag {
+  margin-left: var(--sp-2);
+  color: hsl(var(--success));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
 }
 
 .context-item.is-missing .context-item-name { color: hsl(var(--muted-foreground)); }
@@ -2556,6 +2616,7 @@ textarea::placeholder {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  min-width: 0;
   cursor: pointer;
 }
 
@@ -2572,15 +2633,22 @@ textarea::placeholder {
   font-size: var(--fs-micro);
 }
 
+/* Under the listing, not above it: the files are the section, and the folder
+   is what you reach for after reading them. */
 .context-action {
   height: var(--h-control-sm);
-  margin-bottom: var(--sp-2);
+  /* Pulled out by its own padding so its label starts on the same vertical
+     line as the filenames above it. */
+  margin: var(--sp-2) 0 0 calc(var(--sp-2) * -1);
   padding: 0 var(--sp-2);
   font-size: var(--fs-micro);
   font-weight: var(--fw-normal);
 }
 
+/* The rail's entire empty state. One sentence, sitting where the first
+   section would be. */
 .context-empty {
+  padding: 0 var(--sp-4);
   color: hsl(var(--muted-foreground));
   font-size: var(--fs-small);
   line-height: var(--lh-ui);
