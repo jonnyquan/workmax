@@ -260,6 +260,19 @@ function createDesktopBridge(deps) {
                 const result = await execute(deps, ROUTES.settingsPutAppearance, undefined, { appearance: choice });
                 return validateAppearanceSettingsResult(result);
             },
+            // Its own method rather than an options object on putAppearance: each
+            // call states one preference, and the route leaves the other alone. A
+            // combined call would have to express "do not touch the theme", which is
+            // exactly the distinction an absent field already makes on the wire.
+            putDensity: async (choice) => {
+                if (choice !== "compact" &&
+                    choice !== "standard" &&
+                    choice !== "comfortable") {
+                    throw new TypeError('settings.putDensity choice must be "compact", "standard" or "comfortable"');
+                }
+                const result = await execute(deps, ROUTES.settingsPutAppearance, undefined, { density: choice });
+                return validateAppearanceSettingsResult(result);
+            },
         },
         mind: {
             list: async () => {
@@ -356,6 +369,7 @@ function buildCapabilities() {
                     "putModelRoute",
                     "getModelCatalog",
                     "putAppearance",
+                    "putDensity",
                 ],
             },
             mind: {
@@ -531,12 +545,18 @@ function validateAppearanceSettingsResult(result) {
         throw new TypeError("settings appearance response is malformed");
     }
     const record = data;
-    assertExactKeys(record, ["appearance", "updated_at"], "settings appearance response");
+    assertExactKeys(record, ["appearance", "density", "updated_at"], "settings appearance response");
     const appearance = record.appearance;
     if (appearance !== "system" &&
         appearance !== "light" &&
         appearance !== "dark") {
         throw new TypeError("settings appearance value is malformed");
+    }
+    const density = record.density;
+    if (density !== "compact" &&
+        density !== "standard" &&
+        density !== "comfortable") {
+        throw new TypeError("settings density value is malformed");
     }
     if (typeof record.updated_at !== "string" ||
         record.updated_at === "" ||
@@ -545,7 +565,7 @@ function validateAppearanceSettingsResult(result) {
     }
     return {
         ...result,
-        data: { appearance, updated_at: record.updated_at },
+        data: { appearance, density, updated_at: record.updated_at },
     };
 }
 // The catalog decides what the user is offered and whether their existing

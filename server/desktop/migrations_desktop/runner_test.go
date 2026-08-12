@@ -24,7 +24,7 @@ func TestApplyRunsMessageCreatedOrderIndexMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	want := []string{"0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011"}
+	want := []string{"0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012"}
 	if len(applied) != len(want) {
 		t.Fatalf("applied: got %v, want %v", applied, want)
 	}
@@ -120,6 +120,43 @@ func TestApplyRunsMessageCreatedOrderIndexMigration(t *testing.T) {
 	wantMindColumns := "id,uid,name,description,role_hint,model_override,is_active,created_at,updated_at"
 	if got := strings.Join(mindColumns, ","); got != wantMindColumns {
 		t.Fatalf("mind columns=%s, want %s", got, wantMindColumns)
+	}
+
+	// 0012: density rides 0010's row, so the shell reads one row for both.
+	prefRows, err := db.Raw(`PRAGMA table_info(w_desktop_ui_preference)`).Rows()
+	if err != nil {
+		t.Fatalf("inspect ui preference columns: %v", err)
+	}
+	var prefColumns []string
+	for prefRows.Next() {
+		var ordinal, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := prefRows.Scan(&ordinal, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan ui preference column: %v", err)
+		}
+		prefColumns = append(prefColumns, name)
+	}
+	if err := prefRows.Close(); err != nil {
+		t.Fatalf("close ui preference column rows: %v", err)
+	}
+	// ADD COLUMN appends, so density lands after updated_at rather than beside
+	// the preference it sits with. The order is the migration's, not the
+	// author's, and pinning what SQLite actually does is the point.
+	if got := strings.Join(prefColumns, ","); got != "id,appearance,updated_at,density" {
+		t.Fatalf("ui preference columns=%s", got)
+	}
+	// The seeded row must already carry the default: a NULL here would reach
+	// the shell as an attribute value.
+	var seededDensity string
+	if err := db.Raw(`SELECT density FROM w_desktop_ui_preference WHERE id = 1`).Row().Scan(&seededDensity); err != nil {
+		t.Fatalf("scan seeded density: %v", err)
+	}
+	if seededDensity != "standard" {
+		t.Fatalf("seeded density=%q, want standard", seededDensity)
+	}
+	if err := db.Exec(`UPDATE w_desktop_ui_preference SET density = 'tight' WHERE id = 1`).Error; err == nil {
+		t.Fatal("the density CHECK accepted a value outside the vocabulary")
 	}
 
 	if err := db.Exec(`

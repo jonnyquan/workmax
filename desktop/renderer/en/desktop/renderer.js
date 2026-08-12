@@ -20,6 +20,9 @@ import {
   appearanceDarkButton,
   appearanceLightButton,
   appearanceSystemButton,
+  densityComfortableButton,
+  densityCompactButton,
+  densityStandardButton,
   attachButton,
   chatForm,
   chatInput,
@@ -306,6 +309,76 @@ function renderAppearanceChoice() {
 }
 
 applyTheme(readAppliedTheme());
+
+// --- Density -----------------------------------------------------------------
+//
+// The same three-state shape as appearance, arrived at the same way and for
+// the same reasons: the choice is machine-scoped, it is stored by the sidecar
+// (the only storage on this machine whose identity survives a relaunch), the
+// shell stamps it onto <html> while serving index.html so the first frame is
+// already right, and the default is the ABSENCE of the attribute.
+//
+// What it changes is one number. Every spacing token in the stylesheet is
+// `calc(step * var(--density))`, so three densities cost a variable rather than
+// three sets of rules that would drift apart. Type and control heights are
+// deliberately outside it — see the comment on the scale in styles.css.
+export const DENSITY_CHOICES = ["compact", "standard", "comfortable"];
+export let densityChoice = "standard";
+
+function readAppliedDensity() {
+  const root = document.documentElement;
+  const applied = root ? root.getAttribute("data-density") : null;
+  return DENSITY_CHOICES.includes(applied) ? applied : "standard";
+}
+
+function applyDensity(choice) {
+  densityChoice = DENSITY_CHOICES.includes(choice) ? choice : "standard";
+  const root = document.documentElement;
+  if (!root) return;
+  // Suppressed for the same reason a theme switch is: every padding in the
+  // window changes at once, and anything mid-transition would animate its way
+  // there instead of simply being there.
+  withoutColourTransitions(() => {
+    if (densityChoice === "standard") root.removeAttribute("data-density");
+    else root.setAttribute("data-density", densityChoice);
+  });
+}
+
+export function setDensity(choice) {
+  applyDensity(choice);
+  renderDensityChoice();
+  void persistDensity(densityChoice);
+}
+
+async function persistDensity(choice) {
+  const settings = window.desktopBridge?.settings;
+  if (!isRecord(settings) || typeof settings.putDensity !== "function") return;
+  try {
+    const result = parseDesktopBridgeResult(
+      await settings.putDensity(choice),
+      "settings.putDensity"
+    );
+    if (!result.ok) throw new Error("density not saved");
+  } catch {
+    setStatus("Density changed for now, but it could not be saved.", "error");
+  }
+}
+
+const DENSITY_BUTTONS = () => [
+  ["compact", densityCompactButton],
+  ["standard", densityStandardButton],
+  ["comfortable", densityComfortableButton],
+];
+
+function renderDensityChoice() {
+  for (const [choice, button] of DENSITY_BUTTONS()) {
+    if (!button) continue;
+    button.classList.toggle("active", choice === densityChoice);
+    button.setAttribute("aria-pressed", choice === densityChoice ? "true" : "false");
+  }
+}
+
+applyDensity(readAppliedDensity());
 
 export const state = {
   auth: null,
@@ -780,6 +853,7 @@ export function openSettingsPanel(section = state.settingsSection, opener = null
   settingsOverlay.hidden = false;
   showSettingsSection(section);
   renderAppearanceChoice();
+  renderDensityChoice();
   // The identity list only exists while this dialog does, so it is painted on
   // the way in rather than kept warm behind a closed door.
   renderLocalAccountArea();
@@ -2993,6 +3067,12 @@ for (const [choice, button] of APPEARANCE_BUTTONS()) {
     setTheme(choice);
   });
 }
+for (const [choice, button] of DENSITY_BUTTONS()) {
+  if (!button) continue;
+  button.addEventListener("click", () => {
+    setDensity(choice);
+  });
+}
 if (modelPreferredRoute) {
   modelPreferredRoute.addEventListener("change", () => {
     updateModelLocalFieldsVisibility();
@@ -3162,6 +3242,7 @@ if (localAccountDisconnectButton) {
 }
 
 renderAppearanceChoice();
+renderDensityChoice();
 // The account binding is shown in Settings, which can be opened before any
 // bridge has answered — so it starts out saying the true thing rather than
 // the markup's placeholder.

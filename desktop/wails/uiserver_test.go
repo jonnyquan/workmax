@@ -379,6 +379,39 @@ func TestUIIndexCarriesTheStoredAppearance(t *testing.T) {
 	if body := serve("/" + cap + "/"); strings.Contains(body.Body.String(), "onload") {
 		t.Fatalf("an unrecognised value reached the markup:\n%s", body.Body.String())
 	}
+
+	// Density rides the same read, for the same reason and with the same rules.
+	// The count matters as much as the markup: two preferences must not become
+	// two round trips on the path that produces the first frame.
+	asked = nil
+	appearance = `{"appearance":"dark","density":"compact","updated_at":"2026-08-11T00:00:00Z"}`
+	if body := serve("/" + cap + "/").Body.String(); !strings.Contains(
+		body, `<html lang="en" data-theme="dark" data-density="compact">`) {
+		t.Fatalf("served document did not carry both preferences:\n%s", body)
+	}
+	if len(asked) != 1 {
+		t.Fatalf("two preferences cost %d requests; the first frame pays for each one", len(asked))
+	}
+
+	// Either one alone, and neither is required for the other to be written.
+	appearance = `{"appearance":"system","density":"comfortable","updated_at":"2026-08-11T00:00:00Z"}`
+	if body := serve("/" + cap + "/").Body.String(); !strings.Contains(
+		body, `<html lang="en" data-density="comfortable">`) {
+		t.Fatalf("density must be written without a theme beside it:\n%s", body)
+	}
+
+	// "standard" is the absence of the attribute, exactly as "system" is.
+	appearance = `{"appearance":"system","density":"standard","updated_at":"2026-08-11T00:00:00Z"}`
+	if body := serve("/" + cap + "/").Body.String(); body != document {
+		t.Fatalf("the two defaults must serve the document untouched, got:\n%s", body)
+	}
+
+	// And the same refusal: this is the step that turns a stored string into
+	// an attribute, so it repeats the vocabulary rather than trusting one.
+	appearance = `{"density":"compact\" onload=\"alert(1)"}`
+	if body := serve("/" + cap + "/").Body.String(); strings.Contains(body, "onload") {
+		t.Fatalf("an unrecognised density reached the markup:\n%s", body)
+	}
 }
 
 // The window has to open even when the preference cannot be read. A theme is

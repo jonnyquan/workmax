@@ -16,6 +16,10 @@ import (
 	migrationsdesktop "server/desktop/migrations_desktop"
 )
 
+// The PUT body's fields are pointers because "not mentioned" and "empty" are
+// different answers; these keep the tests reading like the JSON they stand for.
+func ptr(s string) *string { return &s }
+
 func openUIPreferenceDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := "file:ui-preference-" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
@@ -39,6 +43,9 @@ func TestUIPreferenceStore_DefaultsToSystem(t *testing.T) {
 	if dto.Appearance != AppearanceSystem {
 		t.Fatalf("appearance = %q, want %q", dto.Appearance, AppearanceSystem)
 	}
+	if dto.Density != DensityStandard {
+		t.Fatalf("density = %q, want %q", dto.Density, DensityStandard)
+	}
 	if dto.UpdatedAt == "" {
 		t.Fatal("updated_at must be populated")
 	}
@@ -48,7 +55,7 @@ func TestUIPreferenceStore_DefaultsToSystem(t *testing.T) {
 // NEXT process, not just by the one that made it.
 func TestUIPreferenceStore_ChoiceSurvivesANewStore(t *testing.T) {
 	db := openUIPreferenceDB(t)
-	if _, err := NewUIPreferenceStore(db).Put(AppearanceSettingsPut{Appearance: AppearanceDark}); err != nil {
+	if _, err := NewUIPreferenceStore(db).Put(AppearanceSettingsPut{Appearance: ptr(AppearanceDark)}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	dto, err := NewUIPreferenceStore(db).Get()
@@ -63,7 +70,7 @@ func TestUIPreferenceStore_ChoiceSurvivesANewStore(t *testing.T) {
 func TestUIPreferenceStore_RejectsAnythingOutsideTheThreeStates(t *testing.T) {
 	store := NewUIPreferenceStore(openUIPreferenceDB(t))
 	for _, bad := range []string{"", "System", "midnight", `dark"><script>`, "light dark"} {
-		if _, err := store.Put(AppearanceSettingsPut{Appearance: bad}); err == nil {
+		if _, err := store.Put(AppearanceSettingsPut{Appearance: ptr(bad)}); err == nil {
 			t.Fatalf("Put(%q) was accepted; the vocabulary is closed", bad)
 		}
 	}
@@ -94,9 +101,81 @@ func TestUIPreferenceStore_UnrecognisedStoredValueReadsAsSystem(t *testing.T) {
 	}
 }
 
+// Two preferences on one row, and each write must leave the other exactly as
+// it was. Without this, changing the density on a dark machine would quietly
+// hand it back a light one — the failure mode a shared row invites.
+func TestUIPreferenceStore_EachPreferenceLeavesTheOtherAlone(t *testing.T) {
+	store := NewUIPreferenceStore(openUIPreferenceDB(t))
+	if _, err := store.Put(AppearanceSettingsPut{Appearance: ptr(AppearanceDark)}); err != nil {
+		t.Fatalf("Put appearance: %v", err)
+	}
+	dto, err := store.Put(AppearanceSettingsPut{Density: ptr(DensityCompact)})
+	if err != nil {
+		t.Fatalf("Put density: %v", err)
+	}
+	if dto.Appearance != AppearanceDark {
+		t.Fatalf("setting the density reset the theme to %q", dto.Appearance)
+	}
+	if dto.Density != DensityCompact {
+		t.Fatalf("density = %q, want compact", dto.Density)
+	}
+	back, err := store.Put(AppearanceSettingsPut{Appearance: ptr(AppearanceLight)})
+	if err != nil {
+		t.Fatalf("Put appearance again: %v", err)
+	}
+	if back.Density != DensityCompact {
+		t.Fatalf("setting the theme reset the density to %q", back.Density)
+	}
+
+	// A body that mentions neither is a caller sending the wrong shape, not a
+	// request for nothing to happen.
+	if _, err := store.Put(AppearanceSettingsPut{}); err == nil {
+		t.Fatal("an empty body was accepted")
+	}
+}
+
+func TestUIPreferenceStore_RejectsAnythingOutsideTheThreeDensities(t *testing.T) {
+	store := NewUIPreferenceStore(openUIPreferenceDB(t))
+	for _, bad := range []string{"", "Compact", "tight", `compact"><script>`, "0.8"} {
+		if _, err := store.Put(AppearanceSettingsPut{Density: ptr(bad)}); err == nil {
+			t.Fatalf("Put(density=%q) was accepted; the vocabulary is closed", bad)
+		}
+	}
+	dto, err := store.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if dto.Density != DensityStandard {
+		t.Fatalf("a rejected write changed the stored density to %q", dto.Density)
+	}
+}
+
+// The column CHECK refuses a value outside the vocabulary, which is the point
+// of having it. This asserts BOTH guards: that the database refuses the write,
+// and — if some build ever lets it through — that the value still reads back
+// as the default rather than reaching the shell as markup.
+func TestUIPreferenceStore_HostileStoredDensityNeverReachesTheShell(t *testing.T) {
+	db := openUIPreferenceDB(t)
+	hostile := `compact" onload="alert(1)`
+	err := db.Exec(`UPDATE w_desktop_ui_preference SET density = ? WHERE id = 1`, hostile).Error
+	dto, getErr := NewUIPreferenceStore(db).Get()
+	if getErr != nil {
+		t.Fatalf("Get: %v", getErr)
+	}
+	if dto.Density != DensityStandard {
+		t.Fatalf("density = %q, want standard (write refused: %v)", dto.Density, err)
+	}
+	if err == nil {
+		t.Fatal("the column CHECK accepted a value outside the vocabulary")
+	}
+}
+
 func TestDecodeAppearanceSettingsPut_IsStrict(t *testing.T) {
 	if _, err := DecodeAppearanceSettingsPut([]byte(`{"appearance":"dark"}`)); err != nil {
 		t.Fatalf("valid body rejected: %v", err)
+	}
+	if _, err := DecodeAppearanceSettingsPut([]byte(`{"density":"compact"}`)); err != nil {
+		t.Fatalf("density-only body rejected: %v", err)
 	}
 	for _, bad := range []string{
 		`{"appearance":"dark","theme":"dark"}`,
@@ -171,7 +250,21 @@ func TestAppearanceHTTP_GetPutAndValidation(t *testing.T) {
 	if got := get().Appearance; got != AppearanceDark {
 		t.Fatalf("appearance after PUT = %q, want dark", got)
 	}
+	if got := get().Density; got != DensityStandard {
+		t.Fatalf("default density = %q", got)
+	}
+	if status, body := put(`{"density":"comfortable"}`); status != http.StatusOK {
+		t.Fatalf("PUT comfortable = %d %s", status, body)
+	}
+	after := get()
+	if after.Density != DensityComfortable {
+		t.Fatalf("density after PUT = %q, want comfortable", after.Density)
+	}
+	if after.Appearance != AppearanceDark {
+		t.Fatalf("a density write reset the theme to %q", after.Appearance)
+	}
 	for _, bad := range []string{
+		`{"density":"tight"}`,
 		`{"appearance":"midnight"}`,
 		`{"appearance":"dark","extra":1}`,
 		`{}`,
@@ -182,6 +275,9 @@ func TestAppearanceHTTP_GetPutAndValidation(t *testing.T) {
 	}
 	if got := get().Appearance; got != AppearanceDark {
 		t.Fatalf("a rejected write changed the stored value to %q", got)
+	}
+	if got := get().Density; got != DensityComfortable {
+		t.Fatalf("a rejected write changed the stored density to %q", got)
 	}
 
 	// The route is not identity-scoped, and the perimeter still applies.

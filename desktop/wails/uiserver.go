@@ -250,7 +250,8 @@ func withAppearance(base string, renderer fs.FS, sidecarPort int, sidecarToken s
 			next.ServeHTTP(w, r)
 			return
 		}
-		document = applyAppearance(document, readAppearance(r.Context(), client, sidecar, sidecarToken))
+		appearance, density := readDisplay(r.Context(), client, sidecar, sidecarToken)
+		document = applyDisplay(document, appearance, density)
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		// Never cached: the document now carries a preference that changes,
@@ -265,48 +266,66 @@ func withAppearance(base string, renderer fs.FS, sidecarPort int, sidecarToken s
 	})
 }
 
-// readAppearance asks the sidecar which theme this machine chose. It answers
-// "" for anything it is not certain about, which the caller treats as "follow
-// the system".
-func readAppearance(ctx context.Context, client *http.Client, url, token string) string {
+// readDisplay asks the sidecar how this machine wants the window to look:
+// which theme, and how tightly packed. Both answer "" for anything this
+// function is not certain about, which the caller treats as "the document as
+// shipped is already right" — the stylesheet's own defaults.
+//
+// One request for both, because this runs while index.html is being served and
+// a second round trip would be spent on the first frame's latency. They live
+// in one row on the sidecar for the same reason.
+func readDisplay(ctx context.Context, client *http.Client, url, token string) (appearance, density string) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	req.Header.Set("X-Local-Token", token)
 	resp, err := client.Do(req)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return ""
+		return "", ""
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	var payload struct {
 		Appearance string `json:"appearance"`
+		Density    string `json:"density"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return ""
+		return "", ""
 	}
-	// The whitelist is repeated here rather than trusted from the sidecar,
-	// because this is the step that turns a stored string into markup.
+	// The vocabularies are repeated here rather than trusted from the sidecar,
+	// because this is the step that turns a stored string into markup. The
+	// defaults ("system", "standard") are deliberately absent from both lists:
+	// they are expressed by writing nothing.
 	switch payload.Appearance {
 	case "light", "dark":
-		return payload.Appearance
-	default:
-		return ""
+		appearance = payload.Appearance
 	}
+	switch payload.Density {
+	case "compact", "comfortable":
+		density = payload.Density
+	}
+	return appearance, density
 }
 
-// applyAppearance writes data-theme onto <html>. "system" — and every failure
-// upstream of it — leaves the document exactly as it was shipped, which is
-// what the stylesheet's media query already answers correctly.
-func applyAppearance(document []byte, appearance string) []byte {
-	if appearance != "light" && appearance != "dark" {
+// applyDisplay writes data-theme and data-density onto <html>. Each default —
+// and every failure upstream of it — leaves that attribute off entirely, which
+// is what the stylesheet already answers correctly on its own.
+func applyDisplay(document []byte, appearance, density string) []byte {
+	attributes := ""
+	if appearance == "light" || appearance == "dark" {
+		attributes += ` data-theme="` + appearance + `"`
+	}
+	if density == "compact" || density == "comfortable" {
+		attributes += ` data-density="` + density + `"`
+	}
+	if attributes == "" {
 		return document
 	}
 	anchor := []byte(appearanceAnchor)
@@ -314,7 +333,7 @@ func applyAppearance(document []byte, appearance string) []byte {
 	if index < 0 {
 		return document
 	}
-	replacement := []byte(`<html lang="en" data-theme="` + appearance + `">`)
+	replacement := []byte(`<html lang="en"` + attributes + `>`)
 	out := make([]byte, 0, len(document)+len(replacement)-len(anchor))
 	out = append(out, document[:index]...)
 	out = append(out, replacement...)

@@ -178,13 +178,24 @@
   --fw-medium: 500;
   --fw-strong: 600;
 
-  --sp-1: 4px;
-  --sp-2: 8px;
-  --sp-3: 12px;
-  --sp-4: 16px;
-  --sp-5: 24px;
-  --sp-6: 32px;
-  --sp-7: 48px;
+  /* Space is the one part of the scale the reader may retune, through a single
+     factor every step is multiplied by. That is the whole mechanism: because
+     nothing in this sheet states a spacing of its own, three densities cost
+     one number rather than a second set of rules to keep in step with the
+     first.
+     Type does not scale — a 13px row is 13px whatever the density is, and a
+     window that shrank its text to fit more in would be trading legibility for
+     rows, which is not what "compact" is asking for. Control heights do not
+     scale either: a button below about 24px stops being reliably hittable, and
+     that is a different question from how much air sits between rows. */
+  --density: 1;
+  --sp-1: calc(4px * var(--density));
+  --sp-2: calc(8px * var(--density));
+  --sp-3: calc(12px * var(--density));
+  --sp-4: calc(16px * var(--density));
+  --sp-5: calc(24px * var(--density));
+  --sp-6: calc(32px * var(--density));
+  --sp-7: calc(48px * var(--density));
 
   /* One radius per role. Controls are 6, surfaces are 10, floating panels are
      14, and anything genuinely pill-shaped is a pill. No fifth value. */
@@ -198,6 +209,20 @@
 
   --rail: 300px;
   --measure: 720px;
+}
+
+/* Standard is the absence of the attribute, exactly as "follow the system" is
+   the absence of data-theme: the sheet above already IS the standard answer,
+   so the default costs no markup and cannot be got wrong by a shell that
+   failed to read the database. The shell writes these while it serves
+   index.html, so the first frame is already at the right density rather than
+   being corrected into it. */
+:root[data-density="compact"] {
+  --density: 0.8;
+}
+
+:root[data-density="comfortable"] {
+  --density: 1.25;
 }
 
 :root {
@@ -886,6 +911,15 @@ textarea::placeholder {
 
 .thread-button {
   display: grid;
+  /* The base button rule centres its content, which is right for a button
+     with a word in it and wrong for one holding a title over a metadata line.
+     Changing `display` did not undo it — `justify-content: center` centres the
+     grid's single column just as happily as it centred a flex row — so every
+     conversation title sat at a different left edge from the one above it,
+     ragged down the whole rail. Found by measuring the rendered rows, because
+     "slightly different indent per row" is exactly what an eye forgives and a
+     layout should not do. */
+  justify-content: stretch;
   gap: 2px;
   width: 100%;
   height: auto;

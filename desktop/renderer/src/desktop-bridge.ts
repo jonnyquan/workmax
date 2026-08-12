@@ -203,6 +203,13 @@ export interface ModelRouteSettingsPut {
 export type AppearanceChoice = "system" | "light" | "dark";
 
 /**
+ * The three densities. "standard" is the default and, like "system" above, is
+ * the absence of the attribute rather than a third value written into it.
+ * Density scales spacing only — type and control heights are outside it.
+ */
+export type DensityChoice = "compact" | "standard" | "comfortable";
+
+/**
  * The machine's appearance preference. Machine-scoped rather than
  * per-identity: it describes this screen, not who is signed in. There is
  * deliberately no `getAppearance` here — the shell resolves the preference
@@ -211,6 +218,7 @@ export type AppearanceChoice = "system" | "light" | "dark";
  */
 export interface AppearanceSettings {
   appearance: AppearanceChoice;
+  density: DensityChoice;
   updated_at: string;
 }
 
@@ -748,6 +756,9 @@ export interface DesktopBridge {
     getModelCatalog: () => Promise<DesktopBridgeResult<ModelCatalog>>;
     putAppearance: (
       choice: AppearanceChoice
+    ) => Promise<DesktopBridgeResult<AppearanceSettings>>;
+    putDensity: (
+      choice: DensityChoice
     ) => Promise<DesktopBridgeResult<AppearanceSettings>>;
   };
   mind: {
@@ -1439,6 +1450,28 @@ export function createDesktopBridge(
         );
         return validateAppearanceSettingsResult(result);
       },
+      // Its own method rather than an options object on putAppearance: each
+      // call states one preference, and the route leaves the other alone. A
+      // combined call would have to express "do not touch the theme", which is
+      // exactly the distinction an absent field already makes on the wire.
+      putDensity: async (choice) => {
+        if (
+          choice !== "compact" &&
+          choice !== "standard" &&
+          choice !== "comfortable"
+        ) {
+          throw new TypeError(
+            'settings.putDensity choice must be "compact", "standard" or "comfortable"'
+          );
+        }
+        const result = await execute<unknown>(
+          deps,
+          ROUTES.settingsPutAppearance,
+          undefined,
+          { density: choice }
+        );
+        return validateAppearanceSettingsResult(result);
+      },
     },
     mind: {
       list: async () => {
@@ -1546,6 +1579,7 @@ function buildCapabilities(): DesktopBridgeCapabilities {
           "putModelRoute",
           "getModelCatalog",
           "putAppearance",
+          "putDensity",
         ],
       },
       mind: {
@@ -1770,7 +1804,7 @@ function validateAppearanceSettingsResult(
   const record = data as Record<string, unknown>;
   assertExactKeys(
     record,
-    ["appearance", "updated_at"],
+    ["appearance", "density", "updated_at"],
     "settings appearance response"
   );
   const appearance = record.appearance;
@@ -1781,6 +1815,14 @@ function validateAppearanceSettingsResult(
   ) {
     throw new TypeError("settings appearance value is malformed");
   }
+  const density = record.density;
+  if (
+    density !== "compact" &&
+    density !== "standard" &&
+    density !== "comfortable"
+  ) {
+    throw new TypeError("settings density value is malformed");
+  }
   if (
     typeof record.updated_at !== "string" ||
     record.updated_at === "" ||
@@ -1790,7 +1832,7 @@ function validateAppearanceSettingsResult(
   }
   return {
     ...result,
-    data: { appearance, updated_at: record.updated_at as string },
+    data: { appearance, density, updated_at: record.updated_at as string },
   };
 }
 

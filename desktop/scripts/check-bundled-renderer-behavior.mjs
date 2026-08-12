@@ -284,6 +284,63 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   assert.doesNotMatch(rendererSource, /sidebarExpandButton/u);
 }
 
+// --- Density is one number, or it is three sets of rules that drift ----------
+//
+// The mechanism only pays for itself if EVERY spacing step goes through the
+// factor and nothing in the sheet states a spacing of its own. A single
+// hard-coded padding is not a small inconsistency here — it is a row that
+// stays put while everything around it moves.
+{
+  for (const step of [1, 2, 3, 4, 5, 6, 7]) {
+    assert.match(
+      rendererCSS,
+      new RegExp(`--sp-${step}: calc\\(\\d+px \\* var\\(--density\\)\\);`, "u"),
+      `spacing step ${step} must scale with the density factor`,
+    );
+  }
+  assert.match(rendererCSS, /:root\[data-density="compact"\]\s*\{\s*--density:\s*0?\.\d+;/u);
+  assert.match(rendererCSS, /:root\[data-density="comfortable"\]\s*\{\s*--density:\s*1\.\d+;/u);
+  // Standard is the absence of the attribute, exactly as "system" is for the
+  // theme. A third selector here would be a default that a shell which failed
+  // to read the database could get wrong.
+  assert.doesNotMatch(rendererCSS, /\[data-density="standard"\]/u);
+  // Type and control heights sit outside it deliberately: shrinking text to
+  // fit more rows in trades legibility for density, and a button under about
+  // 24px stops being reliably hittable.
+  for (const fixed of ["--fs-base", "--fs-read", "--h-control", "--h-control-sm"]) {
+    const declared = rendererCSS.match(new RegExp(`${fixed}: ([^;]+);`, "u"));
+    assert.ok(declared, `${fixed} must be declared`);
+    assert.doesNotMatch(
+      declared[1],
+      /var\(--density\)/u,
+      `${fixed} must not scale with density`,
+    );
+  }
+}
+
+// --- A button that stopped being a button has to say so completely -----------
+//
+// The base rule centres a button's content, which is right for one holding a
+// word and wrong for one holding a title over a metadata line. Changing
+// `display` to grid does not undo it: justify-content: center centres the
+// grid's single column exactly as happily as it centred a flex row, so every
+// conversation title sat at its own left edge and the rail read ragged.
+//
+// This pins the pair, because either half alone is misleading — the base rule
+// is not wrong, and the reset is meaningless without it.
+{
+  assert.match(
+    rendererCSS,
+    /^button \{[\s\S]*?justify-content: center;/mu,
+    "the base button rule centres its content; the reset below exists because of it",
+  );
+  assert.match(
+    rendererCSS,
+    /\.thread-button \{[\s\S]*?justify-content: stretch;/u,
+    "a thread row holds two stacked lines and must not inherit the centring",
+  );
+}
+
 // --- Three habits that only hold if nothing is allowed to opt out ------------
 //
 // Each of these is one rule that every site has to actually use. The value is
@@ -8528,7 +8585,11 @@ async function testAppearanceIsThreeStateAndPersisted() {
     settings: {
       async putAppearance(choice) {
         saved.push(choice);
-        return typedSuccess({ appearance: choice, updated_at: "2026-08-11T00:00:00Z" });
+        return typedSuccess({
+          appearance: choice,
+          density: "standard",
+          updated_at: "2026-08-11T00:00:00Z",
+        });
       },
     },
   });
@@ -8638,6 +8699,90 @@ async function testAppearanceIsThreeStateAndPersisted() {
     .click();
   await settle();
   assert.equal(noBridge.document.documentElement.getAttribute("data-theme"), "dark");
+}
+
+// --- Density is the same shape as appearance, deliberately -------------------
+//
+// Machine-scoped, stored by the sidecar, stamped onto <html> by the shell
+// before first paint, default expressed as the ABSENCE of the attribute. It is
+// worth checking it really is the same shape, because the value of a second
+// preference that behaves like the first is entirely in the "like the first".
+async function testDensityIsThreeStateAndPersisted() {
+  const saved = [];
+  const { document } = await runRenderer(undefined, {
+    settings: {
+      async putDensity(choice) {
+        saved.push(choice);
+        return typedSuccess({
+          appearance: "system",
+          density: choice,
+          updated_at: "2026-08-11T00:00:00Z",
+        });
+      },
+    },
+  });
+
+  assert.equal(
+    document.documentElement.getAttribute("data-density"),
+    null,
+    "a machine that has never been asked packs at the standard density",
+  );
+
+  const segment = (id) => {
+    const button = document.byId.get(id);
+    assert.ok(button, `the density control must offer ${id}`);
+    return button;
+  };
+  const marked = () =>
+    ["density-compact", "density-standard", "density-comfortable"]
+      .filter((id) => segment(id).classList.contains("active"));
+
+  assert.deepEqual(marked(), ["density-standard"], "the live density names itself");
+
+  segment("density-compact").click();
+  assert.equal(document.documentElement.getAttribute("data-density"), "compact");
+  assert.deepEqual(marked(), ["density-compact"]);
+  assert.equal(
+    segment("density-compact").getAttribute("aria-pressed"),
+    "true",
+    "a segmented control has to say which segment is on, not only look like it",
+  );
+  await settle();
+  assert.deepEqual(saved, ["compact"], "the choice has to outlive the window");
+
+  // Standard removes the attribute rather than writing it: the stylesheet
+  // already IS the standard answer, and a value meaning "the default" would
+  // have to be excluded by hand from every guard that keys on this attribute.
+  segment("density-standard").click();
+  assert.equal(document.documentElement.getAttribute("data-density"), null);
+  await settle();
+  assert.deepEqual(saved, ["compact", "standard"]);
+
+  // Changing the density must not disturb the theme — they share a row on the
+  // sidecar, and this is the renderer half of that guarantee.
+  const themed = await runRenderer(undefined, {
+    settings: {
+      async putDensity() {
+        return typedSuccess({
+          appearance: "dark",
+          density: "comfortable",
+          updated_at: "2026-08-11T00:00:00Z",
+        });
+      },
+    },
+  }, { theme: "dark" });
+  themed.document.byId.get("density-comfortable").click();
+  await settle();
+  assert.equal(themed.document.documentElement.getAttribute("data-theme"), "dark");
+  assert.equal(themed.document.documentElement.getAttribute("data-density"), "comfortable");
+
+  // A shell too old to have the route still switches; it just will not
+  // remember. Saying so on every click would be noise about a build the reader
+  // is not running.
+  const noBridge = await runRenderer(undefined);
+  noBridge.document.byId.get("density-compact").click();
+  await settle();
+  assert.equal(noBridge.document.documentElement.getAttribute("data-density"), "compact");
 }
 
 // --- Syntax highlighting -----------------------------------------------------
@@ -9361,6 +9506,7 @@ await testConnectedAccountIsShownAsABindingOnTheLocalIdentity();
 await testSignedOutWithoutAModelKeepsTheWorkbench();
 await testAssistantMarkdownIsRenderedAsElements();
 await testAppearanceIsThreeStateAndPersisted();
+await testDensityIsThreeStateAndPersisted();
 await testCodeTokenizerClassifiesTheLanguagesWeShip();
 await testCodeBlocksArePaintedWithoutMarkup();
 await testRetrievedContextIsShownAndResetPerTurn();
