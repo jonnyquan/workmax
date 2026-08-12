@@ -134,10 +134,21 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
     /\.shell:has\(#thread-panel\[hidden\]\)\s*\.context-panel\s*\{\s*display:\s*none;/u,
     "with no conversation selected the context column must fold away, not draw an empty scaffold",
   );
+  // And the track it leaves behind goes to zero — but ONLY when the mind is
+  // not the panel in it. This used to be a two-column grid-template-columns,
+  // which was correct while the column had one occupant and became a bug the
+  // moment it had two: a template that drops track 3 folds the mind away with
+  // the workspace, and a mind is not a property of the conversation. The width
+  // variable can be guarded; the template could not.
   assert.match(
     rendererCSS,
-    /\.shell:has\(#thread-panel\[hidden\]\)\s*\{\s*grid-template-columns:\s*var\(--rail-left\) minmax\(0, 1fr\);/u,
-    "and the shell must become a two-column grid when it does, or the column leaves a gap",
+    /:root:not\(\[data-right-panel="mind"\]\)\s*\.shell:has\(#thread-panel\[hidden\]\)\s*\{\s*--rail-right:\s*0px;/u,
+    "with no conversation the workspace half of the column must collapse — and only that half",
+  );
+  assert.doesNotMatch(
+    rendererCSS,
+    /\.shell:has\(#thread-panel\[hidden\]\)\s*\{\s*grid-template-columns/u,
+    "a template swap cannot express 'fold this column unless the mind is in it'",
   );
   // The narrow-window fold sets the rail width through --rail rather than a
   // second grid-template-columns: the :has() rule above outranks a bare
@@ -149,7 +160,7 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
     "the narrow-window rails must be set via --rail, not a lower-specificity grid declaration",
   );
 
-  // The two MANUAL folds obey the same constraint, and it is sharper for them:
+  // The MANUAL folds obey the same constraint, and it is sharper for them:
   // they are keyed off an attribute on <html>, which is (0,2,0) plus a
   // descendant — always less specific than :has(#thread-panel[hidden]), which
   // carries an id. So each one takes its column to zero through the custom
@@ -161,7 +172,7 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   );
   for (const [selector, property] of [
     [':root\\[data-sidebar="collapsed"\\] \\.shell', "--rail-left"],
-    [':root\\[data-context-panel="hidden"\\] \\.shell', "--rail-right"],
+    [':root\\[data-right-panel="none"\\] \\.shell', "--rail-right"],
   ]) {
     assert.match(
       rendererCSS,
@@ -176,17 +187,44 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   );
   assert.match(
     rendererCSS,
-    /:root\[data-context-panel="hidden"\]\s*\.context-panel\s*\{\s*display:\s*none;/u,
-    "same for the workspace column",
+    /:root\[data-right-panel="none"\]\s*\.right-rail\s*\{\s*display:\s*none;/u,
+    "same for the right column, whichever panel was in it",
+  );
+  // One column, one panel. Two rules, and they have to be a PAIR: either alone
+  // leaves a state where both panels are in track 3 at once, stacked on top of
+  // each other in a 300px column.
+  assert.match(
+    rendererCSS,
+    /:root\[data-right-panel="mind"\]\s*\.context-panel\s*\{\s*display:\s*none;/u,
+    "showing the mind must put the workspace panel away",
+  );
+  assert.match(
+    rendererCSS,
+    /:root:not\(\[data-right-panel="mind"\]\)\s*\.mind-panel\s*\{\s*display:\s*none;/u,
+    "and the mind is in the column only while it is the one asked for",
   );
   // Below 1180px the workspace column is not a choice — the window cannot
-  // afford it — so the button that would pretend otherwise goes with it.
+  // afford it — so the button that would pretend otherwise goes with it. The
+  // mind survives the same query: nobody asks for the workspace panel, it is
+  // simply there, but the mind is on screen only because somebody pressed the
+  // brain, and "not at this size" is not an answer to that — on a 900px window
+  // it would mean no way to create, switch or teach a mind at all.
   const narrow = rendererCSS.match(/@media \(max-width: 1180px\) \{([\s\S]*?)\n\}/u);
   assert.ok(narrow, "the narrow-window fold must still exist");
   assert.match(
     narrow[1],
     /#context-panel-button\s*\{\s*display:\s*none;/u,
     "a toggle that cannot change what is on screen is worse than no toggle",
+  );
+  assert.match(
+    narrow[1],
+    /:root:not\(\[data-right-panel="mind"\]\)\s*\.shell\s*\{\s*--rail-right:\s*0px;/u,
+    "the narrow-window fold takes the workspace column, not an explicitly opened mind",
+  );
+  assert.doesNotMatch(
+    narrow[1],
+    /\n\s*\.mind-panel\s*\{\s*display:\s*none;/u,
+    "the mind must stay reachable at every width this window can be resized to",
   );
 }
 
@@ -555,6 +593,11 @@ class FakeElement {
       ctrlKey: init.ctrlKey ?? false,
       repeat: init.repeat ?? false,
       preventDefault: init.preventDefault ?? (() => {}),
+      // The stub has no bubbling, so an element handler here is already the
+      // only one that runs. It is provided anyway because the code under test
+      // calls it: a handler that stops an event from reaching the document
+      // must be able to say so without the stub throwing at it.
+      stopPropagation: init.stopPropagation ?? (() => {}),
     });
   }
 
@@ -2530,8 +2573,41 @@ async function testEscapeStopsAStreamingTurn() {
   assert.equal(document.byId.get("quick-switcher").hidden, true);
   assert.equal(cancels.length, 0, "closing the palette must not stop the turn");
 
+  // The mind panel is the other surface Escape has to share the key with, and
+  // it shares it differently: it is a COLUMN, not an overlay, so it is meant to
+  // stay open beside a running turn for as long as the reader wants it. That
+  // makes "Escape closes the mind" wrong as a global rule — it would disarm the
+  // stop key for the entire window the moment the column was left open.
+  const root = document.documentElement;
+  const brain = document.byId.get("mind-button");
+  brain.click();
+  await settle();
+  assert.equal(root.getAttribute("data-right-panel"), "mind", "precondition: the panel is up");
+
+  // From inside the panel, Escape dismisses the panel and goes no further —
+  // the turn must not be stopped on the way out.
+  brain.focused = false;
+  document.byId.get("mind-panel").dispatch("keydown", { key: "Escape" });
+  await settle();
+  assert.equal(
+    root.getAttribute("data-right-panel"),
+    null,
+    "Escape inside the panel is the same act as pressing the icon: the column goes back",
+  );
+  assert.equal(brain.focused, true, "and hands focus back to the icon it came from");
+  assert.equal(cancels.length, 0, "dismissing the panel must not stop the turn");
+
+  // With the panel open, Escape anywhere else is still the stop key, and the
+  // column the reader chose to keep stays where it is.
+  brain.click();
+  await settle();
   document.dispatchKey({ key: "Escape" });
   await settle();
+  assert.equal(
+    root.getAttribute("data-right-panel"),
+    "mind",
+    "Escape elsewhere must not fold a column the reader chose to keep",
+  );
   assert.deepEqual(Array.from(cancels), ["esc-turn"], "Escape must stop the turn");
 }
 
@@ -5392,15 +5468,16 @@ async function testColumnFolds() {
   document.dispatchKey({ key: "\\", metaKey: true });
   assert.equal(root.getAttribute("data-sidebar"), null, "and unfolds it");
 
-  // The workspace column. One button, because it does not live in the column
-  // it hides — and a label that says which way it goes, since the icon cannot.
+  // The right column. Two buttons for one column, because the column has two
+  // occupants — and each button is a toggle of ITS panel, so the third state
+  // (nothing in the column) is what you get by turning the current one off.
   const panel = document.byId.get("context-panel-button");
-  assert.equal(root.getAttribute("data-context-panel"), null, "the workspace column starts open");
+  assert.equal(root.getAttribute("data-right-panel"), null, "the workspace panel starts in it");
   assert.equal(panel.getAttribute("aria-expanded"), "true");
   assert.equal(panel.getAttribute("aria-label"), "Hide workspace panel");
 
   panel.click();
-  assert.equal(root.getAttribute("data-context-panel"), "hidden");
+  assert.equal(root.getAttribute("data-right-panel"), "none");
   assert.equal(panel.getAttribute("aria-expanded"), "false");
   assert.equal(panel.getAttribute("aria-label"), "Show workspace panel");
   assert.equal(panel.getAttribute("title"), "Show workspace panel");
@@ -5413,14 +5490,85 @@ async function testColumnFolds() {
   walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[0].click();
   await settle();
   assert.equal(
-    root.getAttribute("data-context-panel"),
-    "hidden",
+    root.getAttribute("data-right-panel"),
+    "none",
     "a manual close survives opening a conversation",
   );
 
   panel.click();
-  assert.equal(root.getAttribute("data-context-panel"), null, "and pressing again brings it back");
+  assert.equal(root.getAttribute("data-right-panel"), null, "and pressing again brings it back");
 }
+
+// The right column holds one panel at a time, and the two that share it are
+// not the same kind of thing: the workspace projects the open conversation,
+// the mind belongs to the identity and outlives every conversation. What is
+// checked here is that one column really is one column — that the two switches
+// displace each other rather than stacking — and that the mind's independence
+// from the conversation survives being moved into a column that folds with it.
+async function testRightColumnHoldsOnePanelAtATime() {
+  const harness = mindBridge();
+  const { document } = await runRenderer(harness.bridge, harness.desktopBridge);
+  await settle();
+
+  const root = document.documentElement;
+  const brain = document.byId.get("mind-button");
+  const workspace = document.byId.get("context-panel-button");
+
+  // This harness has no conversations at all, so the workspace panel has
+  // nothing to project — and the mind is still one press away. That is the
+  // whole reason the mind is exempt from the fold the workspace obeys.
+  assert.equal(root.getAttribute("data-right-panel"), null);
+  assert.equal(brain.getAttribute("aria-expanded"), "false");
+  assert.equal(brain.getAttribute("aria-label"), "Show mind panel");
+
+  brain.click();
+  await settle();
+  assert.equal(root.getAttribute("data-right-panel"), "mind", "the brain puts the mind in the column");
+  assert.equal(brain.getAttribute("aria-expanded"), "true");
+  assert.equal(brain.getAttribute("aria-label"), "Hide mind panel");
+  assert.equal(brain.getAttribute("title"), "Hide mind panel");
+  assert.ok(harness.calls.list > 0, "and showing it reads the roster from the sidecar");
+  assert.equal(
+    workspace.getAttribute("aria-expanded"),
+    "false",
+    "the other switch must say its panel is no longer the one in the column",
+  );
+  // Focus follows it in: the panel is the last thing in the DOM and its switch
+  // is in the title bar, so a keyboard reader would otherwise have to walk the
+  // rail and the whole transcript to reach what they just asked for.
+  assert.equal(document.byId.get("mind-panel").focused, true);
+
+  // The other switch swaps the occupant rather than stacking a second panel.
+  workspace.click();
+  assert.equal(root.getAttribute("data-right-panel"), null, "the workspace takes the column back");
+  assert.equal(brain.getAttribute("aria-expanded"), "false");
+  assert.equal(workspace.getAttribute("aria-expanded"), "true");
+
+  // Pressing the brain again is an UNDO of pressing it, not a fold: the column
+  // goes back to what the mind interrupted. Otherwise glancing at the mind
+  // would quietly close a workspace column the reader never asked to close.
+  brain.click();
+  await settle();
+  brain.click();
+  assert.equal(
+    root.getAttribute("data-right-panel"),
+    null,
+    "putting the mind away hands the column back to what it was showing",
+  );
+
+  // And what it hands back can be nothing at all — a reader who had already
+  // folded the column must not find it reopened by a trip to the mind.
+  workspace.click();
+  assert.equal(root.getAttribute("data-right-panel"), "none", "precondition: folded");
+  brain.click();
+  await settle();
+  assert.equal(root.getAttribute("data-right-panel"), "mind");
+  brain.click();
+  assert.equal(root.getAttribute("data-right-panel"), "none", "and folded is what it goes back to");
+  assert.equal(brain.getAttribute("aria-expanded"), "false");
+  assert.equal(workspace.getAttribute("aria-expanded"), "false");
+}
+
 
 // The rail's search icon opens the one palette, and does not grow a second
 // search of its own on the way.
@@ -9218,13 +9366,18 @@ async function testMindPanelShowsRealAnatomyAndTeaches() {
   const { document } = await runRenderer(harness.bridge, harness.desktopBridge);
   await settle();
 
-  // Closed until asked for. The mind is a long-lived thing, not a panel that
-  // greets you.
-  assert.equal(document.byId.get("mind-overlay").hidden, true);
+  // Not in the column until asked for. The mind is a long-lived thing, not a
+  // panel that greets you — and the right column's default occupant is the
+  // workspace ledger.
+  assert.equal(document.documentElement.getAttribute("data-right-panel"), null);
 
   document.byId.get("mind-button").click();
   await settle();
-  assert.equal(document.byId.get("mind-overlay").hidden, false, "the icon opens the overlay");
+  assert.equal(
+    document.documentElement.getAttribute("data-right-panel"),
+    "mind",
+    "the icon puts the mind in the right column",
+  );
   assert.ok(harness.calls.list > 0, "opening reads the roster from the sidecar");
   assert.deepEqual(harness.calls.status, [MIND_A], "and the active mind's real status");
 
@@ -9291,9 +9444,20 @@ async function testMindPanelShowsRealAnatomyAndTeaches() {
   );
   assert.equal(document.byId.get("mind-feed-title").value, "", "a taught material clears its form");
 
-  // Escape closes it, the same grammar as Settings and the palette.
-  document.dispatchKey({ key: "Escape" });
-  assert.equal(document.byId.get("mind-overlay").hidden, true);
+  // A half-written material survives the column being folded away and brought
+  // back. The panel used to be an overlay you dismissed on purpose; it is a
+  // column now, folded with the same title-bar icon that shows it, and a panel
+  // that eats a draft when it is folded is a panel nobody folds twice.
+  document.byId.get("mind-feed-title").value = "Half a thought";
+  document.byId.get("mind-button").click();
+  await settle();
+  document.byId.get("mind-button").click();
+  await settle();
+  assert.equal(
+    document.byId.get("mind-feed-title").value,
+    "Half a thought",
+    "folding the column away must not throw away what was being typed into it",
+  );
 }
 
 async function testMindSwitchingReReadsTheStatus() {
@@ -9425,6 +9589,9 @@ async function testMindFeedIsRefusedWithoutLocalRecall() {
   );
 }
 
+// Registered here rather than beside the other fold tests: it drives the mind
+// bridge, whose fixtures are declared in this section.
+await testRightColumnHoldsOnePanelAtATime();
 await testMindPanelShowsRealAnatomyAndTeaches();
 await testMindSwitchingReReadsTheStatus();
 await testMindIconMovesOnlyForRealMentalActivity();

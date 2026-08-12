@@ -394,180 +394,6 @@
       </div>
     </div>
 
-    <!-- The mind (心智体).
-         One whole overlay rather than a popover under the icon, because what
-         is inside is a STRUCTURE — a brain, a cerebellum, a memory, and the
-         relationships between them — and a structure read through a 320px
-         slot is a list with a diagram glued on top. It borrows the settings
-         dialog's dismissal grammar exactly (backdrop, Escape, one ✕) instead
-         of inventing a third one.
-
-         It is deliberately NOT about the turn that happens to be running. A
-         mind is the long-lived thing: which model it thinks with, which
-         skills it practices, what it has been taught. A conversation passes
-         through it; it does not define it. -->
-    <div id="mind-overlay" class="overlay" hidden>
-      <div
-        class="mind-panel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="mind-heading"
-      >
-        <header class="mind-head">
-          <div class="mind-head-copy">
-            <h2 id="mind-heading">Mind</h2>
-            <p id="mind-subtitle" class="mind-subtitle">
-              What this identity thinks with, and what it has been taught.
-            </p>
-          </div>
-          <button
-            id="mind-close-button"
-            class="icon-button ghost"
-            type="button"
-            aria-label="Close mind"
-          >✕</button>
-        </header>
-
-        <div class="mind-body">
-          <!-- The switcher. A mind is a persona over ONE shared knowledge
-               base, so switching is a change of viewpoint, not of library —
-               which is why this is a plain list and not a workspace-level
-               account switch with warnings attached. -->
-          <section class="mind-section" aria-labelledby="mind-roster-heading">
-            <h3 id="mind-roster-heading" class="mind-section-title">Minds</h3>
-            <ol id="mind-roster" class="mind-roster"></ol>
-            <form id="mind-create-form" class="mind-create-form" novalidate>
-              <input
-                id="mind-create-name"
-                type="text"
-                autocomplete="off"
-                maxlength="64"
-                placeholder="New mind"
-                aria-label="New mind name"
-              />
-              <button id="mind-create-button" type="submit">Add</button>
-            </form>
-            <p id="mind-roster-error" class="form-error" role="alert" hidden></p>
-          </section>
-
-          <!-- The anatomy. The diagram is the map and the three cards under
-               it are the territory: every number below is read from the
-               sidecar, never inferred from the drawing. -->
-          <section class="mind-section" aria-labelledby="mind-anatomy-heading">
-            <h3 id="mind-anatomy-heading" class="mind-section-title">
-              Anatomy
-              <span id="mind-anatomy-meta" class="mind-section-meta"></span>
-            </h3>
-            <figure class="mind-figure">
-              <svg
-                class="mind-diagram"
-                viewBox="0 0 320 176"
-                role="img"
-                aria-labelledby="mind-diagram-title"
-                focusable="false"
-              >
-                <title id="mind-diagram-title">
-                  A mind: a brain that reasons, a cerebellum of practised
-                  skills, and a memory of what it has been taught.
-                </title>
-                <!-- Cerebrum: the same two paths the title-bar icon draws,
-                     scaled up. One drawing, two sizes — so the icon and the
-                     diagram cannot drift into two different ideas of a brain. -->
-                <g class="mind-diagram-part" data-part="brain" transform="translate(66 8) scale(5.4)">
-                  <path d="M6.4 2.2c1 0 1.6.5 1.6 1.2 0-.7.6-1.2 1.6-1.2 1.6 0 2.7 1.1 2.7 2.5 0 .5-.1.9-.3 1.2.7.4 1.1 1.1 1.1 2 0 .8-.4 1.5-1 1.9.1.3.2.6.2.9 0 1.3-1.1 2.2-2.5 2.2-1 0-1.8-.5-1.8-1.3v-1" />
-                  <path d="M9.6 2.2c-1 0-1.6.5-1.6 1.2 0-.7-.6-1.2-1.6-1.2C4.8 2.2 3.7 3.3 3.7 4.7c0 .5.1.9.3 1.2-.7.4-1.1 1.1-1.1 2 0 .8.4 1.5 1 1.9-.1.3-.2.6-.2.9 0 1.3 1.1 2.2 2.5 2.2 1 0 1.8-.5 1.8-1.3V6.6" />
-                </g>
-                <!-- Cerebellum: the practised half, tucked under and behind.
-                     Ridged, because that is the one feature that tells a
-                     cerebellum from any other lobe at this size. -->
-                <g class="mind-diagram-part" data-part="cerebellum">
-                  <path d="M34 138c0-13 11-23 25-23s25 10 25 23-11 23-25 23-25-10-25-23Z" />
-                  <path d="M40 128h38M38 138h42M40 148h38" />
-                </g>
-                <!-- Memory: stacked layers, one per thing it was taught. -->
-                <g class="mind-diagram-part" data-part="memory">
-                  <path d="M212 116h74v13h-74zM212 133h74v13h-74zM212 150h74v13h-74z" />
-                </g>
-                <!-- The two pathways. Skill runs under reasoning; reasoning
-                     reaches for memory. Drawn thin so the parts lead. -->
-                <g class="mind-diagram-link">
-                  <path d="M100 80V104H60V113" />
-                  <path d="M122 80V122H210" />
-                </g>
-              </svg>
-            </figure>
-
-            <div class="mind-parts">
-              <article class="mind-part" data-part="brain">
-                <h4 class="mind-part-title">Brain</h4>
-                <p class="mind-part-lead" id="mind-brain-value">—</p>
-                <p class="mind-part-note" id="mind-brain-note"></p>
-              </article>
-              <article class="mind-part" data-part="cerebellum">
-                <h4 class="mind-part-title">Cerebellum</h4>
-                <p class="mind-part-lead" id="mind-skills-value">—</p>
-                <p class="mind-part-note" id="mind-skills-note"></p>
-              </article>
-              <article class="mind-part" data-part="memory">
-                <h4 class="mind-part-title">Memory</h4>
-                <p class="mind-part-lead" id="mind-memory-value">—</p>
-                <p class="mind-part-note" id="mind-memory-note"></p>
-              </article>
-            </div>
-          </section>
-
-          <!-- What it holds, one row per material. Present only when there is
-               something to list: an empty section explaining its own
-               emptiness is furniture. -->
-          <section
-            id="mind-memory-section"
-            class="mind-section"
-            aria-labelledby="mind-memory-heading"
-            hidden
-          >
-            <h3 id="mind-memory-heading" class="mind-section-title">
-              What it knows
-              <span id="mind-memory-meta" class="mind-section-meta"></span>
-            </h3>
-            <ul id="mind-memory-list" class="mind-memory-list"></ul>
-          </section>
-
-          <!-- Teaching it. The smallest honest form of training: a titled
-               material becomes knowledge this mind can recall, and the count
-               above moves the moment it lands. -->
-          <section class="mind-section" aria-labelledby="mind-teach-heading">
-            <h3 id="mind-teach-heading" class="mind-section-title">Teach it something</h3>
-            <form id="mind-feed-form" class="mind-feed-form" novalidate>
-              <label class="field" for="mind-feed-title">
-                <span>Title</span>
-                <input
-                  id="mind-feed-title"
-                  type="text"
-                  autocomplete="off"
-                  maxlength="80"
-                  placeholder="Compensation bands 2026"
-                />
-              </label>
-              <label class="field" for="mind-feed-text">
-                <span>Material</span>
-                <textarea
-                  id="mind-feed-text"
-                  rows="5"
-                  maxlength="65536"
-                  placeholder="Paste what this mind should remember."
-                ></textarea>
-              </label>
-              <p id="mind-feed-error" class="form-error" role="alert" hidden></p>
-              <p id="mind-feed-status" class="mind-feed-status" role="status"></p>
-              <div class="mind-feed-actions">
-                <button id="mind-feed-button" class="primary" type="submit">Teach</button>
-              </div>
-            </form>
-          </section>
-        </div>
-      </div>
-    </div>
-
     <!-- The window's title bar. macOS hides the native one (HiddenInset — see
          the window options in desktop/wails/main.go) and leaves only the
          traffic lights, inset at the top left; this strip is what the webview
@@ -619,7 +445,9 @@
       <span class="titlebar-trailing">
         <!-- The mind. It sits in the title bar because it belongs to the
              window, not to the conversation inside it: the mind outlives
-             every thread and every turn.
+             every thread and every turn — and it is one of the two switches
+             for the right column, which is why it stands beside the other
+             one rather than anywhere else.
 
              The icon MOVES only when something mental is actually happening —
              reasoning tokens arriving, or a material just taught. Idle, it is
@@ -630,9 +458,10 @@
           id="mind-button"
           class="ghost icon-button mind-button"
           type="button"
-          aria-haspopup="dialog"
-          aria-label="Mind"
-          title="Mind"
+          aria-controls="mind-panel"
+          aria-expanded="false"
+          aria-label="Show mind panel"
+          title="Show mind panel"
         >
           <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
             <path d="M6.4 2.2c1 0 1.6.5 1.6 1.2 0-.7.6-1.2 1.6-1.2 1.6 0 2.7 1.1 2.7 2.5 0 .5-.1.9-.3 1.2.7.4 1.1 1.1 1.1 2 0 .8-.4 1.5-1 1.9.1.3.2.6.2.9 0 1.3-1.1 2.2-2.5 2.2-1 0-1.8-.5-1.8-1.3v-1" />
@@ -640,16 +469,17 @@
             <path class="mind-button-core" d="M8 6.6a1.4 1.4 0 1 0 0 2.8 1.4 1.4 0 0 0 0-2.8Z" />
           </svg>
         </button>
-        <!-- The workspace column's manual switch. The column already folds on
-             its own in two situations — no conversation to project, and a
-             window too narrow to afford a third column — and this button does
-             not argue with either: it is absent when there is nothing to
-             show, and the narrow-window fold hides it, because a control that
-             cannot change what you are looking at is worse than no control.
-             What it does own is the case both automatic rules leave open: a
-             wide window, a conversation open, and a reader who wants the
-             words. That choice sticks — widening the window later does not
-             reopen a column you closed. -->
+        <!-- The workspace panel's switch, and the right column's default
+             occupant. The panel already folds on its own in two situations —
+             no conversation to project, and a window too narrow to afford a
+             third column — and this button does not argue with either: it is
+             absent when there is nothing to show, and the narrow-window fold
+             hides it, because a control that cannot change what you are
+             looking at is worse than no control. What it does own is the case
+             both automatic rules leave open: a wide window, a conversation
+             open, and a reader who wants the words. That choice sticks —
+             widening the window later does not reopen a column you closed,
+             and neither does opening a conversation. -->
         <button
           id="context-panel-button"
           class="ghost icon-button"
@@ -908,11 +738,25 @@
         </div>
       </section>
 
-      <!-- The rail is the thread's materials ledger, not a second work log.
-           Every section is present only when it has rows; the run narrates
-           itself on the message it belongs to, and the one line below is a
-           live pointer at what the loop is on, not a summary of it. -->
-      <aside class="context-panel" id="context-panel">
+      <!-- The right column, and the two panels that take turns in it.
+           One slot, one panel at a time: the column is 300px and both of
+           these want the whole of it — stacking them would leave the mind's
+           anatomy and the workspace's file lists each with half a column, and
+           a tab strip inside the rail would be a second switch for a job the
+           two title-bar icons already do.
+
+           They differ in what they belong to, and the difference decides the
+           rules around them. The workspace panel is a projection of a run: no
+           conversation, nothing to project, so it folds and its switch goes
+           with it. The mind belongs to the identity and outlives every
+           thread, so it is reachable with no conversation selected at all —
+           the one thing the old overlay had that a column must not lose. -->
+
+      <!-- The workspace panel is the thread's materials ledger, not a second
+           work log. Every section is present only when it has rows; the run
+           narrates itself on the message it belongs to, and the one line
+           below is a live pointer at what the loop is on, not a summary. -->
+      <aside class="right-rail context-panel" id="context-panel">
         <header class="context-header">
           <h2 class="context-title">Workspace</h2>
         </header>
@@ -950,6 +794,180 @@
           </h3>
           <ul class="context-list" id="retrieved-list"></ul>
         </section>
+      </aside>
+
+      <!-- The mind (心智体).
+           A column rather than the overlay it used to be. What is inside is a
+           STRUCTURE — a brain, a cerebellum, a memory, and the relationships
+           between them — and an overlay made reading it a modal errand: you
+           could not have the mind and the conversation on screen at once, so
+           teaching it something you had just read meant closing it, copying,
+           reopening. Beside the transcript, that is one gesture.
+
+           It is deliberately NOT about the turn that happens to be running. A
+           mind is the long-lived thing: which model it thinks with, which
+           skills it practices, what it has been taught. A conversation passes
+           through it; it does not define it — which is why this panel, alone
+           among the things in this column, is still there when no
+           conversation is.
+
+           tabindex="-1" is not decoration: the brain icon is in the title bar
+           and this column is the last thing in the DOM, so opening it and
+           then tabbing would walk the whole rail and the whole transcript
+           first. Pressing the icon moves focus here; Escape from inside sends
+           it back to the icon. -->
+      <aside
+        class="right-rail mind-panel"
+        id="mind-panel"
+        aria-labelledby="mind-heading"
+        tabindex="-1"
+      >
+        <header class="mind-head">
+          <h2 id="mind-heading" class="mind-title">Mind</h2>
+          <p id="mind-subtitle" class="mind-subtitle">
+            What this identity thinks with, and what it has been taught.
+          </p>
+        </header>
+
+        <div class="mind-body">
+          <!-- The switcher. A mind is a persona over ONE shared knowledge
+               base, so switching is a change of viewpoint, not of library —
+               which is why this is a plain list and not a workspace-level
+               account switch with warnings attached. -->
+          <section class="mind-section" aria-labelledby="mind-roster-heading">
+            <h3 id="mind-roster-heading" class="mind-section-title">Minds</h3>
+            <ol id="mind-roster" class="mind-roster"></ol>
+            <form id="mind-create-form" class="mind-create-form" novalidate>
+              <input
+                id="mind-create-name"
+                type="text"
+                autocomplete="off"
+                maxlength="64"
+                placeholder="New mind"
+                aria-label="New mind name"
+              />
+              <button id="mind-create-button" type="submit">Add</button>
+            </form>
+            <p id="mind-roster-error" class="form-error" role="alert" hidden></p>
+          </section>
+
+          <!-- The anatomy. The diagram is the map and the three rows under it
+               are the territory: every number below is read from the sidecar,
+               never inferred from the drawing. Rows rather than the three
+               side-by-side cards the overlay could afford — at this width
+               three columns would be three words wide. -->
+          <section class="mind-section" aria-labelledby="mind-anatomy-heading">
+            <h3 id="mind-anatomy-heading" class="mind-section-title">
+              Anatomy
+              <span id="mind-anatomy-meta" class="mind-section-meta"></span>
+            </h3>
+            <figure class="mind-figure">
+              <svg
+                class="mind-diagram"
+                viewBox="0 0 320 176"
+                role="img"
+                aria-labelledby="mind-diagram-title"
+                focusable="false"
+              >
+                <title id="mind-diagram-title">
+                  A mind: a brain that reasons, a cerebellum of practised
+                  skills, and a memory of what it has been taught.
+                </title>
+                <!-- Cerebrum: the same two paths the title-bar icon draws,
+                     scaled up. One drawing, two sizes — so the icon and the
+                     diagram cannot drift into two different ideas of a brain. -->
+                <g class="mind-diagram-part" data-part="brain" transform="translate(66 8) scale(5.4)">
+                  <path d="M6.4 2.2c1 0 1.6.5 1.6 1.2 0-.7.6-1.2 1.6-1.2 1.6 0 2.7 1.1 2.7 2.5 0 .5-.1.9-.3 1.2.7.4 1.1 1.1 1.1 2 0 .8-.4 1.5-1 1.9.1.3.2.6.2.9 0 1.3-1.1 2.2-2.5 2.2-1 0-1.8-.5-1.8-1.3v-1" />
+                  <path d="M9.6 2.2c-1 0-1.6.5-1.6 1.2 0-.7-.6-1.2-1.6-1.2C4.8 2.2 3.7 3.3 3.7 4.7c0 .5.1.9.3 1.2-.7.4-1.1 1.1-1.1 2 0 .8.4 1.5 1 1.9-.1.3-.2.6-.2.9 0 1.3 1.1 2.2 2.5 2.2 1 0 1.8-.5 1.8-1.3V6.6" />
+                </g>
+                <!-- Cerebellum: the practised half, tucked under and behind.
+                     Ridged, because that is the one feature that tells a
+                     cerebellum from any other lobe at this size. -->
+                <g class="mind-diagram-part" data-part="cerebellum">
+                  <path d="M34 138c0-13 11-23 25-23s25 10 25 23-11 23-25 23-25-10-25-23Z" />
+                  <path d="M40 128h38M38 138h42M40 148h38" />
+                </g>
+                <!-- Memory: stacked layers, one per thing it was taught. -->
+                <g class="mind-diagram-part" data-part="memory">
+                  <path d="M212 116h74v13h-74zM212 133h74v13h-74zM212 150h74v13h-74z" />
+                </g>
+                <!-- The two pathways. Skill runs under reasoning; reasoning
+                     reaches for memory. Drawn thin so the parts lead. -->
+                <g class="mind-diagram-link">
+                  <path d="M100 80V104H60V113" />
+                  <path d="M122 80V122H210" />
+                </g>
+              </svg>
+            </figure>
+
+            <div class="mind-parts">
+              <article class="mind-part" data-part="brain">
+                <h4 class="mind-part-title">Brain</h4>
+                <p class="mind-part-lead" id="mind-brain-value">—</p>
+                <p class="mind-part-note" id="mind-brain-note"></p>
+              </article>
+              <article class="mind-part" data-part="cerebellum">
+                <h4 class="mind-part-title">Cerebellum</h4>
+                <p class="mind-part-lead" id="mind-skills-value">—</p>
+                <p class="mind-part-note" id="mind-skills-note"></p>
+              </article>
+              <article class="mind-part" data-part="memory">
+                <h4 class="mind-part-title">Memory</h4>
+                <p class="mind-part-lead" id="mind-memory-value">—</p>
+                <p class="mind-part-note" id="mind-memory-note"></p>
+              </article>
+            </div>
+          </section>
+
+          <!-- What it holds, one row per material. Present only when there is
+               something to list: an empty section explaining its own
+               emptiness is furniture. -->
+          <section
+            id="mind-memory-section"
+            class="mind-section"
+            aria-labelledby="mind-memory-heading"
+            hidden
+          >
+            <h3 id="mind-memory-heading" class="mind-section-title">
+              What it knows
+              <span id="mind-memory-meta" class="mind-section-meta"></span>
+            </h3>
+            <ul id="mind-memory-list" class="mind-memory-list"></ul>
+          </section>
+
+          <!-- Teaching it. The smallest honest form of training: a titled
+               material becomes knowledge this mind can recall, and the count
+               above moves the moment it lands. -->
+          <section class="mind-section" aria-labelledby="mind-teach-heading">
+            <h3 id="mind-teach-heading" class="mind-section-title">Teach it something</h3>
+            <form id="mind-feed-form" class="mind-feed-form" novalidate>
+              <label class="field" for="mind-feed-title">
+                <span>Title</span>
+                <input
+                  id="mind-feed-title"
+                  type="text"
+                  autocomplete="off"
+                  maxlength="80"
+                  placeholder="Compensation bands 2026"
+                />
+              </label>
+              <label class="field" for="mind-feed-text">
+                <span>Material</span>
+                <textarea
+                  id="mind-feed-text"
+                  rows="4"
+                  maxlength="65536"
+                  placeholder="Paste what this mind should remember."
+                ></textarea>
+              </label>
+              <p id="mind-feed-error" class="form-error" role="alert" hidden></p>
+              <p id="mind-feed-status" class="mind-feed-status" role="status"></p>
+              <div class="mind-feed-actions">
+                <button id="mind-feed-button" class="primary" type="submit">Teach</button>
+              </div>
+            </form>
+          </section>
+        </div>
       </aside>
     </main>
     <!-- Wails shell only: the typed bridge library and the shim that installs

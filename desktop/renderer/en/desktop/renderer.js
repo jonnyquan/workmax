@@ -70,10 +70,9 @@ import {
   onboardingSignin,
   openWorkspaceButton,
   mindButton,
-  mindCloseButton,
   mindCreateForm,
   mindFeedForm,
-  mindOverlay,
+  mindPanel,
   quickSwitcher,
   renameThreadButton,
   renameThreadCancel,
@@ -182,9 +181,8 @@ import {
   settleTurnNarration,
 } from "./context-panel.js";
 import {
-  closeMindPanel,
-  mindState,
-  openMindPanel,
+  mindPanelHidden,
+  mindPanelShown,
   submitCreateMind,
   submitFeedMind,
 } from "./mind.js";
@@ -3206,33 +3204,37 @@ document.addEventListener("keydown", (event) => {
       closeSettingsPanel();
       return;
     }
-    if (mindOverlay && !mindOverlay.hidden) {
-      closeMindPanel();
-      return;
-    }
     if (state.activeTurn && !state.activeTurn.stopRequested) {
       void stopActiveTurn();
     }
   }
 });
-// The mind. Same dismissal grammar as Settings and the switcher — the icon
-// opens it, the backdrop and ✕ close it, and Escape below prefers it over
-// stopping a turn only while it is the frontmost surface.
+
+// The mind panel's Escape, and the reason it is bound HERE and not on the
+// document with the three above.
+//
+// As an overlay it was the frontmost surface, so a global Escape closing it
+// was right. As a column it is not: it sits beside a running conversation, and
+// Escape's other job in this app is to stop the turn. A global "Escape closes
+// the mind" would mean that leaving the panel open — which is the whole point
+// of a column — quietly disarms the stop key everywhere in the window.
+//
+// So Escape dismisses it only from inside it, where nothing else claims the
+// key, and stops propagating so the turn is not stopped on the way out. It is
+// the same act as pressing the icon again — same restore, same column — and
+// focus goes back to the icon, which is where the reader's attention was
+// before it moved here.
+if (mindPanel) {
+  mindPanel.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || event.repeat) return;
+    if (rightPanel !== "mind") return;
+    event.stopPropagation?.();
+    toggleRightPanel("mind");
+    if (mindButton) mindButton.focus();
+  });
+}
 if (mindButton) {
-  mindButton.addEventListener("click", () => {
-    if (mindState.open) closeMindPanel();
-    else openMindPanel(mindButton);
-  });
-}
-if (mindCloseButton) {
-  mindCloseButton.addEventListener("click", () => {
-    closeMindPanel();
-  });
-}
-if (mindOverlay) {
-  mindOverlay.addEventListener("click", (event) => {
-    if (event.target === mindOverlay) closeMindPanel();
-  });
+  mindButton.addEventListener("click", () => toggleRightPanel("mind"));
 }
 if (mindCreateForm) {
   mindCreateForm.addEventListener("submit", (event) => {
@@ -3260,24 +3262,25 @@ if (openWorkspaceButton) {
 
 // --- Folding the two rails ---------------------------------------------------
 //
-// Both are one boolean, both are written onto <html> as an attribute, and the
-// CSS does the rest — see styles.css, "Folding the two rails". An attribute on
-// the document element rather than a class on .shell because the control that
-// UNDOES a fold cannot live in the column it hid: both toggles sit in the
-// window's title bar, outside the three-column grid entirely.
+// Both are written onto <html> as an attribute and the CSS does the rest — see
+// styles.css, "Folding the two rails". An attribute on the document element
+// rather than a class on .shell because the control that UNDOES a fold cannot
+// live in the column it hid: every toggle sits in the window's title bar,
+// outside the three-column grid entirely.
 //
-// Neither survives a relaunch. The one machine-scoped preference this app has
-// (appearance) is stored by the sidecar and injected into <html> by the shell
-// before the document is handed over, which is what makes a theme arrive
-// without a flash; a layout preference read after first paint would arrive as
-// a visible reflow of both rails, so doing it properly means the same
-// server-side injection, which means a schema column, a DTO field, a route
-// policy entry, a manifest entry and a regenerated bridge. That is a change
-// worth making deliberately and not as a side effect of a layout pass. Until
-// then the fold lasts as long as the window does, which is the whole working
-// day for an app nobody quits.
+// Neither survives a relaunch, and that now covers WHICH panel the right
+// column was showing as well as whether it was showing one. The one
+// machine-scoped preference this app has (appearance) is stored by the sidecar
+// and injected into <html> by the shell before the document is handed over,
+// which is what makes a theme arrive without a flash; a layout preference read
+// after first paint would arrive as a visible reflow of both rails, so doing it
+// properly means the same server-side injection, which means a schema column, a
+// DTO field, a route policy entry, a manifest entry and a regenerated bridge.
+// That is a change worth making deliberately and not as a side effect of a
+// layout pass. Until then the fold lasts as long as the window does, which is
+// the whole working day for an app nobody quits — and the cost of getting it
+// wrong is one click, on a control that is always on screen.
 let sidebarCollapsed = false;
-let contextPanelHidden = false;
 
 function applySidebarCollapsed() {
   const root = document.documentElement;
@@ -3301,44 +3304,106 @@ export function toggleSidebar(next) {
   // it folds, so it is still on screen — and still focused — either way.
 }
 
-// The workspace column. Three rules decide whether it is on screen and they do
-// not overlap:
+// --- The right column --------------------------------------------------------
 //
-//   1. No conversation selected — no run to project, so nothing to show, and
-//      the button is not offered. CSS, from #thread-panel[hidden].
-//   2. Window narrower than 1180px — the column costs more than it explains,
-//      so it folds and the button goes with it. CSS, a media query. This is a
-//      constraint, not a state: the choice below is remembered THROUGH it, so
-//      widening the window restores what the reader last chose.
-//   3. Otherwise the reader decides, and the default is open.
+// One column, two panels, one state with three values: "workspace" (the
+// default), "mind", or "none". Not two booleans — two booleans can both be
+// true, and the first thing that would have to be written after them is the
+// code that stops them being. The column holds one panel; the state says which.
 //
-// Which is to say: a manual close sticks. Nothing reopens this column except
-// pressing the button again.
-function applyContextPanelHidden() {
-  const root = document.documentElement;
-  if (!root) return;
-  if (contextPanelHidden) root.setAttribute("data-context-panel", "hidden");
-  else root.removeAttribute("data-context-panel");
-  if (!contextPanelButton) return;
-  contextPanelButton.setAttribute("aria-expanded", contextPanelHidden ? "false" : "true");
-  const label = contextPanelHidden ? "Show workspace panel" : "Hide workspace panel";
-  contextPanelButton.setAttribute("aria-label", label);
-  contextPanelButton.setAttribute("title", label);
+// The two panels are not symmetrical, and the asymmetry is the design:
+//
+//   * The workspace panel PROJECTS A RUN. With no conversation selected there
+//     is nothing to project, so it folds and its switch is not offered (CSS,
+//     from #thread-panel[hidden]); below 1180px the window cannot afford it, so
+//     it folds and the switch goes with it (CSS, a media query). Both are
+//     constraints rather than states — the choice here is remembered THROUGH
+//     them, so widening the window or opening a conversation restores what the
+//     reader last chose rather than a default.
+//   * The mind BELONGS TO THE IDENTITY. It outlives every thread, so neither
+//     rule applies to it: it is readable with no conversation open, which is
+//     the one thing the overlay it replaced could do that a column must not
+//     lose, and it stays at narrow widths because it is never on screen except
+//     by explicit request.
+//
+// Which is to say: nothing moves this column except the two buttons. Selecting
+// a conversation does not reopen a column you closed, and does not replace a
+// mind you are reading with a file list you did not ask for.
+let rightPanel = "workspace";
+// What the column was showing when the mind took it. Pressing the brain a
+// second time is an undo of pressing it the first time, so it has to put back
+// what was there — the workspace ledger, or nothing if the reader had already
+// folded the column away. Without this, "look at the mind, then stop looking
+// at the mind" would silently close a workspace column the reader never asked
+// to close, and only a second press on a different button would bring it back.
+let panelBeforeMind = "workspace";
+
+// Each switch names the act it will perform, not the state it is looking at:
+// aria-expanded carries the state, the label carries the verb.
+function applyRailToggle(button, shown, name) {
+  if (!button) return;
+  button.setAttribute("aria-expanded", shown ? "true" : "false");
+  const label = `${shown ? "Hide" : "Show"} ${name}`;
+  button.setAttribute("aria-label", label);
+  button.setAttribute("title", label);
 }
 
-export function toggleContextPanel(next) {
-  contextPanelHidden = next === undefined ? !contextPanelHidden : Boolean(next);
-  applyContextPanelHidden();
+function applyRightPanel() {
+  const root = document.documentElement;
+  if (!root) return;
+  // The default is the ABSENCE of the attribute, not data-right-panel=
+  // "workspace": the markup already ships with the workspace panel in the
+  // column, so the state the document arrives in needs no write to be correct
+  // — and a write on first paint is a reflow of a column that was already
+  // right.
+  if (rightPanel === "workspace") root.removeAttribute("data-right-panel");
+  else root.setAttribute("data-right-panel", rightPanel);
+  applyRailToggle(contextPanelButton, rightPanel === "workspace", "workspace panel");
+  applyRailToggle(mindButton, rightPanel === "mind", "mind panel");
+}
+
+export function showRightPanel(next) {
+  const previous = rightPanel;
+  if (previous === next) return;
+  rightPanel = next;
+  applyRightPanel();
+  // The mind reads the sidecar every time it comes back, and puts down the
+  // errors of its last visit when it goes away.
+  if (next === "mind") mindPanelShown();
+  else if (previous === "mind") mindPanelHidden();
+}
+
+// One button per panel, and each is a toggle of its own panel. The two are not
+// quite mirror images, because the column has a default and the mind is not it:
+// putting the workspace away leaves the column empty, while putting the MIND
+// away hands the column back to whatever the mind interrupted.
+export function toggleRightPanel(name) {
+  if (name !== "mind") {
+    showRightPanel(rightPanel === name ? "none" : name);
+    return;
+  }
+  if (rightPanel === "mind") {
+    showRightPanel(panelBeforeMind);
+    return;
+  }
+  panelBeforeMind = rightPanel;
+  showRightPanel("mind");
+  // Focus follows the mind into the column. It is the last thing in the DOM
+  // and the icon that shows it is in the title bar, so without this a keyboard
+  // reader would have to walk the rail and the entire transcript to reach the
+  // panel they just asked for. Nothing to rescue on the way out: the button
+  // that put it away is in the title bar and already has focus.
+  if (mindPanel) mindPanel.focus();
 }
 
 if (sidebarCollapseButton) {
   sidebarCollapseButton.addEventListener("click", () => toggleSidebar());
 }
 if (contextPanelButton) {
-  contextPanelButton.addEventListener("click", () => toggleContextPanel());
+  contextPanelButton.addEventListener("click", () => toggleRightPanel("workspace"));
 }
 applySidebarCollapsed();
-applyContextPanelHidden();
+applyRightPanel();
 
 // --- Dragging the window by its title bar -----------------------------------
 //

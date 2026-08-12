@@ -574,7 +574,8 @@ textarea::placeholder {
    moment the rail folded, the conversation slid left into the rail's 0px track
    and the workspace column took the 1fr — a window with nothing in it but a
    "Files you attach…" line stretched across the whole screen. Named tracks
-   cannot do that. The two-column states below simply leave track 3 unused. */
+   cannot do that. Every folded state below simply takes its track to 0px and
+   leaves it in the template. */
 .sidebar {
   grid-column: 1;
 }
@@ -583,16 +584,22 @@ textarea::placeholder {
   grid-column: 2;
 }
 
-.context-panel {
+/* Both panels of the right column share track 3. Only one of them is ever
+   displayed, so they never fight over it — see "The right column" below. */
+.right-rail {
   grid-column: 3;
 }
 
 /* --- Folding the two rails -------------------------------------------------
-   Both folds are an attribute on <html>, written by renderer.js, and both work
-   by taking the column's width to zero rather than by rewriting the template:
-   the :has() rule below outranks any plain .shell declaration, so a competing
-   grid-template-columns here would silently lose. A custom property cannot
-   lose that way — nothing else declares these two.
+   Every fold works by taking the column's width to zero rather than by
+   rewriting the template. That was a specificity argument once (the :has()
+   rule below outranks any plain .shell declaration, so a competing
+   grid-template-columns there would silently lose); it is now also a
+   correctness one. The right column has two occupants with different rules,
+   and a template that drops track 3 would fold the mind away with the
+   workspace whether or not the mind was the one on screen. A custom property
+   nothing else declares cannot lose that way, and every rule below states the
+   one thing it means: this column is not showing anything right now.
 
    The state lives on the document element rather than on .shell so the
    controls in the OTHER column can react to it too: the rail's collapse button
@@ -605,61 +612,96 @@ textarea::placeholder {
   display: none;
 }
 
-:root[data-context-panel="hidden"] .shell {
+/* --- The right column ------------------------------------------------------
+   One track, two panels, one attribute. data-right-panel is absent for the
+   default (the workspace ledger), "mind" when the brain icon has been pressed,
+   and "none" when the reader has folded the column away. Absent rather than
+   ="workspace" so the state the document ARRIVES in is the state it paints in:
+   the markup ships with the workspace panel in the column, and a JS write on
+   first paint would be a visible reflow of a column that was already right.
+
+   Exclusive, not stacked: the column is 300px and each panel wants all of it.
+   Stacked, the mind's anatomy and the workspace's three file lists would get
+   half a column each; tabbed, the rail would carry a second switch for the job
+   the two title-bar icons already do — and one of those tabs would have to
+   vanish whenever no conversation is open, which is a worse thing to watch
+   than a button that comes and goes at the top of the window. */
+:root[data-right-panel="none"] .shell {
   --rail-right: 0px;
 }
 
-:root[data-context-panel="hidden"] .context-panel {
+:root[data-right-panel="none"] .right-rail {
   display: none;
 }
 
-/* The third column is a projection of a run — which steps have happened, what
-   the agent was given, what it produced. With no conversation selected there
-   is no run, and it was still drawing the entire scaffold: "Task context 0",
-   "Run overview 0/4" above four rows reading Waiting / None attached / Waiting
-   / None yet, then three more sections each with a 0 beside it. Nine numbers
-   and four steps about nothing, next to a screen whose whole message is "pick
-   a conversation". So it folds away until there is something to project, and
-   the welcome screen gets the 300px back.
+:root[data-right-panel="mind"] .context-panel {
+  display: none;
+}
 
-   Folding rather than emptying, because this column ALREADY folds — the query
-   below does it whenever the window cannot afford three columns — and an empty
-   version would be a second way for the same column to say "not now". The
-   collapsed grid is the same two-column grid in both cases.
+:root:not([data-right-panel="mind"]) .mind-panel {
+  display: none;
+}
+
+/* The workspace panel is a projection of a run — which steps have happened,
+   what the agent was given, what it produced. With no conversation selected
+   there is no run, and it was still drawing the entire scaffold: "Task context
+   0", "Run overview 0/4" above four rows reading Waiting / None attached /
+   Waiting / None yet, then three more sections each with a 0 beside it. Nine
+   numbers and four steps about nothing, next to a screen whose whole message
+   is "pick a conversation". So it folds away until there is something to
+   project, and the welcome screen gets the 300px back.
+
+   The mind does NOT fold with it. A mind belongs to the identity, not to the
+   conversation: it is the same mind before you open a thread and after you
+   close one, and the overlay this panel replaced could be read at any time.
+   Losing that would be the one thing the move to a column must not cost —
+   hence the guard on the width rule, and hence the width rule rather than a
+   template swap.
 
    Derived from #thread-panel[hidden] with :has() rather than a class toggled
    in JS: five call sites already set that attribute, and a sixth line in each
    is a drift waiting to happen. The panel's visibility is a consequence of the
    selection, not a thing maintained alongside it. */
-.shell:has(#thread-panel[hidden]) {
-  grid-template-columns: var(--rail-left) minmax(0, 1fr);
-}
-
 .shell:has(#thread-panel[hidden]) .context-panel {
   display: none;
 }
 
-/* Below this the third column costs more than it explains, so it folds away
-   rather than squeezing the conversation. The rail width is moved onto .shell
-   as a variable so the :has() rule above narrows with it — a second
+:root:not([data-right-panel="mind"]) .shell:has(#thread-panel[hidden]) {
+  --rail-right: 0px;
+}
+
+/* Below this the workspace column costs more than it explains, so it folds
+   away rather than squeezing the conversation. The rail width is moved onto
+   .shell as a variable so the :has() rule above narrows with it — a second
    grid-template-columns here would lose to that rule's specificity and leave
-   a 300px rail on a 1000px window. */
+   a 300px rail on a 1000px window.
+
+   The mind is exempt for the reason the default-open workspace panel is not:
+   nobody asks for the workspace column, it is simply there, so a narrow window
+   is right to take it back. The mind is only ever on screen because somebody
+   pressed the brain — and the answer to an explicit request cannot be "not at
+   this size", which on a 900px window (the minimum this app opens at) would
+   mean no way to create, switch or teach a mind at all. */
 @media (max-width: 1180px) {
   .shell {
     --rail: 272px;
-    grid-template-columns: var(--rail-left) minmax(0, 1fr);
   }
   /* The .shell parent is not decoration: the column's own display:flex lives
      further down the sheet at the same specificity a bare .context-panel
      would have, and source order would hand it the win back. */
+  :root:not([data-right-panel="mind"]) .shell {
+    --rail-right: 0px;
+  }
+
   .shell .context-panel {
     display: none;
   }
-  /* The manual switch goes with it. Below this width the column is not a
-     choice — the window cannot afford it — and a button that presses without
-     changing anything on screen teaches the reader that the button is broken.
-     The stored preference is untouched, so widening the window restores
-     whatever the reader last chose rather than a default. */
+  /* The manual switch goes with it. Below this width the workspace panel is
+     not a choice — the window cannot afford it — and a button that presses
+     without changing anything on screen teaches the reader that the button is
+     broken. The choice is untouched, so widening the window restores whatever
+     the reader last chose rather than a default. The brain stays: it still
+     changes what is on screen. */
   #context-panel-button {
     display: none;
   }
@@ -1584,60 +1626,45 @@ textarea::placeholder {
 }
 
 /* --- The mind (心智体) -------------------------------------------------------
-   One overlay, borrowing the settings dialog's surface treatment: paper
-   ground, bordered cards on it, the same shadow and radius. What differs is
-   the shape of the content — a single scrolling column instead of a
-   nav-plus-panel split, because a mind is one subject read top to bottom, not
-   four errands you pick between. */
-.mind-panel {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  width: min(720px, 100%);
-  height: min(720px, calc(100vh - var(--sp-5) * 2));
-  overflow: hidden;
-  border-radius: var(--r-panel);
-  background: hsl(var(--background));
-  box-shadow:
-    0 0 0 1px hsl(var(--border)),
-    0 24px 64px hsl(40 10% 8% / 0.28);
-}
-
+   The right column's other occupant. It borrows the workspace panel's chrome
+   exactly — same head padding, same title weight, same section rhythm — so
+   switching between the two reads as one column changing subject rather than
+   as two applications sharing an edge. The overlay's own surface treatment
+   (paper card, radius, drop shadow) is gone with the overlay: a panel that
+   IS the column has no card to float. */
 .mind-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--sp-4);
-  padding: var(--sp-4) var(--sp-4) var(--sp-3);
-  border-bottom: 1px solid hsl(var(--border));
-}
-
-.mind-head-copy {
   display: grid;
-  gap: var(--sp-1);
-  min-width: 0;
+  gap: 2px;
+  padding: var(--sp-4) var(--sp-4) var(--sp-2);
 }
 
-.mind-head h2 {
-  font-size: var(--fs-title);
+/* The same line as .context-title, deliberately: whatever the column is
+   showing, its name is one weight and one size. */
+.mind-title {
+  color: hsl(var(--foreground));
+  font-size: var(--fs-base);
+  font-weight: var(--fw-strong);
 }
 
 .mind-subtitle {
   color: hsl(var(--muted-foreground));
-  font-size: var(--fs-small);
+  font-size: var(--fs-micro);
   line-height: var(--lh-ui);
 }
 
+/* The same rhythm the workspace panel keeps: sp-2 under the head, sp-4 above
+   the first section, sp-4 between sections. Two panels in one column have to
+   breathe identically or the swap reads as a jump. */
 .mind-body {
   display: grid;
-  gap: var(--sp-5);
+  gap: var(--sp-4);
   align-content: start;
-  padding: var(--sp-4);
-  overflow-y: auto;
+  padding: var(--sp-4) var(--sp-4) 0;
 }
 
 .mind-section {
   display: grid;
-  gap: var(--sp-3);
+  gap: var(--sp-2);
   min-width: 0;
 }
 
@@ -1720,19 +1747,23 @@ textarea::placeholder {
 /* The anatomy drawing. One stroke weight, currentColor, no fills — the same
    rules the title-bar icons follow, at a size where the three parts can be
    told apart. The memory block is the one filled shape: layers are the thing
-   that accumulates, so they read as solid. */
+   that accumulates, so they read as solid.
+
+   It fills the column now instead of sitting at min(420px, 100%): at 268px of
+   usable width the drawing is already the smallest it can be and still show
+   three parts, so anything it does not take is width the parts lose. */
 .mind-figure {
   display: grid;
   place-items: center;
   margin: 0;
-  padding: var(--sp-3) 0;
+  padding: var(--sp-2) var(--sp-2);
   border: 1px solid hsl(var(--border));
   border-radius: var(--r-surface);
   background: hsl(var(--card));
 }
 
 .mind-diagram {
-  width: min(420px, 100%);
+  width: 100%;
   height: auto;
   color: hsl(var(--muted-foreground));
 }
@@ -1766,20 +1797,27 @@ textarea::placeholder {
   opacity: 0.7;
 }
 
+/* Three rows in one card, not three cards side by side. The overlay had 720px
+   to spend and could afford columns; a 300px rail cannot — "claude-sonnet-4.6"
+   in a third of it wraps to three lines, and "Practised through this
+   workspace's skills" to five. Stacked, each part gets the full measure, and
+   the divider does the grouping the three separate borders used to. */
 .mind-parts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--sp-2);
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--r-surface);
+  background: hsl(var(--card));
 }
 
 .mind-part {
   display: grid;
-  gap: var(--sp-1);
+  gap: 1px;
   align-content: start;
-  padding: var(--sp-3);
-  border: 1px solid hsl(var(--border));
-  border-radius: var(--r-surface);
-  background: hsl(var(--card));
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.mind-part + .mind-part {
+  border-top: 1px solid hsl(var(--border));
 }
 
 .mind-part-title {
@@ -1839,7 +1877,7 @@ textarea::placeholder {
 
 .mind-feed-form {
   display: grid;
-  gap: var(--sp-3);
+  gap: var(--sp-2);
   padding: var(--sp-3);
   border: 1px solid hsl(var(--border));
   border-radius: var(--r-surface);
@@ -1848,7 +1886,7 @@ textarea::placeholder {
 
 .mind-feed-form textarea {
   resize: vertical;
-  min-height: 96px;
+  min-height: 84px;
   font-family: inherit;
   font-size: var(--fs-base);
   line-height: var(--lh-read);
@@ -1857,6 +1895,13 @@ textarea::placeholder {
 .mind-feed-status {
   color: hsl(var(--muted-foreground));
   font-size: var(--fs-small);
+}
+
+/* Nothing taught yet is nothing to say. In a grid an empty <p> still claims a
+   row and a gap, which in a 300px column reads as a stray space above the
+   Teach button. */
+.mind-feed-status:empty {
+  display: none;
 }
 
 .mind-feed-actions {
@@ -3028,10 +3073,26 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   background: transparent;
 }
 
+/* --- The right rail ---------------------------------------------------------
+   The column shape both panels share: a scrolling flex column against the left
+   border, one panel visible at a time. Written once so the two cannot drift
+   into two subtly different columns — the border landing a pixel differently
+   under the mind than under the workspace is exactly the kind of thing nobody
+   reports and everybody feels. What each panel does INSIDE the column is its
+   own business, and stays in its own block below. */
+.right-rail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-bottom: var(--sp-5);
+  overflow-y: auto;
+  border-left: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+}
+
 /* --- Workspace panel --------------------------------------------------------
-   The right rail is the thread's materials ledger — produced files, attached
-   files, retrieved passages — and it says nothing about the run except one
-   live line. The run is narrated on the message that produced it, where the
+   The thread's materials ledger — produced files, attached files, retrieved
+   passages — and it says nothing about the run except one live line. The run is narrated on the message that produced it, where the
    steps sit beside the words they explain; a second copy over here disagreed
    with the first about how many steps there had been.
 
@@ -3043,16 +3104,6 @@ body:has(#thread-panel[hidden]) #context-panel-button {
    Everything here is derived from state the renderer already holds or reads
    back from the sidecar — nothing is displayed that the desktop cannot
    actually supply. */
-.context-panel {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  padding-bottom: var(--sp-5);
-  overflow-y: auto;
-  border-left: 1px solid hsl(var(--border));
-  background: hsl(var(--background));
-}
-
 .context-header {
   display: flex;
   align-items: center;

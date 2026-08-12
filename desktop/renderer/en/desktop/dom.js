@@ -143,12 +143,14 @@ export const sidebarSearchButton = document.querySelector("#sidebar-search-butto
 export const openWorkspaceButton = document.querySelector("#open-workspace-button");
 
 // --- The mind (心智体) --------------------------------------------------------
-// The title-bar icon and the overlay it opens. The icon is a window-level
-// control like the two folds beside it, which is why it lives up there and not
-// in the composer: a mind is not a property of the conversation on screen.
+// The title-bar icon and the right-column panel it shows. The icon is a
+// window-level control like the two folds beside it, which is why it lives up
+// there and not in the composer: a mind is not a property of the conversation
+// on screen. The panel has no close button of its own for the same reason the
+// workspace panel has none — the switch that hides a column cannot live inside
+// it, so both switches sit in the title bar.
 export const mindButton = document.querySelector("#mind-button");
-export const mindOverlay = document.querySelector("#mind-overlay");
-export const mindCloseButton = document.querySelector("#mind-close-button");
+export const mindPanel = document.querySelector("#mind-panel");
 export const mindSubtitle = document.querySelector("#mind-subtitle");
 export const mindRoster = document.querySelector("#mind-roster");
 export const mindRosterError = document.querySelector("#mind-roster-error");
@@ -177,7 +179,9 @@ export const mindFeedButton = document.querySelector("#mind-feed-button");
 // title bar — outside the columns they hide, so the same button that folds a
 // column away is still there to bring it back. The rail's fold used to be a
 // pair (collapse inside the rail, expand in the main column's chrome); the
-// pair collapsed into one toggle when the controls moved up.
+// pair collapsed into one toggle when the controls moved up. The right
+// column's switch is really two — this one and the brain above — because that
+// column has two occupants; see renderer.js, "The right column".
 export const titlebar = document.querySelector("#titlebar");
 export const sidebarCollapseButton = document.querySelector("#sidebar-collapse-button");
 export const contextPanelButton = document.querySelector("#context-panel-button");

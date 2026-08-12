@@ -1,5 +1,5 @@
-// The mind (心智体): the title-bar icon, the overlay behind it, and the one
-// piece of state they share.
+// The mind (心智体): the title-bar icon, the right-column panel behind it, and
+// the one piece of state they share.
 //
 // A mind is a long-lived persona over this identity's single knowledge base:
 // a BRAIN (the model it reasons with), a CEREBELLUM (the skills it practises),
@@ -31,7 +31,6 @@ import {
   mindMemoryNote,
   mindMemorySection,
   mindMemoryValue,
-  mindOverlay,
   mindRoster,
   mindRosterError,
   mindSkillsNote,
@@ -47,9 +46,12 @@ import { state } from "./renderer.js";
 // gets long enough to be noticed by someone whose eyes were elsewhere.
 const MIND_ACTIVITY_MS = { thinking: 1200, learning: 2600 };
 
+// Whether the panel is on screen is NOT here: the right column owns that, and
+// it is one state with three values (workspace / mind / neither) rather than a
+// boolean per panel — see renderer.js, "The right column". A local `open` flag
+// beside it would be a second answer to the same question, and the two would
+// disagree the first time the column was folded from the other button.
 export const mindState = {
-  open: false,
-  opener: null,
   minds: [],
   activeID: null,
   status: null,
@@ -113,29 +115,24 @@ export function activeMind() {
   );
 }
 
-export function openMindPanel(opener = null) {
-  if (!mindOverlay) return;
-  if (!mindState.open) mindState.opener = opener;
-  mindState.open = true;
-  mindOverlay.hidden = false;
-  // Painted from whatever is already known, then refreshed: the panel opens
-  // instantly and fills in, rather than showing a blank dialog while a
-  // loopback request completes.
+// Called by the right column when the mind becomes the panel on screen.
+// Painted from whatever is already known, then refreshed: the column fills in
+// rather than showing a blank one while a loopback request completes.
+export function mindPanelShown() {
   renderMindPanel();
   void loadMinds();
 }
 
-export function closeMindPanel() {
-  if (!mindOverlay) return;
-  mindOverlay.hidden = true;
-  mindState.open = false;
+// And when it stops being the panel on screen. Only the two error lines are
+// cleared: they are about the last thing that was attempted, not about the
+// mind, and a failure from before lunch has no business greeting the next
+// person to press the icon. What the reader had half-typed into the teach form
+// stays exactly where it was — this column comes and goes at the press of a
+// title-bar icon now, and a panel that eats a draft when it is folded away is
+// a panel nobody folds twice.
+export function mindPanelHidden() {
   setMindFeedError("");
   setMindRosterError("");
-  const opener = mindState.opener;
-  mindState.opener = null;
-  if (opener && opener.hidden !== true && typeof opener.focus === "function") {
-    opener.focus();
-  }
 }
 
 // loadMinds reads the roster and then the active mind's status. Two calls
@@ -335,10 +332,15 @@ export function renderMindPanel() {
   const mind = activeMind();
   const status = mindState.status;
 
+  // The head describes the COLUMN; the roster describes each mind. It used to
+  // put the active mind's role line here, which was fine in a 720px dialog and
+  // reads as a bug in a 300px column: the same sentence landed twice, forty
+  // pixels apart, once under "Mind" and again under "General mind" in the row
+  // right below it. The roster keeps the role — it is what tells two minds
+  // apart — and this line goes back to saying what the panel is.
   if (mindSubtitle) {
     mindSubtitle.textContent = mind
-      ? mind.role_hint || mind.description ||
-        "What this mind thinks with, and what it has been taught."
+      ? "What this identity thinks with, and what it has been taught."
       : "No mind is available on this identity yet.";
   }
   if (mindAnatomyMeta) {
