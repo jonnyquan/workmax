@@ -249,7 +249,7 @@ func NewTokenStore(kc Keychain) *TokenStore {
 func NewTokenStoreWithTombstone(kc Keychain, marker SessionTombstoneMarker) *TokenStore {
 	return &TokenStore{
 		keychain: kc,
-		service:  KeychainService,
+		service:  KeychainServiceName(),
 		account:  KeychainAccount,
 		marker:   marker,
 	}

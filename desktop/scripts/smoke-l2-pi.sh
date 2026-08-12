@@ -20,12 +20,14 @@
 # Skips (exit 0) when no pi binary is named: CI has none, and a red build on
 # every machine without one is how a gated smoke gets deleted.
 #
-# ONE THING IS NOT ISOLATED, and it is worth knowing before you run this on a
-# machine you use: the data dir, the sidecar and pi's config all live in a
-# throwaway directory, but the local-model API key does not. It is keyed by uid
-# in the login Keychain under one fixed service name, so this run overwrites
-# whatever key that identity had stored (smoke-l2-approvals.sh has the same
-# property). Re-enter it in Settings afterwards if you had one.
+# It is safe to run on a machine you use. The data dir, the sidecar and pi's
+# config live in a throwaway directory, and so do the Keychain entries: the run
+# sets WORKMAX_KEYCHAIN_SERVICE to a per-run namespace, deletes what it created
+# on the way out, and asserts that the real service's entries are byte-identical
+# before and after. That was not always true — the account is derived from the
+# uid, uids restart at the same number in every fresh data dir, and until the
+# service name became overridable a run overwrote whatever local-model key and
+# OAuth session the user had.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -89,6 +91,15 @@ fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/workmax-l2-pi.XXXXXX")"
 token="pismoke$(uuidgen | tr -d '-' | tr 'A-Z' 'a-z')"
+# The Keychain namespace this run owns. Per-run so two runs (or a run and a dev
+# instance) cannot collide either, and matching the sidecar's validator:
+# [A-Za-z0-9][A-Za-z0-9._-]*, at most 96 bytes.
+keychain_service="ai.workmax.desktop.smoke-pi.$(uuidgen | tr -d '-' | tr 'A-Z' 'a-z' | cut -c1-12)"
+# The service the real app uses, and the accounts a run of this shape would
+# have clobbered: the OAuth session, and the local-model key of the first local
+# account (uid = 2^62, which every fresh data dir hands out first).
+real_keychain_service="ai.workmax.desktop"
+real_keychain_accounts=("session" "local-model-api-key:4611686018427387904")
 upstream_pid=""
 sidecar_pid=""
 base=""
@@ -96,10 +107,36 @@ upstream_url=""
 failures=0
 checks=0
 
+# Attributes only — never `-w`. The modification date is enough to prove an
+# entry was not rewritten, and reading the user's actual secret into a shell
+# variable is not something a smoke test should do.
+keychain_snapshot() {
+  local out=""
+  command -v security >/dev/null 2>&1 || { printf 'no-security'; return 0; }
+  for account in "${real_keychain_accounts[@]}"; do
+    out="$out$(security find-generic-password -s "$real_keychain_service" -a "$account" 2>&1 | grep -E '"(acct|mdat|cdat|svce)"|could not be found' | tr -d ' ')"
+  done
+  printf '%s' "$out"
+}
+
+# Delete every entry this run created. One at a time, because delete-generic-
+# password removes a single match; the loop ends when nothing is left (exit 44).
+purge_run_keychain() {
+  command -v security >/dev/null 2>&1 || return 0
+  local n=0
+  while [ "$n" -lt 64 ]; do
+    security delete-generic-password -s "$keychain_service" >/dev/null 2>&1 || break
+    n=$((n + 1))
+  done
+  [ "$n" -gt 0 ] && echo "==> removed $n Keychain entries under $keychain_service"
+  return 0
+}
+
 cleanup() {
   [ -n "$sidecar_pid" ] && kill "$sidecar_pid" 2>/dev/null
   [ -n "$upstream_pid" ] && kill "$upstream_pid" 2>/dev/null
   wait 2>/dev/null
+  purge_run_keychain
   if [ "$keep" = "1" ]; then
     echo "kept: $work"
   else
@@ -179,6 +216,7 @@ start_sidecar() {
   local log="$work/sidecar-$approvals-$RANDOM.log" env_approvals=""
   [ "$approvals" = "1" ] && env_approvals="WORKMAX_L2_APPROVALS=1"
   env WORKMAX_DESKTOP_DATA_DIR="$work/data" \
+      WORKMAX_KEYCHAIN_SERVICE="$keychain_service" \
       WORKMAX_LOCAL_TOKEN="$token" \
       WORKMAX_PI_PATH="$pi_path" \
       ${env_approvals:+"$env_approvals"} \
@@ -321,6 +359,8 @@ assert_not_grep() {
 
 echo "==> pi binary:  $pi_bin ($("$pi_bin" --version 2>/dev/null | head -1))"
 echo "==> workdir:    $work"
+echo "==> keychain:   $keychain_service"
+keychain_before="$(keychain_snapshot)"
 write_pi_wrappers
 start_upstream
 echo "==> upstream:   $upstream_url"
@@ -508,6 +548,13 @@ thread="$(new_thread)"
 run_turn surface "$thread" "Run it. TOOLPLAN bash $work/bash-escape.txt" none
 assert_no_file "$work/bash-escape.txt" "a tool outside the profile does not execute"
 assert_frame surface done "the turn survives a tool it may not call"
+# ...and it reads as a refusal, not as a failure. pi answers such a call with
+# "Tool bash not found" and isError, which used to reach the user as the same
+# red row a disk error produces while the claude engine explained itself.
+assert_frame surface tool_denied "a tool outside the profile is narrated as denied, not failed"
+assert_grep "$work/surface.sse" '工具不在本地循环的许可面内' \
+  "the refusal carries the same sentence the claude engine uses"
+assert_no_frame surface tool_result "a call that never ran does not report a result"
 
 # 11. The workspace boundary holds, and the refusal is explained.
 thread="$(new_thread)"
@@ -568,6 +615,11 @@ thread="$(new_thread)"
 run_turn upfail "$thread" "PISMOKE_REJECT now. TOOLPLAN none" none
 assert_frame upfail proxy_error "an endpoint that refuses the request ends as proxy_error"
 assert_grep "$work/upfail.sse" 'upstream refused' "the endpoint's own words reach the user"
+# Typed, not shrugged at. Everything pi reported used to arrive as
+# kind:unknown/retryable:true — one sentence covering a bad model id, a dead
+# endpoint and a throttled account.
+assert_grep "$work/upfail.sse" 'bad_request' "a refused request is a bad_request, not an unknown"
+assert_not_grep "$work/upfail.sse" '"kind":"unknown"' "the upstream failure is classified, not shrugged at"
 # The ref self-heals: a turn that tried to resume and failed drops the ref, so
 # the next turn takes the always-works flatten path.
 if command -v sqlite3 >/dev/null 2>&1; then
@@ -603,6 +655,12 @@ start_sidecar 1 "$pi_bin" "http://127.0.0.1:1/v1"
 thread="$(new_thread)"
 run_turn unreachable "$thread" "Hello. TOOLPLAN none" none
 assert_frame unreachable proxy_error "an unreachable endpoint ends as proxy_error"
+# A different cause deserves a different sentence: pi reports a refused
+# connection as a synthetic 502, and "is it running?" is the question that
+# helps — not "the request was invalid".
+assert_grep "$work/unreachable.sse" 'network_unavailable' \
+  "an unreachable endpoint is a network failure, not a bad request"
+assert_grep "$work/unreachable.sse" '请确认它正在运行' "the network failure says what to check"
 
 # 15. With the flag off — the shipping default — the loop runs on the read-only
 #     profile. This is where the claude engine had its hole: a tool outside the
@@ -632,6 +690,27 @@ fi
 # The user's own ~/.pi is never touched: every pi file this run produced lives
 # under our data dir, which is the whole point of PI_CODING_AGENT_DIR.
 assert_file "$work/data/pi_home/models.json" "pi's config stayed inside the sidecar data dir"
+
+# 16. And neither is the user's own Keychain. The run stored a real key (case 1
+#     proved it reached the endpoint), so something WAS written — the question
+#     is only where. Under the run's own service, and nowhere else: the real
+#     service's entries carry the same attributes, modification date included,
+#     that they did before the sidecar started.
+if command -v security >/dev/null 2>&1; then
+  if [ "$(security find-generic-password -s "$keychain_service" -a 'local-model-api-key:4611686018427387904' 2>&1 | grep -c 'svce')" = "1" ]; then
+    ok "the run's key landed under its own Keychain service"
+  else
+    fail "the run's key landed under its own Keychain service" "nothing found under $keychain_service"
+  fi
+  if [ "$(keychain_snapshot)" = "$keychain_before" ]; then
+    ok "the real Keychain service is byte-identical to before the run"
+  else
+    fail "the real Keychain service is byte-identical to before the run" \
+      "$real_keychain_service changed; before/after differ"
+  fi
+else
+  echo "skip - Keychain isolation checks (no security(1))"
+fi
 
 echo
 if [ "$failures" -eq 0 ]; then

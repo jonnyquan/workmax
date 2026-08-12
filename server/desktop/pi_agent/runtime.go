@@ -79,6 +79,19 @@ func (r *Runtime) WorkspaceRoot() string { return r.cfg.WorkspaceRoot }
 // only. Approval mode switches to approvalToolProfile (approvals.go).
 const readOnlyToolProfile = "read,grep,find,ls"
 
+// enabledToolSet is the profile as a lookup, so a frame about a tool can be
+// asked whether this turn enabled it at all. Built from the same string that
+// goes on argv — one source, so the two cannot disagree.
+func enabledToolSet(profile string) map[string]bool {
+	set := map[string]bool{}
+	for _, name := range strings.Split(profile, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			set[name] = true
+		}
+	}
+	return set
+}
+
 // promptCommandID correlates our one prompt command with its response frame.
 const promptCommandID = "workmax-turn"
 
@@ -231,6 +244,7 @@ func (r *Runtime) RunTurn(ctx context.Context, in agentruntime.TurnInput, emit a
 		pending:   map[string]bool{promptCommandID: true},
 		emit:      emit,
 		approvals: in.Approvals,
+		enabled:   enabledToolSet(toolProfile),
 		stdin:     proc.Stdin(),
 	})
 	if perr != nil {
@@ -429,6 +443,26 @@ func (p *framePump) dispatch(ctx context.Context, line []byte) (bool, error) {
 		}
 		return false, nil
 	case "tool_execution_end":
+		// A failure on a tool this turn never enabled is not a failure — it is
+		// the tool surface holding. pi answers such a call with "Tool bash not
+		// found" and isError, which reaches the user as a bare "failed" where
+		// the claude engine says "blocked, and here is why". Same event, same
+		// sentence, whichever runtime is underneath.
+		//
+		// The test is membership in the profile that went on argv, not a match
+		// against pi's wording: a real execution failure of an ENABLED tool
+		// (disk full, bad pattern) stays a tool_result, because "refused" and
+		// "tried and failed" are different things and only one of them is the
+		// user's to fix.
+		if f.IsError && f.ToolName != "" && !p.enabled[f.ToolName] {
+			return false, emit(agentruntime.Event{
+				Kind: agentruntime.EventToolDenied,
+				Tool: agentruntime.ToolEvent{
+					Name:   claudeToolName(f.ToolName),
+					Reason: agentruntime.OutsideSurfaceReason,
+				},
+			})
+		}
 		return false, emit(agentruntime.Event{
 			Kind: agentruntime.EventToolResult,
 			Tool: agentruntime.ToolEvent{Name: claudeToolName(f.ToolName), IsError: f.IsError},
@@ -442,6 +476,20 @@ func (p *framePump) dispatch(ctx context.Context, line []byte) (bool, error) {
 		}
 		if end.StopReason == "error" {
 			msg := strings.TrimSpace(end.ErrorMessage)
+			// The model call failed inside pi's subprocess, so its sentence is
+			// all we have — but that sentence leads with the HTTP status, and
+			// the status is the whole diagnosis. Without this every failure was
+			// kind:unknown/retryable:true: a model id that does not exist, an
+			// endpoint that is not listening, and a provider throttling the
+			// account all read the same, and only one of them is worth retrying.
+			if pe, ok := classifyPiUpstreamMessage(msg); ok {
+				return false, &agentruntime.RuntimeError{
+					Kind:      pe.Kind,
+					Message:   pe.Message,
+					Retryable: pe.Retryable,
+					Details:   pe.Details,
+				}
+			}
 			if msg == "" {
 				msg = "pi 模型调用失败"
 			}

@@ -17,6 +17,7 @@ import (
 
 	claudesdk "github.com/jonnyquan/claude-agent-sdk-go/pkg/claudesdk"
 
+	agentruntime "server/desktop/agentruntime"
 	cloudproxy "server/desktop/cloud_proxy"
 	localinference "server/desktop/local_inference"
 	migrationsdesktop "server/desktop/migrations_desktop"
@@ -363,4 +364,39 @@ func (r *recordingHooks) waitForIndex(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatal("IndexTurn was not called")
+}
+
+// The other half of the vocabulary pin (pi_agent has the first): every tool the
+// claude CLI may call must have a home in the shared approval policy too. The
+// two engines share one ApprovalConfig, and a name in neither surface is denied
+// by Consult with no card and no appeal.
+func TestEveryClaudeToolHasAHomeInTheVocabulary(t *testing.T) {
+	for _, tool := range allowedTools {
+		if !agentruntime.ApprovalSurfaceHas(tool) {
+			t.Fatalf("the claude surface enables %q, which is in neither "+
+				"ApprovalReadSurface nor ApprovalWriteSurface", tool)
+		}
+	}
+	// The CLI's own pre-allowed list is a SUBSET of the shared read surface,
+	// never the other way round: WithAllowedTools may name only tools this CLI
+	// actually has, while the policy has to cover pi's find/ls as well.
+	for _, tool := range readOnlyTools {
+		if !contains(agentruntime.ApprovalReadSurface, tool) {
+			t.Fatalf("claude pre-allows %q, which the shared read surface does not carry", tool)
+		}
+	}
+	for _, tool := range askTools {
+		if !contains(agentruntime.ApprovalWriteSurface, tool) {
+			t.Fatalf("claude asks for %q, which the shared write surface does not carry", tool)
+		}
+	}
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }

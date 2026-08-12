@@ -76,12 +76,16 @@ var toolSurface = func() map[string]bool {
 	return set
 }()
 
-// readOnlyTools is the subset that never asks in approval mode: reading the
-// workspace is the loop's bloodstream, and every call still passes the
-// PreToolUse path guard.
+// readOnlyTools is the CLAUDE CLI's pre-allowed list in approval mode — the
+// subset that never asks, because reading the workspace is the loop's
+// bloodstream and every call still passes the PreToolUse path guard.
+//
+// It is deliberately NOT the approval policy: it goes to WithAllowedTools, so
+// it may name only tools this CLI actually has. The policy vocabulary is
+// agentruntime.ApprovalReadSurface, which is the union across both runtimes.
 var readOnlyTools = []string{"Read", "Glob", "Grep"}
 
-// askTools is the write surface: these consult the user in approval mode.
+// askTools is the claude CLI's write surface: these consult the user.
 var askTools = []string{"Write", "Edit"}
 
 // queryStarter is the seam between this engine and the SDK, so tests can
@@ -293,19 +297,25 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 // approvalConfig assembles the turn's approval policy: the read surface plus
 // every stored "always" grant auto-allow; the write surface asks. Nil when
 // approvals are not enabled.
+//
+// The surfaces come from agentruntime, not from this file's claude lists: ONE
+// Engine drives both runtimes (NewEngineWithRuntime hands it pi), so the policy
+// must cover the union of what either can call. Narrowing it to the claude
+// spellings is what left pi's find/ls in neither set — denied outright the
+// moment anything routed them through Consult.
 func (e *Engine) approvalConfig(req cloudproxy.ChatRequest) *agentruntime.ApprovalConfig {
 	if e.approvals == nil {
 		return nil
 	}
-	auto := make(map[string]bool, len(readOnlyTools)+2)
-	for _, t := range readOnlyTools {
+	auto := make(map[string]bool, len(agentruntime.ApprovalReadSurface)+2)
+	for _, t := range agentruntime.ApprovalReadSurface {
 		auto[t] = true
 	}
 	for t := range loadAlwaysAllowed(e.db, req.UID) {
 		auto[t] = true
 	}
-	ask := make(map[string]bool, len(askTools))
-	for _, t := range askTools {
+	ask := make(map[string]bool, len(agentruntime.ApprovalWriteSurface))
+	for _, t := range agentruntime.ApprovalWriteSurface {
 		ask[t] = true
 	}
 	uid := req.UID

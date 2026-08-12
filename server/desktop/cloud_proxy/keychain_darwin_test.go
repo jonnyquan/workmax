@@ -69,6 +69,37 @@ func TestDarwinKeychainWriteRefusesNewlineInValue(t *testing.T) {
 	}
 }
 
+// A service name that failed validation must stop every operation before argv,
+// because the alternative — proceeding under whatever name the caller had —
+// means an isolated run writing into the user's real slot. "" is what
+// KeychainServiceName hands back for a malformed WORKMAX_KEYCHAIN_SERVICE, so
+// it is the one that matters most.
+func TestDarwinKeychainRefusesAnInvalidServiceName(t *testing.T) {
+	for _, service := range []string{"", "-s", "ai workmax", "ai.workmax\nfoo"} {
+		keychain, captureDir := newFakeDarwinKeychain(t, time.Second)
+		if err := keychain.Write(service, KeychainAccount, []byte("secret")); err == nil {
+			t.Fatalf("Write accepted service %q", service)
+		} else if !strings.Contains(err.Error(), KeychainServiceEnv) {
+			t.Fatalf("the error must point at the variable to fix: %v", err)
+		}
+		if _, err := keychain.Read(service, KeychainAccount); err == nil {
+			t.Fatalf("Read accepted service %q", service)
+		}
+		if err := keychain.Delete(service, KeychainAccount); err == nil {
+			t.Fatalf("Delete accepted service %q", service)
+		}
+		for _, capture := range []string{
+			"add-generic-password.argv",
+			"find-generic-password.argv",
+			"delete-generic-password.argv",
+		} {
+			if _, err := os.Stat(filepath.Join(captureDir, capture)); !os.IsNotExist(err) {
+				t.Fatalf("security ran for service %q (%s stat err = %v)", service, capture, err)
+			}
+		}
+	}
+}
+
 func TestDarwinKeychainReadAndMissingEntryContracts(t *testing.T) {
 	t.Run("read", func(t *testing.T) {
 		keychain, captureDir := newFakeDarwinKeychain(t, time.Second)

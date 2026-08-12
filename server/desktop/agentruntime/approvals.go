@@ -32,6 +32,63 @@ func ValidApprovalDecision(s string) bool {
 	return false
 }
 
+// ApprovalReadSurface and ApprovalWriteSurface are the shared approval
+// vocabulary: the tools that never ask, and the tools that do. They live here
+// rather than in either engine because ONE ApprovalConfig serves both — the
+// same local_agent.Engine builds it whether the turn runs on the claude CLI or
+// on pi — and because a name missing from both sets is denied outright by
+// Consult, with no card and no appeal.
+//
+// So the sets are the UNION of what the two runtimes can call, not either
+// runtime's own surface. Find and Ls are the visible consequence: pi's read
+// profile carries `find` and `ls`, the claude CLI has neither, and the
+// vocabulary has to hold both or pi's own read tools fall off the edge of the
+// policy. Today the pi extension only gates write/edit, so a find would never
+// reach Consult and the gap was invisible; the moment that gate widens it
+// becomes a flat refusal of a tool the engine deliberately enabled.
+//
+// The names are the Claude spellings because durable grants are stored under
+// them (w_desktop_agent_permission_rule) and a grant given on one engine must
+// silence the other. pi normalizes into this vocabulary — see
+// pi_agent.claudeToolName — and each of its tools keeps a name of its own
+// rather than being folded onto a near-equivalent: pi's tool_execution_end
+// cannot name a file, so the renderer settles the oldest OPEN call of that
+// tool, and two distinct tools sharing one name would settle each other's row.
+//
+// Both engines' surfaces are pinned against these sets by tests
+// (pi_agent.TestEveryEnabledPiToolHasAHomeInTheVocabulary and
+// local_agent.TestEveryClaudeToolHasAHomeInTheVocabulary), so a tool added to
+// either runtime cannot quietly land outside the policy again.
+var (
+	ApprovalReadSurface  = []string{"Read", "Glob", "Grep", "Find", "Ls"}
+	ApprovalWriteSurface = []string{"Write", "Edit"}
+)
+
+// OutsideSurfaceReason is the sentence a user reads when a call was refused
+// for being outside the local loop's tool surface. One string, because the
+// three places that can refuse a call for that reason — Consult, the claude
+// engine's PreToolUse hook, and pi's own --tools restriction — are the same
+// event as far as the reader is concerned, and telling them apart is not the
+// reader's job.
+const OutsideSurfaceReason = "工具不在本地循环的许可面内"
+
+// ApprovalSurfaceHas reports whether a tool name has any home in the shared
+// vocabulary — auto-allowed or askable. Anything else is outside the local
+// loop's surface entirely.
+func ApprovalSurfaceHas(tool string) bool {
+	for _, known := range ApprovalReadSurface {
+		if known == tool {
+			return true
+		}
+	}
+	for _, known := range ApprovalWriteSurface {
+		if known == tool {
+			return true
+		}
+	}
+	return false
+}
+
 // DefaultApprovalTimeout bounds how long a tool call waits for the user.
 // A renderer that never answers (closed window, old version without the
 // card) must not hang the turn forever; timing out denies, and a denial is
@@ -183,7 +240,7 @@ func (cfg *ApprovalConfig) Consult(ctx context.Context, emit EmitFunc, tool, tar
 		// Outside the declared surface entirely — no card, no appeal.
 		_ = emit(Event{
 			Kind: EventToolDenied,
-			Tool: ToolEvent{Name: tool, Target: target, Reason: "工具不在本地循环的许可面内"},
+			Tool: ToolEvent{Name: tool, Target: target, Reason: OutsideSurfaceReason},
 		})
 		return ConsultResult{
 			Decision: ApprovalDeny,

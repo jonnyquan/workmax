@@ -64,6 +64,9 @@ func (k *DarwinKeychain) timeout() time.Duration {
 // versions but isn't universally available — explicit delete+add
 // avoids version sniffing.
 func (k *DarwinKeychain) Write(service, account string, value []byte) error {
+	if err := darwinKeychainServiceError("write", service); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), k.timeout())
 	defer cancel()
 	// Best-effort delete (ignore NoEntry).
@@ -111,6 +114,9 @@ func (k *DarwinKeychain) Write(service, account string, value []byte) error {
 // Read returns the secret as bytes. Uses `-w` to print only the
 // password (no metadata noise).
 func (k *DarwinKeychain) Read(service, account string) ([]byte, error) {
+	if err := darwinKeychainServiceError("read", service); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), k.timeout())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, k.cmd(),
@@ -136,9 +142,24 @@ func (k *DarwinKeychain) Read(service, account string) ([]byte, error) {
 // Delete removes the entry. Idempotent per the interface contract —
 // "not found" maps to nil here, not ErrKeychainNoEntry.
 func (k *DarwinKeychain) Delete(service, account string) error {
+	if err := darwinKeychainServiceError("delete", service); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), k.timeout())
 	defer cancel()
 	return k.delete(ctx, service, account)
+}
+
+// darwinKeychainServiceError is the last gate before argv. A caller reaches it
+// with "" when KeychainServiceName rejected the override, and the operation
+// fails here rather than proceeding under some other namespace — including the
+// real one, which is the accident the override exists to prevent.
+func darwinKeychainServiceError(operation, service string) error {
+	if err := validateKeychainService(service); err != nil {
+		return fmt.Errorf("keychain %s: invalid service name (check $%s): %w",
+			operation, KeychainServiceEnv, err)
+	}
+	return nil
 }
 
 func (k *DarwinKeychain) delete(ctx context.Context, service string, account string) error {

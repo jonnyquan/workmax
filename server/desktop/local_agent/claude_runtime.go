@@ -142,7 +142,7 @@ func securityHook(guard *pathValidator, emit agentruntime.EmitFunc) claudesdk.Ho
 				Tool: agentruntime.ToolEvent{
 					Name:   toolName,
 					Target: toolTarget(toolInput),
-					Reason: "工具不在本地循环的许可面内",
+					Reason: agentruntime.OutsideSurfaceReason,
 				},
 			})
 			return claudesdk.NewPreToolUseOutput(claudesdk.PermissionDecisionDeny,

@@ -177,6 +177,21 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 		version = buildinfo.Version
 	}
 
+	// The Keychain namespace is settled before anything else, because a
+	// malformed override must cost nothing: no data dir, no lock file, no
+	// SQLite handle. Fatal rather than ignored — ignoring it would point an
+	// intentionally-isolated run (a smoke, a dev instance) back at the real
+	// app's entries and overwrite the user's own key, which is the whole reason
+	// the variable exists.
+	keychainService, err := cloudproxy.ResolveKeychainService(os.LookupEnv)
+	if err != nil {
+		return nil, fmt.Errorf("keychain service: %w", err)
+	}
+	if keychainService != cloudproxy.KeychainService {
+		log.Printf("keychain service: %s (isolated namespace via $%s)",
+			keychainService, cloudproxy.KeychainServiceEnv)
+	}
+
 	// Unwind whatever we already acquired if a later step fails. Without
 	// this an error after acquireSidecarLock would strand sidecar.pid and
 	// the next launch would refuse to start.

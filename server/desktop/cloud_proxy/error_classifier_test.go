@@ -368,3 +368,73 @@ func valueToStringForTest(value any) string {
 		return ""
 	}
 }
+
+// One taxonomy, two voices. ClassifyLocalUpstreamError writes for a user
+// looking at their OWN endpoint — their API key, their provider's bill, their
+// Ollama that is not running — so the sentences differ on purpose. The KIND
+// must not: a renderer, a log reader, and the cache classifier all switch on
+// it, and a status that means "rate limited" on one path cannot mean something
+// else on the other.
+//
+// The two exceptions are listed rather than tolerated, because each is a
+// deliberate re-reading of the same status for a different owner.
+func TestLocalUpstreamClassificationSharesTheCloudTaxonomy(t *testing.T) {
+	deliberate := map[int]struct {
+		kind ProxyErrorKind
+		why  string
+	}{
+		// The cloud's 401 means the workmax session died and only re-login
+		// fixes it. A local endpoint's 401 means the key in Settings is wrong,
+		// which is a credential the user supplies, not one that expired.
+		401: {KindAuthRequired, "a local 401 is the user's API key, not their workmax login"},
+		// Likewise 403: the cloud reads a non-quota 403 as a plain refusal;
+		// from a local endpoint it is the same rejected credential as a 401.
+		403: {KindAuthRequired, "a local 403 is the same rejected credential"},
+		// pi turns a refused TCP connection into a synthetic 502, so a local
+		// 502 is overwhelmingly "nothing is listening" rather than "a gateway
+		// is down" — measured against pi 0.84.1. 500/503/504 keep the cloud's
+		// reading; only the ambiguous one diverges.
+		502: {KindNetworkUnavailable, "pi reports a refused connection as a 502"},
+		// The cloud's 404 falls into the 4xx catch-all; a local 404 is the
+		// base_url, which is worth its own sentence but the same kind.
+		// (Kind agrees there — not an exception, just worth knowing.)
+	}
+	for status := 400; status < 600; status++ {
+		resp := &http.Response{StatusCode: status, Header: http.Header{}}
+		cloud := ClassifyHTTPResponse(resp, nil)
+		local := ClassifyLocalUpstreamError(status, "")
+		if want, ok := deliberate[status]; ok {
+			if local.Kind != want.kind {
+				t.Errorf("status %d: local kind = %q, want %q (%s)", status, local.Kind, want.kind, want.why)
+			}
+			continue
+		}
+		if cloud.Kind != local.Kind {
+			t.Errorf("status %d: cloud kind %q vs local kind %q — one status, one meaning",
+				status, cloud.Kind, local.Kind)
+		}
+		if cloud.Retryable != local.Retryable {
+			t.Errorf("status %d: cloud retryable %v vs local %v", status, cloud.Retryable, local.Retryable)
+		}
+	}
+}
+
+// Every kind this classifier can produce must be one the renderer accepts —
+// the enum is closed, and a kind outside it is dropped as a malformed frame.
+func TestLocalUpstreamClassificationStaysInsideTheEnum(t *testing.T) {
+	known := map[ProxyErrorKind]bool{
+		KindNetworkUnavailable: true, KindAuthRequired: true, KindAuthExpired: true,
+		KindServiceUnavailable: true, KindQuotaExceeded: true, KindRateLimited: true,
+		KindPayloadTooLarge: true, KindBadRequest: true, KindSessionChanged: true,
+		KindUnknown: true,
+	}
+	for _, status := range []int{0, 99, 100, 204, 301, 400, 401, 402, 403, 404, 413, 429, 500, 502, 503, 504, 599, 600} {
+		pe := ClassifyLocalUpstreamError(status, "")
+		if !known[pe.Kind] {
+			t.Fatalf("status %d produced kind %q, which is outside the closed enum", status, pe.Kind)
+		}
+		if pe.Message == "" {
+			t.Fatalf("status %d produced no message for the user to read", status)
+		}
+	}
+}

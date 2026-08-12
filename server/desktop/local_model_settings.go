@@ -32,7 +32,9 @@ const (
 
 	// keychainLocalModelAPIKeyPrefix names the per-identity Keychain slot
 	// holding a user's local-model API key. Service remains
-	// cloudproxy.KeychainService so Keychain Access shows one app.
+	// cloudproxy.KeychainServiceName() so Keychain Access shows one app —
+	// which is the default name unless the process asked for an isolated
+	// namespace (WORKMAX_KEYCHAIN_SERVICE; see cloud_proxy/keychain.go).
 	//
 	// The suffix is the uid, and it is not cosmetic. This used to be one
 	// fixed account for the whole machine, which meant switching local
@@ -242,7 +244,7 @@ func (s *LocalModelSettingsStore) Put(uid uint64, in LocalModelSettingsPut) (Loc
 			if s.keychain == nil {
 				return LocalModelSettingsDTO{}, errors.New("keychain unavailable")
 			}
-			if err := s.keychain.Delete(cloudproxy.KeychainService, account); err != nil {
+			if err := s.keychain.Delete(cloudproxy.KeychainServiceName(), account); err != nil {
 				return LocalModelSettingsDTO{}, fmt.Errorf("clear local model api key: %w", err)
 			}
 		}
@@ -254,7 +256,7 @@ func (s *LocalModelSettingsStore) Put(uid uint64, in LocalModelSettingsPut) (Loc
 			if s.keychain == nil {
 				return LocalModelSettingsDTO{}, errors.New("keychain unavailable")
 			}
-			if err := s.keychain.Write(cloudproxy.KeychainService, account, []byte(key)); err != nil {
+			if err := s.keychain.Write(cloudproxy.KeychainServiceName(), account, []byte(key)); err != nil {
 				return LocalModelSettingsDTO{}, fmt.Errorf("store local model api key: %w", err)
 			}
 		}
@@ -318,7 +320,7 @@ func (s *LocalModelSettingsStore) LoadAPIKey(uid uint64) (string, error) {
 		return "", errors.New("keychain unavailable")
 	}
 	s.migrateLegacyKeychainAccount()
-	raw, err := s.keychain.Read(cloudproxy.KeychainService, keychainLocalModelAPIKeyAccount(uid))
+	raw, err := s.keychain.Read(cloudproxy.KeychainServiceName(), keychainLocalModelAPIKeyAccount(uid))
 	if err != nil {
 		if errors.Is(err, cloudproxy.ErrKeychainNoEntry) {
 			return "", nil
@@ -345,7 +347,7 @@ func (s *LocalModelSettingsStore) migrateLegacyKeychainAccount() {
 		if s.keychain == nil {
 			return
 		}
-		raw, err := s.keychain.Read(cloudproxy.KeychainService, KeychainLocalModelAPIKeyLegacyAccount)
+		raw, err := s.keychain.Read(cloudproxy.KeychainServiceName(), KeychainLocalModelAPIKeyLegacyAccount)
 		if err != nil {
 			if !errors.Is(err, cloudproxy.ErrKeychainNoEntry) {
 				log.Printf("local model api key: legacy account unreadable, leaving it in place: %v", err)
@@ -357,17 +359,17 @@ func (s *LocalModelSettingsStore) migrateLegacyKeychainAccount() {
 		account := keychainLocalModelAPIKeyAccount(uid)
 		// Never overwrite a key the partitioned world already wrote: a
 		// re-entered key is the newer truth.
-		if _, err := s.keychain.Read(cloudproxy.KeychainService, account); err != nil {
+		if _, err := s.keychain.Read(cloudproxy.KeychainServiceName(), account); err != nil {
 			if !errors.Is(err, cloudproxy.ErrKeychainNoEntry) {
 				log.Printf("local model api key: migration target unreadable, leaving legacy key in place: %v", err)
 				return
 			}
-			if err := s.keychain.Write(cloudproxy.KeychainService, account, raw); err != nil {
+			if err := s.keychain.Write(cloudproxy.KeychainServiceName(), account, raw); err != nil {
 				log.Printf("local model api key: migration write failed, leaving legacy key in place: %v", err)
 				return
 			}
 		}
-		if err := s.keychain.Delete(cloudproxy.KeychainService, KeychainLocalModelAPIKeyLegacyAccount); err != nil {
+		if err := s.keychain.Delete(cloudproxy.KeychainServiceName(), KeychainLocalModelAPIKeyLegacyAccount); err != nil {
 			log.Printf("local model api key: legacy account delete failed: %v", err)
 		}
 	})
@@ -439,7 +441,7 @@ func (s *LocalModelSettingsStore) keyPresent(uid uint64) (bool, error) {
 	if s.keychain == nil {
 		return false, nil
 	}
-	_, err := s.keychain.Read(cloudproxy.KeychainService, keychainLocalModelAPIKeyAccount(uid))
+	_, err := s.keychain.Read(cloudproxy.KeychainServiceName(), keychainLocalModelAPIKeyAccount(uid))
 	if err == nil {
 		return true, nil
 	}

@@ -187,8 +187,11 @@ func (p *framePump) respond(ctx context.Context, frame map[string]any) error {
 // the emit sink, and — in approval mode — the approval policy plus pi's
 // stdin for extension_ui_response answers.
 type framePump struct {
-	pending   map[string]bool
-	emit      agentruntime.EmitFunc
+	pending map[string]bool
+	emit    agentruntime.EmitFunc
+	// enabled is this turn's --tools profile as a set. A frame about a tool
+	// outside it is pi refusing a call, not a call that failed.
+	enabled   map[string]bool
 	approvals *agentruntime.ApprovalConfig // nil = pre-approved read-only mode
 	stdin     io.Writer
 }

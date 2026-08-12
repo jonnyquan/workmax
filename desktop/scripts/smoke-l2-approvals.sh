@@ -19,6 +19,13 @@
 #
 # Skips (exit 0) when no CLI is named, the same env gate as
 # TestIntegration_CLIEndpointInventory: CI has no claude binary.
+#
+# It is safe to run on a machine you use. The data dir is a throwaway one and so
+# is the Keychain namespace: the run sets WORKMAX_KEYCHAIN_SERVICE, deletes what
+# it created on the way out, and asserts the real service's entries are
+# unchanged. Until that variable existed, the local-model key was keyed by uid
+# under one fixed service name, and every fresh data dir hands out the same
+# first uid — so a run overwrote whatever key the user had stored.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -82,16 +89,46 @@ fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/workmax-l2-approvals.XXXXXX")"
 token="l2smoke$(uuidgen | tr -d '-' | tr 'A-Z' 'a-z')"
+# The Keychain namespace this run owns, per-run so two runs cannot collide
+# either. Shape matches the sidecar's validator: [A-Za-z0-9][A-Za-z0-9._-]*.
+keychain_service="ai.workmax.desktop.smoke-l2.$(uuidgen | tr -d '-' | tr 'A-Z' 'a-z' | cut -c1-12)"
+real_keychain_service="ai.workmax.desktop"
+real_keychain_accounts=("session" "local-model-api-key:4611686018427387904")
 upstream_pid=""
 sidecar_pid=""
 base=""
 failures=0
 checks=0
 
+# Attributes only — never `-w`. The modification date proves an entry was not
+# rewritten, and a smoke test has no business reading the user's real secret.
+keychain_snapshot() {
+  local out=""
+  command -v security >/dev/null 2>&1 || { printf 'no-security'; return 0; }
+  for account in "${real_keychain_accounts[@]}"; do
+    out="$out$(security find-generic-password -s "$real_keychain_service" -a "$account" 2>&1 | grep -E '"(acct|mdat|cdat|svce)"|could not be found' | tr -d ' ')"
+  done
+  printf '%s' "$out"
+}
+
+# Delete every entry this run created, one at a time: delete-generic-password
+# removes a single match and exits 44 once nothing is left.
+purge_run_keychain() {
+  command -v security >/dev/null 2>&1 || return 0
+  local n=0
+  while [ "$n" -lt 64 ]; do
+    security delete-generic-password -s "$keychain_service" >/dev/null 2>&1 || break
+    n=$((n + 1))
+  done
+  [ "$n" -gt 0 ] && echo "==> removed $n Keychain entries under $keychain_service"
+  return 0
+}
+
 cleanup() {
   [ -n "$sidecar_pid" ] && kill "$sidecar_pid" 2>/dev/null
   [ -n "$upstream_pid" ] && kill "$upstream_pid" 2>/dev/null
   wait 2>/dev/null
+  purge_run_keychain
   if [ "$keep" = "1" ]; then
     echo "kept: $work"
   else
@@ -129,6 +166,7 @@ start_sidecar() {
   local approvals="$1" log="$work/sidecar-$1.log" env_approvals=""
   [ "$approvals" = "1" ] && env_approvals="WORKMAX_L2_APPROVALS=1"
   env WORKMAX_DESKTOP_DATA_DIR="$work/data" \
+      WORKMAX_KEYCHAIN_SERVICE="$keychain_service" \
       WORKMAX_LOCAL_TOKEN="$token" \
       WORKMAX_CLAUDE_CLI_PATH="$cli" \
       ${env_approvals:+"$env_approvals"} \
@@ -253,6 +291,8 @@ assert_grep() {
 
 echo "==> claude CLI: $cli"
 echo "==> workdir:    $work"
+echo "==> keychain:   $keychain_service"
+keychain_before="$(keychain_snapshot)"
 start_upstream
 echo "==> upstream:   $upstream_url"
 start_sidecar 1
@@ -397,6 +437,26 @@ fi
 thread="$(new_thread)"
 run_turn surface_off "$thread" "Run it. TOOLPLAN Bash $work/bash-escape-off.txt" none
 assert_no_file "$work/bash-escape-off.txt" "the surface holds in pre-approved mode"
+
+# 11. The run stored a real local-model key, so something WAS written to the
+#     Keychain — the question is only where. Under the run's own service, and
+#     nowhere else: the real service's entries carry the same attributes,
+#     modification date included, that they did before the sidecar started.
+if command -v security >/dev/null 2>&1; then
+  if [ "$(security find-generic-password -s "$keychain_service" -a 'local-model-api-key:4611686018427387904' 2>&1 | grep -c 'svce')" = "1" ]; then
+    ok "the run's key landed under its own Keychain service"
+  else
+    fail "the run's key landed under its own Keychain service" "nothing found under $keychain_service"
+  fi
+  if [ "$(keychain_snapshot)" = "$keychain_before" ]; then
+    ok "the real Keychain service is byte-identical to before the run"
+  else
+    fail "the real Keychain service is byte-identical to before the run" \
+      "$real_keychain_service changed; before/after differ"
+  fi
+else
+  echo "skip - Keychain isolation checks (no security(1))"
+fi
 
 echo
 if [ "$failures" -eq 0 ]; then

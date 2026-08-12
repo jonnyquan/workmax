@@ -221,6 +221,119 @@ func ClassifyHTTPResponse(resp *http.Response, body []byte) (pe ProxyError) {
 	}
 }
 
+// ClassifyLocalUpstreamError maps a failure the user's OWN model endpoint
+// produced onto the same ProxyErrorKind enum every other path uses.
+//
+// It exists because the L2 pi runtime never sees an *http.Response: the HTTP
+// call happens inside pi's subprocess and the outcome comes back as a sentence
+// on the event stream ("400: {…}", "429 status code (no body)"). Everything
+// arrived as kind:unknown, retryable:true — one undifferentiated shrug covering
+// a model id that does not exist, an endpoint that is not listening, and a
+// provider throttling the account, which are three different things for the
+// person who has to fix one of them.
+//
+// The KINDS match ClassifyHTTPResponse status for status (pinned by a test) so
+// there is one taxonomy. The MESSAGES deliberately do not: this endpoint
+// belongs to the user, so a 401 is their API key rather than their workmax
+// login, a 402 is their provider's bill rather than a Pro upgrade, and a 502 —
+// which is also what pi reports for a refused TCP connection — is "is it
+// running?" rather than "workmax is having a moment".
+func ClassifyLocalUpstreamError(status int, body string) (pe ProxyError) {
+	defer func() { pe = sanitizeProxyError(pe) }()
+	details := map[string]any{
+		"upstream_status":      status,
+		"upstream_body_prefix": bodyPrefix([]byte(body)),
+	}
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden: // 401, 403
+		return ProxyError{
+			Kind:      KindAuthRequired,
+			Message:   "本地模型 endpoint 拒绝了凭据：请检查设置中的 API key",
+			Retryable: false,
+			Details:   details,
+		}
+
+	case status == http.StatusPaymentRequired: // 402
+		return ProxyError{
+			Kind:      KindQuotaExceeded,
+			Message:   "本地模型 endpoint 报告额度不足：请检查该服务商的余额或配额",
+			Retryable: false,
+			Details:   details,
+		}
+
+	case status == http.StatusNotFound: // 404
+		// Same sentence L1 uses for the same status, because it is the same
+		// mistake: a base_url that does not have the API where we asked.
+		return ProxyError{
+			Kind:      KindBadRequest,
+			Message:   "本地模型 endpoint 返回 404：请检查 base_url 是否正确",
+			Retryable: false,
+			Details:   details,
+		}
+
+	case status == http.StatusRequestEntityTooLarge: // 413
+		return ProxyError{
+			Kind:      KindPayloadTooLarge,
+			Message:   "请求过大，请减少文件或精简内容",
+			Retryable: false,
+			Details:   details,
+		}
+
+	case status == http.StatusTooManyRequests: // 429
+		return ProxyError{
+			Kind:      KindRateLimited,
+			Message:   "本地模型 endpoint 限流，请稍后再试",
+			Retryable: true,
+			Details:   details,
+		}
+
+	case status == http.StatusBadGateway: // 502
+		// The one status that means something different here than upstream.
+		// Measured: pi turns a refused TCP connection into a synthetic 502, so
+		// this branch covers both "nothing is listening on that port" and "a
+		// real gateway is down" — indistinguishable from here, and the first is
+		// overwhelmingly what a local-first user hits. "Is it running?" is the
+		// question worth asking; "workmax is having a moment" is not.
+		return ProxyError{
+			Kind:      KindNetworkUnavailable,
+			Message:   "无法连接本地模型 endpoint：请确认它正在运行，且 base_url 正确",
+			Retryable: true,
+			Details:   details,
+		}
+
+	case status >= 500 && status < 600: // other 5xx, 500/503/504 included
+		return ProxyError{
+			Kind:      KindServiceUnavailable,
+			Message:   "本地模型 endpoint 返回了服务端错误，请稍后重试",
+			Retryable: true,
+			Details:   details,
+		}
+
+	case status >= 400 && status < 500: // catch-all 4xx, 400 included
+		// The endpoint's own words when it left any: "model foo does not
+		// exist" is the whole diagnosis, and nothing this side writes improves
+		// on it.
+		msg := extractErrorMessage([]byte(body))
+		if msg == "" {
+			msg = "本地模型 endpoint 拒绝了请求：请检查模型 ID 与端点配置"
+		}
+		return ProxyError{
+			Kind:      KindBadRequest,
+			Message:   msg,
+			Retryable: false,
+			Details:   details,
+		}
+
+	default:
+		return ProxyError{
+			Kind:      KindUnknown,
+			Message:   "本地模型 endpoint 返回了无法识别的结果",
+			Retryable: true,
+			Details:   details,
+		}
+	}
+}
+
 // ClassifyUpstreamStreamError maps a mid-stream upstream failure
 // (scanner.Err() != nil after we already started reading SSE) to a
 // ProxyError. We tag retryable=true so the renderer can show a "retry"

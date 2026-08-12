@@ -143,4 +143,38 @@ else
   printf 'skip - scripted upstream checks (no node)\n'
 fi
 
+# --- Keychain isolation -------------------------------------------------------
+
+# The Keychain is the one thing WORKMAX_DESKTOP_DATA_DIR cannot isolate: the
+# account is derived from the uid and every fresh data dir hands out the same
+# first uid, so only the SERVICE name separates this run from the user's real
+# key. Static checks, because the property has to hold on a machine that cannot
+# run the smoke at all — and because the day it silently stops holding is the
+# day a run eats somebody's configured key.
+grep -q 'WORKMAX_KEYCHAIN_SERVICE="\$keychain_service"' "$SMOKE" \
+  || die "the sidecar is launched with an isolated Keychain service"
+pass "the sidecar is launched with an isolated Keychain service"
+
+grep -q 'purge_run_keychain' "$SMOKE" \
+  || die "the run deletes the Keychain entries it created"
+grep -q 'purge_run_keychain' <(sed -n '/^cleanup()/,/^}/p' "$SMOKE") \
+  || die "the purge runs from the exit trap, not only on the happy path"
+pass "the run deletes the Keychain entries it created, from the exit trap"
+
+# Never `-w` against the real service: the snapshot exists to prove the entries
+# were not touched, and reading the user's actual secret to do that would be a
+# worse trade than the bug.
+if sed -n '/^keychain_snapshot()/,/^}/p' "$SMOKE" | grep -q -e '-w'; then
+  die "the real-service snapshot reads attributes only, never the secret"
+fi
+pass "the real-service snapshot reads attributes only, never the secret"
+
+# The generated name must satisfy the sidecar's validator, or Bootstrap refuses
+# to start and the whole smoke turns into a launch failure.
+svc="ai.workmax.desktop.smoke.$(printf '%s' "0123456789ab")"
+printf '%s' "$svc" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]*$' \
+  || die "the generated service name matches the sidecar's validator"
+[ "${#svc}" -le 96 ] || die "the generated service name fits the sidecar's length bound"
+pass "the generated service name matches the sidecar's validator"
+
 printf 'smoke-l2-pi.test.sh: all checks passed\n'

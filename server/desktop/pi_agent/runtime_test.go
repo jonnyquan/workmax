@@ -477,3 +477,88 @@ func TestRunTurn_EmitErrorAborts(t *testing.T) {
 		t.Fatalf("err = %v, want the emit error back", err)
 	}
 }
+
+// A call pi refused for being outside --tools must read as "blocked, and here
+// is why", not as "failed". pi's own answer is "Tool bash not found" with
+// isError, which the sidecar used to forward verbatim as a tool_result: the
+// user saw the same red row a disk error produces, while the claude engine
+// explains its refusals. Same event, same sentence, either runtime.
+func TestRunTurn_ToolOutsideTheProfileIsNarratedAsDenied(t *testing.T) {
+	rt, _, _ := newTestRuntime(t, frames(
+		promptOK,
+		`{"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"toolCall","id":"c1","name":"bash","arguments":{"command":"touch /tmp/escape"}}}}`,
+		`{"type":"tool_execution_end","toolCallId":"c1","toolName":"bash","isError":true,"result":{"content":[{"type":"text","text":"Tool bash not found"}]}}`,
+		`{"type":"agent_settled"}`,
+	), nil)
+
+	sink := &captured{}
+	if err := rt.RunTurn(context.Background(), turnInput(), sink.emit); err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+
+	want := []string{"session_ref", "tool_use", "tool_denied"}
+	if got := kinds(sink.events); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("event kinds = %v, want %v", got, want)
+	}
+	denied := sink.events[2].Tool
+	if denied.Name != "Bash" {
+		t.Errorf("denial names %q, want the shared spelling of the call it refuses", denied.Name)
+	}
+	if denied.Reason != agentruntime.OutsideSurfaceReason {
+		t.Errorf("denial reason = %q, want the same sentence the claude engine uses", denied.Reason)
+	}
+}
+
+// The other side of the same coin, and the one that must NOT be mistaken for a
+// refusal: an ENABLED tool that genuinely failed. "Refused" and "tried and
+// failed" mean different things to the person reading, and only one of them is
+// theirs to fix.
+func TestRunTurn_AnEnabledToolThatFailsStaysAnErroredResult(t *testing.T) {
+	rt, _, _ := newTestRuntime(t, frames(
+		promptOK,
+		`{"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"toolCall","id":"c1","name":"read","arguments":{"path":"/tmp/ws/thread_x/gone.md"}}}}`,
+		`{"type":"tool_execution_end","toolCallId":"c1","toolName":"read","isError":true,"result":{"content":[{"type":"text","text":"ENOENT"}]}}`,
+		`{"type":"agent_settled"}`,
+	), nil)
+
+	sink := &captured{}
+	if err := rt.RunTurn(context.Background(), turnInput(), sink.emit); err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+
+	want := []string{"session_ref", "tool_use", "tool_result"}
+	if got := kinds(sink.events); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("event kinds = %v, want %v", got, want)
+	}
+	if tool := sink.events[2].Tool; tool.Name != "Read" || !tool.IsError {
+		t.Errorf("tool_result = %+v, want an errored Read", tool)
+	}
+}
+
+// Approval mode enables write/edit, so a write that fails there is a failure,
+// not a refusal — the profile the pump checks against has to be the one that
+// actually went on argv, not the read-only default.
+func TestRunTurn_TheDenialTestFollowsTheTurnsOwnProfile(t *testing.T) {
+	in := turnInput()
+	in.Approvals = &agentruntime.ApprovalConfig{
+		Broker:      agentruntime.NewApprovalBroker(),
+		TurnUUID:    "t-1",
+		ThreadUUID:  "th-1",
+		AutoAllowed: map[string]bool{},
+		AskAllowed:  map[string]bool{"Write": true},
+	}
+	rt, _, _ := newTestRuntime(t, frames(
+		promptOK,
+		`{"type":"tool_execution_end","toolCallId":"c1","toolName":"write","isError":true,"result":{"content":[{"type":"text","text":"disk full"}]}}`,
+		`{"type":"agent_settled"}`,
+	), nil)
+
+	sink := &captured{}
+	if err := rt.RunTurn(context.Background(), in, sink.emit); err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	want := []string{"session_ref", "tool_result"}
+	if got := kinds(sink.events); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("event kinds = %v, want %v; write is enabled in approval mode", got, want)
+	}
+}

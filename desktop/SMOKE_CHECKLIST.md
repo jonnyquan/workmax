@@ -73,14 +73,14 @@ WORKMAX_TEST_CLAUDE_CLI=$HOME/.local/share/claude/versions/<ver> \
   ./desktop/scripts/smoke-l2-approvals.sh
 ```
 
-It owns its own sidecar (isolated data dir, both approval modes) and prints one
-`ok`/`FAIL` line per claim. `--skip-timeout` drops the case that waits out the
-120s approval timeout; `--keep` keeps the data dir and per-turn `.sse`
-captures for inspection. Without a CLI it prints "skipping" and exits 0, the
-same env gate as `TestIntegration_CLIEndpointInventory` — CI has no claude
-binary.
+It owns its own sidecar (isolated data dir, isolated Keychain namespace, both
+approval modes) and prints one `ok`/`FAIL` line per claim. `--skip-timeout`
+drops the case that waits out the 120s approval timeout; `--keep` keeps the data
+dir and per-turn `.sse` captures for inspection. Without a CLI it prints
+"skipping" and exits 0, the same env gate as
+`TestIntegration_CLIEndpointInventory` — CI has no claude binary.
 
-Expected: 31 checks pass. What they cover:
+Expected: 39 checks pass (33 with `--skip-timeout`). What they cover:
 
 - a write tool call raises an `approval_request` frame carrying id, name and
   target; each of the four decisions is answered through the same
@@ -97,7 +97,10 @@ Expected: 31 checks pass. What they cover:
 - an unanswered card denies on the sidecar's 120s timeout while the stream
   stays alive on keepalives;
 - with `WORKMAX_L2_APPROVALS` unset the loop is back to pre-approved mode: no
-  card, the tool runs, and the approve endpoint answers 503.
+  card, the tool runs, and the approve endpoint answers 503;
+- the run's own Keychain entries land under a per-run service name and are
+  deleted on the way out, while the real `ai.workmax.desktop` entries stay
+  byte-identical — modification date included — before and after.
 
 `desktop/scripts/smoke-l2-approvals.test.sh` covers the harness itself without
 a CLI or a sidecar: the preflight, the skip gate, the approve payload's shell
@@ -116,16 +119,17 @@ WORKMAX_TEST_PI_BIN=/path/to/pi ./desktop/scripts/smoke-l2-pi.sh
 ```
 
 Verified against pi 0.84.1 (darwin-arm64, the official release tarball). It
-owns its own sidecar (isolated data dir, both approval modes, and a
-`PI_CODING_AGENT_DIR` under that dir so the user's `~/.pi` is never touched)
-and prints one `ok`/`FAIL` line per claim. One thing is NOT isolated: the
-local-model API key lives in the login Keychain under a fixed service name
-keyed by uid, so a run overwrites whatever key that identity had stored — the
-same caveat as `smoke-l2-approvals.sh`. Re-enter it in Settings afterwards. `--skip-timeout` drops the case that
-waits out the 120s approval timeout; `--keep` keeps the data dir and per-turn
-`.sse` captures. Without a pi binary it prints "skipping" and exits 0.
+owns its own sidecar (isolated data dir, a `PI_CODING_AGENT_DIR` under that dir
+so the user's `~/.pi` is never touched, and both approval modes) and prints one
+`ok`/`FAIL` line per claim. The Keychain is isolated too, through
+`WORKMAX_KEYCHAIN_SERVICE`. It used to be the one thing that was not: the
+account is derived from the uid, every fresh data dir hands out the same first
+uid, and a run therefore overwrote whatever local-model key and OAuth session
+the user had. `--skip-timeout` drops the case that waits out the 120s approval
+timeout; `--keep` keeps the data dir and per-turn `.sse` captures. Without a pi
+binary it prints "skipping" and exits 0.
 
-Expected: 85 checks pass (79 with `--skip-timeout`). What they cover:
+Expected: 94 checks pass (88 with `--skip-timeout`). What they cover:
 
 - the launch contract, read off a wrapper that records what it was handed:
   `--mode rpc`, the session file and dir, `--provider workmax`, the tool
@@ -151,11 +155,18 @@ Expected: 85 checks pass (79 with `--skip-timeout`). What they cover:
   turn resumes into the same file, and a failed turn clears the ref;
 - read-only tools never ask; a tool outside the profile does not execute
   (pi's `--tools` is a real restriction, unlike the claude CLI's
-  `WithAllowedTools`); a write outside the workspace is refused outright and
-  narrated with its reason;
-- failure paths, each as one typed `proxy_error`: an endpoint that refuses, a
-  subprocess that dies before settling (with its stderr tail), a rejected
-  prompt (`bad_request`), an unreachable endpoint;
+  `WithAllowedTools`) and is narrated as `tool_denied` carrying the same
+  sentence the claude engine uses, rather than as a bare failed result; a write
+  outside the workspace is refused outright and narrated with its reason;
+- failure paths, each as one typed `proxy_error`: an endpoint that refuses
+  (`bad_request`, carrying the endpoint's own words), a subprocess that dies
+  before settling (`service_unavailable`, with its stderr tail), a rejected
+  prompt (`bad_request`), an unreachable endpoint (`network_unavailable` — pi
+  reports a refused connection as a synthetic 502, and the sentence says what
+  to check);
+- the run's own Keychain entries land under a per-run service name and are
+  deleted on the way out, while the real `ai.workmax.desktop` entries stay
+  byte-identical — modification date included — before and after;
 - with `WORKMAX_L2_APPROVALS` unset — the shipping default — the loop runs the
   read-only profile: a write does not land, reads still run, and the approve
   endpoint answers 503.

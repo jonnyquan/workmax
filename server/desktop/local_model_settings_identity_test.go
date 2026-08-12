@@ -3,6 +3,8 @@
 package desktop
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	cloudproxy "server/desktop/cloud_proxy"
@@ -223,5 +225,88 @@ func TestMigration0009HandsTheExistingPreferenceToTheFirstAccount(t *testing.T) 
 		if count != 0 {
 			t.Fatalf("w_desktop_model_settings still carries the moved column %q", column)
 		}
+	}
+}
+
+// The account is derived from the uid, and uids are per-data-dir counters that
+// every isolated data dir restarts from the same number — so isolation of the
+// data dir buys nothing here. Only the SERVICE name separates a throwaway run
+// from the user's real key, which is why WORKMAX_KEYCHAIN_SERVICE exists.
+//
+// This became load-bearing in 1855d91: before it, Write stored the empty string
+// and the collision cost nothing. Now a smoke run without the override
+// overwrites the user's configured key.
+func TestLocalModelAPIKeyFollowsTheKeychainServiceOverride(t *testing.T) {
+	const isolated = "ai.workmax.desktop.test-isolated"
+	t.Setenv(cloudproxy.KeychainServiceEnv, isolated)
+
+	db := openModelSettingsDB(t)
+	kc := newMemKeychain()
+	store := NewLocalModelSettingsStore(db, kc)
+
+	key := "sk-isolated-run"
+	if _, err := store.Put(localSingleUserUID, LocalModelSettingsPut{
+		PreferredRoute: ModelRouteLocal,
+		Local: &LocalModelProfilePut{
+			Protocol: LocalProtocolOpenAICompatible,
+			BaseURL:  "http://127.0.0.1:11434/v1",
+			ModelID:  "llama3.2",
+			APIKey:   &key,
+		},
+	}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	account := keychainLocalModelAPIKeyAccount(localSingleUserUID)
+	if _, err := kc.Read(isolated, account); err != nil {
+		t.Fatalf("the key must land under the isolated service: %v", err)
+	}
+	// The point of the whole exercise: the real slot is untouched.
+	if _, err := kc.Read(cloudproxy.KeychainService, account); err == nil {
+		t.Fatalf("an isolated run wrote into the real service %q", cloudproxy.KeychainService)
+	}
+	// And reads follow it back, so the run is functional, not merely harmless.
+	got, err := store.LoadAPIKey(localSingleUserUID)
+	if err != nil || got != key {
+		t.Fatalf("LoadAPIKey = %q, %v; want the key it just stored", got, err)
+	}
+}
+
+// The default is what every user runs, and it must be byte-identical to what
+// shipped before the override existed.
+func TestLocalModelAPIKeyKeepsTheDefaultServiceWithoutAnOverride(t *testing.T) {
+	db := openModelSettingsDB(t)
+	kc := newMemKeychain()
+	store := NewLocalModelSettingsStore(db, kc)
+
+	key := "sk-default-service"
+	if _, err := store.Put(localSingleUserUID, LocalModelSettingsPut{
+		PreferredRoute: ModelRouteLocal,
+		Local: &LocalModelProfilePut{
+			Protocol: LocalProtocolOpenAICompatible,
+			BaseURL:  "http://127.0.0.1:11434/v1",
+			ModelID:  "llama3.2",
+			APIKey:   &key,
+		},
+	}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if _, err := kc.Read(cloudproxy.KeychainService, keychainLocalModelAPIKeyAccount(localSingleUserUID)); err != nil {
+		t.Fatalf("without an override the key must stay in the shipping slot: %v", err)
+	}
+}
+
+// A malformed override is not a warning. Bootstrap refuses before it resolves a
+// data dir, takes the sidecar lock or opens SQLite, because the alternative is
+// a run that believes it is isolated and is not.
+func TestBootstrapRefusesAMalformedKeychainServiceOverride(t *testing.T) {
+	t.Setenv(cloudproxy.KeychainServiceEnv, "not a service name")
+	boot, err := Bootstrap(BootstrapConfig{})
+	if err == nil {
+		_ = boot.Shutdown(context.Background())
+		t.Fatal("Bootstrap started with a malformed keychain service override")
+	}
+	if !strings.Contains(err.Error(), cloudproxy.KeychainServiceEnv) {
+		t.Fatalf("the failure must name the variable to fix: %v", err)
 	}
 }
