@@ -485,12 +485,43 @@ const MAX_APPROVAL_CARDS_PER_TURN = 40;
 
 // Order fixed by the sidecar's decision vocabulary: [decision, button label,
 // settled label].
-const APPROVAL_DECISIONS = [
-  ["allow_once", "Allow once", "Allowed once"],
-  ["allow_session", "Allow this session", "Allowed for this session"],
-  ["allow_always", "Always allow", "Always allowed"],
-  ["deny", "Deny", "Denied"],
-];
+// The four decisions, and what each of them actually grants.
+//
+// Three of these are "yes" and they are not the same yes. Once is this call.
+// This session is this tool, in this conversation, until the sidecar stops.
+// Always is this tool, in every conversation, permanently — and, because the
+// stored rule is keyed by tool name alone (w_desktop_agent_permission_rule),
+// for every target it is ever asked about, not only the one on screen.
+//
+// So the two broad answers name the tool and the narrow one does not. A button
+// reading "Always allow" under a title reading "Write · outline.md" invites
+// exactly the wrong reading — that the permanent grant is about that file. The
+// title still names the target; the button names the scope it is really
+// asking for, and the difference between them is the point.
+//
+// `tone` decides the weight, and the weight follows breadth: the narrowest
+// yes and the no are the two tinted, symmetrical answers, and the wider
+// grants are quiet. That is a nudge, and a deliberate one — towards the
+// smallest grant that answers the question, never towards yes over no.
+const APPROVAL_DECISIONS = (tool) => {
+  const named = tool ? ` ${tool}` : "";
+  return [
+    ["allow_once", "once", "Allow once", "Allowed once"],
+    [
+      "allow_session",
+      "broad",
+      `Allow${named} this session`,
+      `Allowed${named} for this session`,
+    ],
+    [
+      "allow_always",
+      "broad",
+      `Always allow${named}`,
+      `Always allowed${named}`,
+    ],
+    ["deny", "deny", "Deny", "Denied"],
+  ];
+};
 
 function desktopAgentApprovalBridge() {
   const desktop = window.desktopBridge;
@@ -511,11 +542,12 @@ function desktopAgentApprovalBridge() {
 function buildApprovalActions(entry) {
   const actions = document.createElement("div");
   actions.className = "approval-actions";
-  for (const [decision, buttonLabel, settledLabel] of APPROVAL_DECISIONS) {
+  for (const [decision, tone, buttonLabel, settledLabel] of APPROVAL_DECISIONS(
+    entry.name
+  )) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className =
-      decision === "deny" ? "approval-button deny" : "approval-button";
+    button.className = `approval-button ${tone}`;
     button.textContent = buttonLabel;
     button.disabled = entry.answered;
     button.addEventListener("click", () => {

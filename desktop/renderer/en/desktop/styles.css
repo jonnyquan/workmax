@@ -2875,16 +2875,33 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   gap: var(--sp-2);
 }
 
+/* Weight follows breadth, not sentiment. The two answers that settle just this
+   call — yes and no — carry their own colour at equal weight, so neither is
+   the loud one. The two that grant a tool beyond this call are quiet, because
+   a permanent grant should not be the easiest thing on the card to press.
+   Nothing here is filled: an approval is a choice, not a primary action, and a
+   solid button would be the interface having an opinion about the answer. */
 .approval-button {
   height: var(--h-control-sm);
   padding: 0 var(--sp-3);
-  border-color: hsl(var(--primary) / 0.4);
-  color: hsl(var(--primary));
+  border-color: hsl(var(--border));
+  color: hsl(var(--muted-foreground));
   font-size: var(--fs-small);
 }
 
 .approval-button:hover:not(:disabled) {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+.approval-button.once {
+  border-color: hsl(var(--primary) / 0.4);
+  color: hsl(var(--primary));
+}
+
+.approval-button.once:hover:not(:disabled) {
   background: hsl(var(--primary) / 0.12);
+  color: hsl(var(--primary));
 }
 
 .approval-button.deny {
@@ -2894,6 +2911,7 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 
 .approval-button.deny:hover:not(:disabled) {
   background: hsl(var(--destructive) / 0.1);
+  color: hsl(var(--destructive));
 }
 
 .approval-note {

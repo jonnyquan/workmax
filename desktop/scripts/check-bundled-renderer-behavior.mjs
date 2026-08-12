@@ -272,7 +272,7 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   // down whenever there is no run to project, wherever the button sits.
   assert.match(
     rendererCSS,
-    /\.titlebar\s*\{[\s\S]*?padding:\s*0 var\(--sp-2\) 0 (7[0-9]|8[0-9])px;/u,
+    /\.titlebar\s*\{[^}]*?padding:\s*0 var\(--sp-2\) 0 (7[0-9]|8[0-9])px;/u,
     "the first control starts right of the traffic lights",
   );
   assert.match(
@@ -318,6 +318,54 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   }
 }
 
+// --- On an approval card, weight follows breadth -----------------------------
+//
+// The claim the class names alone cannot make: the two answers that settle
+// just this call carry colour at equal weight, and the two that grant a tool
+// beyond it are quiet. A permanent grant must not be the easiest thing on the
+// card to press, and "yes" must not out-shout "no".
+{
+  const base = rendererCSS.match(/\n\.approval-button \{([\s\S]*?)\n\}/u);
+  assert.ok(base, ".approval-button must be declared");
+  assert.match(
+    base[1],
+    /color: hsl\(var\(--muted-foreground\)\);/u,
+    "the default weight of an approval answer is quiet; colour is opted into",
+  );
+  assert.doesNotMatch(
+    base[1],
+    /var\(--primary\)|var\(--destructive\)/u,
+    "a colour on the base rule would tint the broad grants too",
+  );
+  assert.match(
+    rendererCSS,
+    // [^}] and not [\s\S]: an unbounded wildcard walks straight past the
+    // closing brace and finds the same declaration in the :hover rule below,
+    // so the pin passes while the rule it names is gone. Mutation testing is
+    // what caught that — the assertion read as specific and was not.
+    /\.approval-button\.once \{[^}]*?color: hsl\(var\(--primary\)\);/u,
+    "the narrowest yes is the one that carries the accent",
+  );
+  assert.match(
+    rendererCSS,
+    /\.approval-button\.deny \{[^}]*?color: hsl\(var\(--destructive\)\);/u,
+    "and no is stated at the same weight as yes, not more quietly",
+  );
+  // Nothing gives the broad grants a colour of their own, by any route.
+  assert.doesNotMatch(
+    rendererCSS,
+    /\.approval-button\.broad/u,
+    "a rule for the broad grants exists only to make them louder; there is none",
+  );
+  // And none of the four is filled: an approval is a choice, not a primary
+  // action, and a solid button is the interface having an opinion.
+  assert.doesNotMatch(
+    rendererCSS,
+    /\.approval-button[^{]*\{[^}]*background: hsl\(var\(--primary\)\);/u,
+    "no approval answer is a solid button",
+  );
+}
+
 // --- A button that stopped being a button has to say so completely -----------
 //
 // The base rule centres a button's content, which is right for one holding a
@@ -331,12 +379,12 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
 {
   assert.match(
     rendererCSS,
-    /^button \{[\s\S]*?justify-content: center;/mu,
+    /^button \{[^}]*?justify-content: center;/mu,
     "the base button rule centres its content; the reset below exists because of it",
   );
   assert.match(
     rendererCSS,
-    /\.thread-button \{[\s\S]*?justify-content: stretch;/u,
+    /\.thread-button \{[^}]*?justify-content: stretch;/u,
     "a thread row holds two stacked lines and must not inherit the centring",
   );
 }
@@ -407,7 +455,7 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   // window spends the transition duration as a wash of half-old colour.
   assert.match(
     rendererCSS,
-    /:root\.theme-switching \*,[\s\S]*?\{\s*transition:\s*none\s*!important;/u,
+    /:root\.theme-switching \*,[^}]*?\{\s*transition:\s*none\s*!important;/u,
     "a theme switch must not animate",
   );
   assert.doesNotMatch(
@@ -2073,7 +2121,7 @@ async function testThreadGroupingAndSearch() {
     rendererHTML.match(/<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">/gu).length >= 3,
     "the icons are inline SVG in the markup, drawn to one convention",
   );
-  assert.match(rendererCSS, /\.icon-button svg \{[\s\S]*?stroke: currentColor;/u);
+  assert.match(rendererCSS, /\.icon-button svg \{[^}]*?stroke: currentColor;/u);
   assert.doesNotMatch(rendererHTML, /<script[^>]+src="http/u);
 }
 
@@ -3783,10 +3831,33 @@ async function testToolApprovalCardsAndReasoningCaption() {
   assert.match(cards[1].textContent, /Agent requests to run Bash/u);
   assert.doesNotMatch(cards[1].textContent, /Bash ·/u, "an absent target must not leave a dangling separator");
 
-  // Allow once on the first card: the decision reaches the bridge and the
-  // card becomes its outcome label, buttons gone.
+  // Three of the four answers are "yes" and they are not the same yes. The
+  // two that outlive this call say which TOOL they are about, because the
+  // stored grant is keyed by tool name and applies to every target it is ever
+  // asked about — not to a.md, which is the only thing the title mentions.
+  // Read together, "Write · a.md" over "Always allow Write" is the difference
+  // between the call and the grant, stated on the control that makes it.
   const allowButtons = walk(cards[0], (n) => n.classList?.contains("approval-button"));
   assert.equal(allowButtons.length, 4, "the card offers all four decisions");
+  assert.deepEqual(
+    allowButtons.map((b) => b.textContent),
+    ["Allow once", "Allow Write this session", "Always allow Write", "Deny"],
+    "a grant that outlives this call has to name what it grants",
+  );
+  // Weight follows breadth: the narrowest yes and the no are the two coloured
+  // answers, and the broad grants are quiet. A permanent grant must not be the
+  // easiest thing on the card to press.
+  assert.deepEqual(
+    allowButtons.map((b) => [...b.classList.values].filter((c) => c !== "approval-button")),
+    [["once"], ["broad"], ["broad"], ["deny"]],
+  );
+  // A question with no tool name still reads as a sentence rather than as a
+  // label with a hole in it.
+  const bashButtons = walk(cards[1], (n) => n.classList?.contains("approval-button"));
+  assert.deepEqual(
+    bashButtons.map((b) => b.textContent),
+    ["Allow once", "Allow Bash this session", "Always allow Bash", "Deny"],
+  );
   allowButtons[0].click();
   allowButtons[0].click();
   await settle();
@@ -3910,7 +3981,7 @@ async function testThoughtSummaryReadsAsProse() {
   // column, so the control clamps and ellipsises rather than growing.
   assert.match(
     rendererCSS,
-    /\.reasoning-toggle\s*\{[\s\S]*?max-width:\s*min\(var\(--measure\), 100%\);[\s\S]*?text-overflow:\s*ellipsis;/u,
+    /\.reasoning-toggle\s*\{[^}]*?max-width:\s*min\(var\(--measure\), 100%\);[^}]*?text-overflow:\s*ellipsis;/u,
     "the gist may be long; it may not widen the column",
   );
 }
@@ -4016,6 +4087,13 @@ async function testApprovalBecomesTheStepItIsAbout() {
   await settle();
   assert.equal(steps().length, 2, "two questions, two rows, still no cards");
   assert.equal(buttonsIn(steps()[1]).length, 4, "the second row carries its own buttons");
+  // Merged into a row or standing as a card, a question is the same question,
+  // so the broad grants name their tool in both shapes — and each row names
+  // ITS tool, not the one above it.
+  assert.deepEqual(
+    buttonsIn(steps()[1]).map((b) => b.textContent),
+    ["Allow once", "Allow Edit this session", "Always allow Edit", "Deny"],
+  );
 
   // Answering resolves that row in place — and touches nothing else.
   buttonsIn(steps()[0])[0].click();
