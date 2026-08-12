@@ -128,13 +128,29 @@ export const renameThreadForm = document.querySelector("#rename-thread-form");
 export const renameThreadCancel = document.querySelector("#rename-thread-cancel");
 
 // --- Quick switcher (⌘K) ---------------------------------------------------
-// The sidebar is where conversations live; the switcher is how you reach one
-// without leaving the keyboard. Same data, same filter as the sidebar search.
+// The one search in the app. It used to share the job with a permanently
+// mounted field in the rail: that one filtered titles in place and asked the
+// sidecar for message bodies, this one filtered the same titles and offered
+// actions. Neither was complete and both were called "search". The field is
+// gone, its message-body half moved in here, and the rail carries an icon that
+// opens this — see threads.js.
 
 export const quickSwitcher = document.querySelector("#quick-switcher");
 export const quickSwitcherInput = document.querySelector("#quick-switcher-input");
 export const quickSwitcherList = document.querySelector("#quick-switcher-list");
+export const sidebarSearchButton = document.querySelector("#sidebar-search-button");
 
 export const openWorkspaceButton = document.querySelector("#open-workspace-button");
 
-export const threadSearchInput = document.querySelector("#thread-search");
+// --- Folding the columns ----------------------------------------------------
+// Both folds are one control each, and both controls live in the window's
+// title bar — outside the columns they hide, so the same button that folds a
+// column away is still there to bring it back. The rail's fold used to be a
+// pair (collapse inside the rail, expand in the main column's chrome); the
+// pair collapsed into one toggle when the controls moved up.
+export const titlebar = document.querySelector("#titlebar");
+export const sidebarCollapseButton = document.querySelector("#sidebar-collapse-button");
+export const contextPanelButton = document.querySelector("#context-panel-button");
+// The name and everything attached to it, as one block: renaming replaces the
+// line rather than opening a form underneath it.
+export const threadTitleRow = document.querySelector("#thread-title-row");

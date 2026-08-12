@@ -1,9 +1,12 @@
-// The sidebar: the thread list, its grouping and filtering, pin and delete,
-// the quick switcher, and the message-content search that backs it.
+// The sidebar: the thread list, its grouping, pin and delete — and the quick
+// switcher, which is now the only search in the app.
 //
-// Title filtering is local (the list is already in memory); message bodies
-// live in SQLite, so those come from the sidecar behind a debounce and a
-// fence.
+// The rail used to carry a search field of its own. It filtered the list in
+// place AND asked the sidecar for message bodies, while ⌘K filtered the same
+// titles and offered actions: two entry points, overlapping vocabularies, and
+// neither one complete. They are one control now. Title matching is local (the
+// list is already in memory); message bodies live in SQLite, so those come
+// from the sidecar behind a debounce and a fence.
 import { fences } from "./fence.js";
 import {
   emptyState,
@@ -11,6 +14,7 @@ import {
   quickSwitcher,
   quickSwitcherInput,
   quickSwitcherList,
+  sidebarSearchButton,
   threadList,
   threadPanel,
 } from "./dom.js";
@@ -297,14 +301,13 @@ function renderThreadButton(thread) {
 // that an armed Delete does not lie in wait for a later stray click.
 export const DELETE_ARM_MS = 4000;
 
+// The rail lists every cached conversation, always. It used to also be the
+// result surface for a filter typed into the rail's own search field, which is
+// why it had a second empty state ("No conversations match …"); searching
+// happens in the palette now, and a list that quietly shortens itself while
+// another window has focus is not something this column should do.
 export function renderThreads() {
   threadList.textContent = "";
-  // A filter above a list with nothing in it is noise — and worse, it reads as
-  // "your search found nothing" when the truth is that nothing is cached yet.
-  // Looked up here rather than held in a module const: this runs before the
-  // element lookups at the bottom of the file have been evaluated.
-  const searchPanel = document.querySelector("#thread-search-panel");
-  if (searchPanel) searchPanel.hidden = state.threads.length === 0;
   if (state.threads.length === 0) {
     const item = document.createElement("li");
     item.appendChild(renderNotice("No cached threads yet."));
@@ -313,19 +316,7 @@ export function renderThreads() {
     return;
   }
 
-  const query = (state.threadQuery || "").trim().toLowerCase();
-  const matches = state.threads.filter((thread) => threadMatchesQuery(thread, query));
-  if (matches.length === 0) {
-    const item = document.createElement("li");
-    // Naming the query distinguishes "nothing matched" from "nothing cached",
-    // which the empty list alone cannot.
-    item.appendChild(renderNotice(`No conversations match “${state.threadQuery.trim()}”.`));
-    threadList.appendChild(item);
-    renderEmptyState();
-    return;
-  }
-
-  const groups = groupThreads(matches, new Date());
+  const groups = groupThreads(state.threads, new Date());
   for (const group of THREAD_GROUPS) {
     const bucket = groups[group.key];
     if (bucket.length === 0) continue;
@@ -401,14 +392,29 @@ function quickSwitcherCommands(query) {
   return commands.filter((command) => command.label.toLowerCase().includes(query));
 }
 
+// Message-body hits, for the query currently in the box. Held here rather than
+// recomputed per render because they are the one group that cannot be answered
+// synchronously — the bodies are in SQLite.
+let contentMatches = [];
+
+// Three groups, in the order they can be produced: names (already in memory),
+// actions (a fixed list), then message bodies (a round trip). Bodies come LAST
+// on purpose. They land a debounce and a request after the keystroke that
+// asked for them, and a group that appears in the MIDDLE of the list moves
+// every row under it — which, with a highlight sitting on one of those rows,
+// means Enter runs something the reader did not point at. Appended, the
+// arriving group never disturbs what is already selected.
 function quickSwitcherCandidates() {
   const query = (quickSwitcherInput?.value || "").trim().toLowerCase();
   const threads = state.threads
     .filter((thread) => threadMatchesQuery(thread, query))
     .slice(0, 8)
     .map((thread) => ({ kind: "thread", thread }));
-  return threads.concat(quickSwitcherCommands(query));
+  const matches = contentMatches.map((match) => ({ kind: "match", match }));
+  return threads.concat(quickSwitcherCommands(query), matches);
 }
+
+const QUICK_SWITCHER_HEADINGS = { command: "Actions", match: "In messages" };
 
 export function renderQuickSwitcher() {
   if (!quickSwitcherList) return;
@@ -422,33 +428,43 @@ export function renderQuickSwitcher() {
     quickSwitcherList.appendChild(empty);
     return;
   }
-  let commandsHeadingShown = false;
+  let headingShown = "";
   candidates.forEach((candidate, index) => {
-    if (candidate.kind === "command" && !commandsHeadingShown) {
-      commandsHeadingShown = true;
-      const heading = document.createElement("li");
-      heading.className = "quick-switcher-heading";
-      heading.textContent = "Actions";
-      quickSwitcherList.appendChild(heading);
+    const heading = QUICK_SWITCHER_HEADINGS[candidate.kind];
+    if (heading && headingShown !== candidate.kind) {
+      headingShown = candidate.kind;
+      const label = document.createElement("li");
+      label.className = "quick-switcher-heading";
+      label.textContent = heading;
+      quickSwitcherList.appendChild(label);
     }
     const item = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
+    const active = index === quickSwitcherIndex ? " active" : "";
+    const title = document.createElement("strong");
+    const meta = document.createElement("span");
     if (candidate.kind === "thread") {
-      button.className = "quick-switcher-item" + (index === quickSwitcherIndex ? " active" : "");
-      const title = document.createElement("strong");
+      button.className = "quick-switcher-item" + active;
       title.textContent = candidate.thread.name || "Untitled thread";
-      const meta = document.createElement("span");
       meta.textContent = `${candidate.thread.message_count || 0} messages`;
-      button.append(title, meta);
+    } else if (candidate.kind === "match") {
+      // The conversation the words are in, then the words. Named first
+      // because "where was that said" is the question this group answers.
+      button.className = "quick-switcher-item quick-switcher-match" + active;
+      title.textContent =
+        (isRecord(candidate.match) &&
+          typeof candidate.match.thread_name === "string" &&
+          candidate.match.thread_name) ||
+        "Untitled thread";
+      meta.textContent =
+        (candidate.match.role === "you" ? "You: " : "") + candidate.match.snippet;
     } else {
-      button.className = "quick-switcher-command" + (index === quickSwitcherIndex ? " active" : "");
-      const title = document.createElement("strong");
+      button.className = "quick-switcher-command" + active;
       title.textContent = candidate.label;
-      const meta = document.createElement("span");
       meta.textContent = candidate.hint;
-      button.append(title, meta);
     }
+    button.append(title, meta);
     button.addEventListener("click", () => {
       commitQuickSwitcherChoice(candidate);
     });
@@ -458,11 +474,17 @@ export function renderQuickSwitcher() {
 }
 
 export function openQuickSwitcher() {
-  // Commands make the palette useful even before the first conversation
-  // exists, so an empty thread list no longer keeps it closed.
-  if (!quickSwitcher || quickSwitcherCandidates().length === 0) return;
+  if (!quickSwitcher) return;
+  // Reset BEFORE asking whether there is anything to show. The other order
+  // asked the question of the previous query — so a palette last used to find
+  // a word inside a message refused to open at all the next time, because
+  // nothing matched a query the reader was no longer looking at.
   quickSwitcherIndex = 0;
   if (quickSwitcherInput) quickSwitcherInput.value = "";
+  clearContentMatches();
+  // Commands make the palette useful even before the first conversation
+  // exists, so an empty thread list no longer keeps it closed.
+  if (quickSwitcherCandidates().length === 0) return;
   quickSwitcher.hidden = false;
   renderQuickSwitcher();
   quickSwitcherInput?.focus();
@@ -470,6 +492,10 @@ export function openQuickSwitcher() {
 
 export function closeQuickSwitcher() {
   if (quickSwitcher) quickSwitcher.hidden = true;
+  // Nothing outstanding survives the close: an answer to a query the reader
+  // has already dismissed would otherwise be waiting in the list the next time
+  // the palette opens.
+  clearContentMatches();
 }
 
 function commitQuickSwitcherChoice(candidate) {
@@ -478,12 +504,20 @@ function commitQuickSwitcherChoice(candidate) {
     candidate.run();
     return;
   }
+  if (candidate.kind === "match") {
+    const thread = state.threads.find(
+      (item) => item.uuid === candidate.match.thread_uuid
+    );
+    if (thread) selectThread(thread);
+    return;
+  }
   selectThread(candidate.thread);
 }
 
 if (quickSwitcherInput) {
   quickSwitcherInput.addEventListener("input", () => {
     quickSwitcherIndex = 0;
+    scheduleContentSearch();
     renderQuickSwitcher();
   });
   quickSwitcherInput.addEventListener("keydown", (event) => {
@@ -512,49 +546,27 @@ if (quickSwitcher) {
   });
 }
 
-// Content search: titles filter instantly in memory; message bodies live in
-// SQLite, so the sidecar answers those. Debounced so a fast typist asks
-// once, generation-guarded so a slow answer to an old query can never
-// overwrite the results of a newer one.
+// The title bar's search icon. It opens this — it does not open a second,
+// smaller search of its own, which is the whole point of the icon replacing
+// the field that used to sit under the product name.
+if (sidebarSearchButton) {
+  sidebarSearchButton.addEventListener("click", () => {
+    if (quickSwitcher && !quickSwitcher.hidden) closeQuickSwitcher();
+    else openQuickSwitcher();
+  });
+}
+
+// The palette's third group. Names and actions are answered from memory the
+// moment a key lands; message bodies live in SQLite, so the sidecar answers
+// those — debounced so a fast typist asks once, generation-guarded so a slow
+// answer to an old query can never overwrite the results of a newer one.
 let contentSearchTimer = null;
 
 function clearContentMatches() {
   fences.contentSearch.bump();
-  const panel = document.querySelector("#content-match-panel");
-  const list = document.querySelector("#content-match-list");
-  if (panel) panel.hidden = true;
-  if (list) list.textContent = "";
-}
-
-function renderContentMatches(matches) {
-  const panel = document.querySelector("#content-match-panel");
-  const list = document.querySelector("#content-match-list");
-  if (!panel || !list) return;
-  list.textContent = "";
-  if (matches.length === 0) {
-    panel.hidden = true;
-    return;
-  }
-  panel.hidden = false;
-  for (const match of matches) {
-    const item = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "content-match";
-    const title = document.createElement("strong");
-    title.textContent =
-      (isRecord(match) && typeof match.thread_name === "string" && match.thread_name) ||
-      "Untitled thread";
-    const snippet = document.createElement("span");
-    snippet.textContent = (match.role === "you" ? "You: " : "") + match.snippet;
-    button.append(title, snippet);
-    button.addEventListener("click", () => {
-      const thread = state.threads.find((candidate) => candidate.uuid === match.thread_uuid);
-      if (thread) selectThread(thread);
-    });
-    item.appendChild(button);
-    list.appendChild(item);
-  }
+  if (contentSearchTimer) clearTimeout(contentSearchTimer);
+  contentSearchTimer = null;
+  contentMatches = [];
 }
 
 async function runContentSearch(query) {
@@ -570,21 +582,30 @@ async function runContentSearch(query) {
     if (!result.ok) return;
     matches = parseSearchMatches(result.data);
   } catch {
-    // Content search is an enhancement on top of the title filter; a failure
-    // degrades to exactly the behaviour the sidebar always had.
+    // Message-body search is an enhancement on top of the name match; a
+    // failure degrades to exactly the palette this app always had.
     return;
   }
   if (!fences.contentSearch.isCurrent(generation)) return;
-  renderContentMatches(matches);
+  // The palette may have been dismissed while the request was in flight, and a
+  // closed palette has no list to paint into.
+  if (quickSwitcher?.hidden) return;
+  contentMatches = matches;
+  renderQuickSwitcher();
 }
 
 export function scheduleContentSearch() {
   if (contentSearchTimer) clearTimeout(contentSearchTimer);
-  const query = (state.threadQuery || "").trim();
+  contentSearchTimer = null;
+  const query = (quickSwitcherInput?.value || "").trim();
+  // One character matches most of a database and tells the reader nothing, and
+  // an empty box is not a question.
   if (query.length < 2) {
     clearContentMatches();
     return;
   }
+  fences.contentSearch.bump();
+  contentMatches = [];
   contentSearchTimer = setTimeout(() => {
     void runContentSearch(query);
   }, 250);

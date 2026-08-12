@@ -23,6 +23,7 @@ import {
   attachButton,
   chatForm,
   chatInput,
+  contextPanelButton,
   emptyNewThreadButton,
   emptyState,
   exportThreadButton,
@@ -83,14 +84,15 @@ import {
   settingsPanelAbout,
   settingsPanelAccount,
   settingsPanelAppearance,
+  sidebarCollapseButton,
   statusBar,
   statusCard,
   statusDismissButton,
   statusRetryButton,
   stopButton,
   threadPanel,
-  threadSearchInput,
-  threadTitle,
+  threadTitleRow,
+  titlebar,
   turnRecoveryDismissButton,
   turnRecoveryResumeButton,
 } from "./dom.js";
@@ -166,7 +168,6 @@ import {
   closeQuickSwitcher,
   openQuickSwitcher,
   renderThreads,
-  scheduleContentSearch,
 } from "./threads.js";
 import {
   attachLastTurnLog,
@@ -298,7 +299,6 @@ export const state = {
   recoveryFeedbackKind: "default",
   recoveringSession: false,
   pendingFiles: [],
-  threadQuery: "",
   // Half-written prompts, keyed by thread uuid. A thread switch or a refresh
   // stashes the composer here and restores it when the thread is selected
   // again; only a session change (a different signed-in account) clears it.
@@ -1591,9 +1591,15 @@ export function renameThreadBridgeAvailable() {
   return typeof window.desktopBridge?.agent?.renameThread === "function";
 }
 
+// The form and the line it is editing swap places. It used to open UNDER the
+// title, which was affordable when the header was two lines tall and is not
+// now that it is one: a third line appearing in the chrome pushed the whole
+// transcript down for as long as you were typing. The whole row goes, not just
+// the <h2> — leaving "· 6 messages · today" and a Rename button beside the
+// input you are renaming with is the metadata of a name that is mid-edit.
 export function closeRenameForm() {
   const form = document.querySelector("#rename-thread-form");
-  const titleRow = document.querySelector("#thread-title");
+  const titleRow = document.querySelector("#thread-title-row");
   if (form) form.hidden = true;
   if (titleRow) titleRow.hidden = false;
 }
@@ -1608,7 +1614,7 @@ function openRenameForm() {
   if (!form || !input) return;
   input.value = thread.name || "";
   form.hidden = false;
-  threadTitle.hidden = true;
+  if (threadTitleRow) threadTitleRow.hidden = true;
   input.focus();
   if (typeof input.select === "function") input.select();
 }
@@ -3161,16 +3167,22 @@ if (renameThreadCancel) {
   });
 }
 
-// Global keys. ⌘K opens the switcher; Escape stops a streaming turn — the
-// same act as the Stop button, reachable without the mouse. Escape prefers
-// the switcher when it is open, and never touches a turn from inside form
-// fields where it already means "abandon this input".
+// Global keys. ⌘K opens the switcher; ⌘\ folds the rail, which is the binding
+// every editor on this desktop already uses for the same act; Escape stops a
+// streaming turn — the same act as the Stop button, reachable without the
+// mouse. Escape prefers the switcher when it is open, and never touches a turn
+// from inside form fields where it already means "abandon this input".
 document.addEventListener("keydown", (event) => {
   if (event.repeat) return;
   if ((event.metaKey || event.ctrlKey) && (event.key === "k" || event.key === "K")) {
     event.preventDefault();
     if (quickSwitcher && !quickSwitcher.hidden) closeQuickSwitcher();
     else openQuickSwitcher();
+    return;
+  }
+  if ((event.metaKey || event.ctrlKey) && event.key === "\\") {
+    event.preventDefault();
+    toggleSidebar();
     return;
   }
   if (event.key === "Escape") {
@@ -3200,10 +3212,137 @@ if (openWorkspaceButton) {
     );
   });
 }
-if (threadSearchInput) {
-  threadSearchInput.addEventListener("input", () => {
-    state.threadQuery = threadSearchInput.value;
-    renderThreads();
-    scheduleContentSearch();
+
+// --- Folding the two rails ---------------------------------------------------
+//
+// Both are one boolean, both are written onto <html> as an attribute, and the
+// CSS does the rest — see styles.css, "Folding the two rails". An attribute on
+// the document element rather than a class on .shell because the control that
+// UNDOES a fold cannot live in the column it hid: both toggles sit in the
+// window's title bar, outside the three-column grid entirely.
+//
+// Neither survives a relaunch. The one machine-scoped preference this app has
+// (appearance) is stored by the sidecar and injected into <html> by the shell
+// before the document is handed over, which is what makes a theme arrive
+// without a flash; a layout preference read after first paint would arrive as
+// a visible reflow of both rails, so doing it properly means the same
+// server-side injection, which means a schema column, a DTO field, a route
+// policy entry, a manifest entry and a regenerated bridge. That is a change
+// worth making deliberately and not as a side effect of a layout pass. Until
+// then the fold lasts as long as the window does, which is the whole working
+// day for an app nobody quits.
+let sidebarCollapsed = false;
+let contextPanelHidden = false;
+
+function applySidebarCollapsed() {
+  const root = document.documentElement;
+  if (!root) return;
+  if (sidebarCollapsed) root.setAttribute("data-sidebar", "collapsed");
+  else root.removeAttribute("data-sidebar");
+  // One toggle in the title bar, and it names the act it will perform, not the
+  // state it is looking at: aria-expanded carries the state, the label carries
+  // the verb.
+  if (!sidebarCollapseButton) return;
+  sidebarCollapseButton.setAttribute("aria-expanded", sidebarCollapsed ? "false" : "true");
+  const label = sidebarCollapsed ? "Show sidebar" : "Hide sidebar";
+  sidebarCollapseButton.setAttribute("aria-label", label);
+  sidebarCollapseButton.setAttribute("title", `${label} (⌘\\)`);
+}
+
+export function toggleSidebar(next) {
+  sidebarCollapsed = next === undefined ? !sidebarCollapsed : Boolean(next);
+  applySidebarCollapsed();
+  // No focus to rescue: the toggle lives in the title bar, outside the column
+  // it folds, so it is still on screen — and still focused — either way.
+}
+
+// The workspace column. Three rules decide whether it is on screen and they do
+// not overlap:
+//
+//   1. No conversation selected — no run to project, so nothing to show, and
+//      the button is not offered. CSS, from #thread-panel[hidden].
+//   2. Window narrower than 1180px — the column costs more than it explains,
+//      so it folds and the button goes with it. CSS, a media query. This is a
+//      constraint, not a state: the choice below is remembered THROUGH it, so
+//      widening the window restores what the reader last chose.
+//   3. Otherwise the reader decides, and the default is open.
+//
+// Which is to say: a manual close sticks. Nothing reopens this column except
+// pressing the button again.
+function applyContextPanelHidden() {
+  const root = document.documentElement;
+  if (!root) return;
+  if (contextPanelHidden) root.setAttribute("data-context-panel", "hidden");
+  else root.removeAttribute("data-context-panel");
+  if (!contextPanelButton) return;
+  contextPanelButton.setAttribute("aria-expanded", contextPanelHidden ? "false" : "true");
+  const label = contextPanelHidden ? "Show workspace panel" : "Hide workspace panel";
+  contextPanelButton.setAttribute("aria-label", label);
+  contextPanelButton.setAttribute("title", label);
+}
+
+export function toggleContextPanel(next) {
+  contextPanelHidden = next === undefined ? !contextPanelHidden : Boolean(next);
+  applyContextPanelHidden();
+}
+
+if (sidebarCollapseButton) {
+  sidebarCollapseButton.addEventListener("click", () => toggleSidebar());
+}
+if (contextPanelButton) {
+  contextPanelButton.addEventListener("click", () => toggleContextPanel());
+}
+applySidebarCollapsed();
+applyContextPanelHidden();
+
+// --- Dragging the window by its title bar -----------------------------------
+//
+// The native title bar is hidden (HiddenInset), so dragging is the page's job.
+// Wails would do it for us — its runtime bundle watches --wails-draggable and
+// posts "wails:drag" — but that bundle is served from the wails asset origin,
+// and this page loads from the loopback UI origin, so the runtime never runs
+// here. The native half of the bridge is still listening, though: the
+// "external" script message handler is registered on the WKWebView itself,
+// origin-independent, and anything posted to it that starts with "wails:"
+// reaches WebviewWindow.HandleMessage. So the page reads the same CSS marker
+// and posts the same message the runtime would have.
+//
+// The custom property inherits, which is the whole mechanism: the title bar
+// declares drag, every control inside it declares no-drag, and a press is a
+// drag exactly when the element it landed on resolves to drag.
+const postWindowMessage = (() => {
+  const handler = window.webkit?.messageHandlers?.external;
+  if (!handler || typeof handler.postMessage !== "function") return null;
+  return (message) => handler.postMessage(message);
+})();
+
+function isWindowDragTarget(target) {
+  if (!(target instanceof Element)) return false;
+  return (
+    window.getComputedStyle(target).getPropertyValue("--wails-draggable").trim() === "drag"
+  );
+}
+
+if (titlebar && postWindowMessage) {
+  let dragArmed = false;
+  titlebar.addEventListener("mousedown", (event) => {
+    // Only a first press arms a drag: a double-click's second mousedown must
+    // not swallow the dblclick that zooms the window.
+    if (event.button !== 0 || event.detail !== 1) return;
+    dragArmed = isWindowDragTarget(event.target);
+  });
+  window.addEventListener("mousemove", (event) => {
+    if (!dragArmed || event.buttons !== 1) return;
+    dragArmed = false;
+    postWindowMessage("wails:drag");
+  });
+  window.addEventListener("mouseup", () => {
+    dragArmed = false;
+  });
+  titlebar.addEventListener("dblclick", (event) => {
+    if (!isWindowDragTarget(event.target)) return;
+    // What a double-click on a real title bar does — zoom, or minimise, per
+    // the desktop's own setting. AppKit decides; we just pass the word along.
+    postWindowMessage("wails:drag:doubleclick");
   });
 }

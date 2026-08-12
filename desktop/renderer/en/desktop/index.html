@@ -18,6 +18,12 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <!-- The one search in the app. It answers three questions with one query:
+         which conversation (by name), where was that said (by message body,
+         from the sidecar) and what can I do from here (actions). The rail used
+         to carry a second, narrower search of its own; two entry points that
+         mean nearly the same thing is how a user learns that neither can be
+         trusted to be complete. -->
     <div id="quick-switcher" class="overlay quick-switcher" hidden>
       <div class="quick-switcher-panel">
         <input
@@ -25,8 +31,8 @@
           type="text"
           autocomplete="off"
           spellcheck="false"
-          placeholder="Jump to a conversation…"
-          aria-label="Jump to a conversation"
+          placeholder="Search conversations, messages and actions…"
+          aria-label="Search conversations, messages and actions"
         />
         <ol id="quick-switcher-list" class="quick-switcher-list"></ol>
       </div>
@@ -388,41 +394,110 @@
       </div>
     </div>
 
+    <!-- The window's title bar. macOS hides the native one (HiddenInset — see
+         the window options in desktop/wails/main.go) and leaves only the
+         traffic lights, inset at the top left; this strip is what the webview
+         paints under and beside them. The leading controls sit directly right
+         of the lights — fold the rail, search — and the workspace fold sits at
+         the far right, the same grammar as the window's own chrome: window
+         controls on the left edge, the panel they mirror on the right.
+
+         The strip is also the drag handle for the window. It declares
+         --wails-draggable: drag and every control inside it opts out with
+         no-drag; renderer.js turns a press on a drag region into the native
+         "wails:drag" message, because the Wails runtime bundle that would
+         normally do this never loads on the loopback origin. -->
+    <header id="titlebar" class="titlebar">
+      <span class="titlebar-leading">
+        <!-- One toggle, not a pair: the button lives in the title bar, outside
+             the column it folds, so the same control that hides the rail is
+             still there to bring it back. The second button that used to do
+             that — an expand control in the main column's chrome, visible only
+             while the rail was away — is gone. -->
+        <button
+          id="sidebar-collapse-button"
+          class="ghost icon-button"
+          type="button"
+          aria-controls="sidebar"
+          aria-expanded="true"
+          aria-label="Hide sidebar"
+          title="Hide sidebar (⌘\)"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" />
+            <path d="M6.25 2.75v10.5" />
+          </svg>
+        </button>
+        <button
+          id="sidebar-search-button"
+          class="ghost icon-button"
+          type="button"
+          aria-haspopup="dialog"
+          aria-label="Search conversations and actions"
+          title="Search (⌘K)"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <circle cx="7" cy="7" r="4.25" />
+            <path d="M10.2 10.2 14 14" />
+          </svg>
+        </button>
+      </span>
+      <span class="titlebar-trailing">
+        <!-- The workspace column's manual switch. The column already folds on
+             its own in two situations — no conversation to project, and a
+             window too narrow to afford a third column — and this button does
+             not argue with either: it is absent when there is nothing to
+             show, and the narrow-window fold hides it, because a control that
+             cannot change what you are looking at is worse than no control.
+             What it does own is the case both automatic rules leave open: a
+             wide window, a conversation open, and a reader who wants the
+             words. That choice sticks — widening the window later does not
+             reopen a column you closed. -->
+        <button
+          id="context-panel-button"
+          class="ghost icon-button"
+          type="button"
+          aria-controls="context-panel"
+          aria-expanded="true"
+          aria-label="Hide workspace panel"
+          title="Hide workspace panel"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" />
+            <path d="M9.75 2.75v10.5" />
+          </svg>
+        </button>
+      </span>
+    </header>
+
     <main class="shell">
       <!-- The rail is navigation and identity. Nothing that configures the app
            lives here any more: a route, a protocol and an API key used to sit
            between the conversation list and the account row, which made the
            column read as a settings screen that happened to also list
            conversations. -->
-      <aside class="sidebar">
+      <aside class="sidebar" id="sidebar">
+        <!-- The brand row is only the brand now. The two icons that used to
+             share it — search and the rail's fold — moved up into the window's
+             title bar, next to the traffic lights, which is where the rest of
+             this desktop keeps its window-level controls. What is left is one
+             clean line naming the product. -->
         <div class="brand">
           <span class="brand-mark">v</span>
           <h1>WorkMax</h1>
         </div>
 
-        <div class="sidebar-nav-head">
-          <div id="thread-search-panel" class="thread-search" hidden>
-            <input
-              id="thread-search"
-              type="search"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="Search conversations"
-              aria-label="Search conversations"
-            />
-          </div>
-          <!-- A label and the one action. There used to be a bare ↻ between
-               them: no label, and nothing it could tell you that the list did
-               not already know. Every mutation this app makes — create,
-               rename, delete — updates the list in place, and the one case
-               where a reload is genuinely the answer (the sidecar did not
-               answer) already offers Retry on the status line, which calls the
-               same refresh(). An unlabelled glyph for a job nobody has is how
-               a toolbar starts collecting them. -->
-          <div class="thread-toolbar">
-            <span class="rail-label">Conversations</span>
-            <button id="new-thread-button" type="button" disabled>New</button>
-          </div>
+        <!-- A label and the one action. There used to be a bare ↻ between
+             them: no label, and nothing it could tell you that the list did
+             not already know. Every mutation this app makes — create,
+             rename, delete — updates the list in place, and the one case
+             where a reload is genuinely the answer (the sidecar did not
+             answer) already offers Retry on the status line, which calls the
+             same refresh(). An unlabelled glyph for a job nobody has is how
+             a toolbar starts collecting them. -->
+        <div class="thread-toolbar">
+          <span class="rail-label">Conversations</span>
+          <button id="new-thread-button" type="button" disabled>New</button>
         </div>
 
         <form
@@ -460,10 +535,6 @@
         </form>
 
         <ol id="thread-list" class="thread-list" aria-label="Cached threads"></ol>
-        <div id="content-match-panel" class="content-match-panel" hidden>
-          <p class="thread-group">In messages</p>
-          <ol id="content-match-list" class="content-match-list"></ol>
-        </div>
 
         <div class="sidebar-foot">
           <!-- One line of app state. It is dismissible when it is an error,
@@ -525,6 +596,42 @@
       </aside>
 
       <section class="content" aria-live="polite">
+        <!-- The main column's one strip of chrome. Everything that used to be
+             a two-line <header> inside the thread panel is here on one line —
+             the name, its metadata, the two things you do to it, and the run's
+             state. The three window-level controls that used to share it (fold
+             the rail, bring it back, fold the workspace column) live in the
+             title bar now, next to the traffic lights.
+
+             It occupies no height at all when it has nothing to say. That is a
+             CSS consequence of #thread-panel[hidden] rather than a hidden=
+             toggle in JS, for the same reason the workspace column folds that
+             way: the five call sites that set the panel's visibility already
+             state the fact, and a sixth line beside each of them is drift
+             waiting to happen. -->
+        <div id="content-topbar" class="content-topbar">
+          <div class="thread-header-copy">
+            <div id="thread-title-row" class="thread-title-row">
+              <h2 id="thread-title"></h2>
+              <p id="thread-meta"></p>
+              <button id="rename-thread-button" class="ghost" type="button" hidden>Rename</button>
+              <button id="export-thread-button" class="ghost" type="button" hidden>Export</button>
+            </div>
+            <form id="rename-thread-form" class="rename-thread-form" hidden>
+              <input
+                id="rename-thread-input"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                maxlength="200"
+                aria-label="Conversation name"
+              />
+              <button id="rename-thread-save" class="primary" type="submit">Save</button>
+              <button id="rename-thread-cancel" class="ghost" type="button">Cancel</button>
+            </form>
+          </div>
+          <span id="turn-state" class="turn-state">Ready</span>
+        </div>
         <div id="empty-state" class="empty-state">
           <h2 id="empty-title">Continue from local history</h2>
           <p id="empty-description">Pick a conversation, or start a new one.</p>
@@ -542,29 +649,9 @@
           <button id="empty-new-thread-button" class="primary empty-action" type="button" disabled>New thread</button>
         </div>
         <div id="thread-panel" class="thread-panel" hidden>
-          <header>
-            <div class="thread-header-copy">
-              <div class="thread-title-row">
-                <h2 id="thread-title"></h2>
-                <button id="rename-thread-button" class="ghost" type="button" hidden>Rename</button>
-                <button id="export-thread-button" class="ghost" type="button" hidden>Export</button>
-              </div>
-              <p id="thread-meta"></p>
-              <form id="rename-thread-form" class="rename-thread-form" hidden>
-                <input
-                  id="rename-thread-input"
-                  type="text"
-                  autocomplete="off"
-                  spellcheck="false"
-                  maxlength="200"
-                  aria-label="Conversation name"
-                />
-                <button id="rename-thread-save" class="primary" type="submit">Save</button>
-                <button id="rename-thread-cancel" class="ghost" type="button">Cancel</button>
-              </form>
-            </div>
-            <span id="turn-state" class="turn-state">Ready</span>
-          </header>
+          <!-- No <header> here any more: the name, its metadata and the run
+               state moved up into #content-topbar, which is one line for the
+               whole column instead of two lines inside this one. -->
           <div id="message-viewport" class="message-viewport">
             <div id="message-list" class="message-list"></div>
             <button id="jump-latest" class="jump-latest" type="button" hidden>

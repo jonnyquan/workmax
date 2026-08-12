@@ -118,15 +118,15 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   }
 }
 
-// --- The context column folds when there is no run to describe ---------------
+// --- Folding the columns -----------------------------------------------------
 //
-// This stub does not evaluate CSS, so the rule that collapses the third column
-// cannot be observed the way a hidden attribute can. It is pinned as text
-// instead, because the alternative — nothing — is how "the panel shows Run
-// overview 0/4 over four Waiting rows on a screen with no conversation" came
-// back once already. The selector is derived from #thread-panel[hidden], which
-// five call sites in three modules already maintain; a class toggled next to
-// each of them is the drift this avoids.
+// This stub does not evaluate CSS, so the rules that collapse a column cannot
+// be observed the way a hidden attribute can. They are pinned as text instead,
+// because the alternative — nothing — is how "the panel shows Run overview 0/4
+// over four Waiting rows on a screen with no conversation" came back once
+// already. The automatic rule is derived from #thread-panel[hidden], which five
+// call sites in three modules already maintain; a class toggled next to each of
+// them is the drift this avoids.
 {
   assert.match(
     rendererCSS,
@@ -135,7 +135,7 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   );
   assert.match(
     rendererCSS,
-    /\.shell:has\(#thread-panel\[hidden\]\)\s*\{\s*grid-template-columns:\s*var\(--rail\) minmax\(0, 1fr\);/u,
+    /\.shell:has\(#thread-panel\[hidden\]\)\s*\{\s*grid-template-columns:\s*var\(--rail-left\) minmax\(0, 1fr\);/u,
     "and the shell must become a two-column grid when it does, or the column leaves a gap",
   );
   // The narrow-window fold sets the rail width through --rail rather than a
@@ -147,6 +147,140 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
     /@media \(max-width: 980px\) \{\s*\.shell \{\s*grid-template-columns/u,
     "the narrow-window rails must be set via --rail, not a lower-specificity grid declaration",
   );
+
+  // The two MANUAL folds obey the same constraint, and it is sharper for them:
+  // they are keyed off an attribute on <html>, which is (0,2,0) plus a
+  // descendant — always less specific than :has(#thread-panel[hidden]), which
+  // carries an id. So each one takes its column to zero through the custom
+  // property nothing else declares, never by restating the template.
+  assert.match(
+    rendererCSS,
+    /\.shell\s*\{[^}]*--rail-left:\s*var\(--rail\);[^}]*--rail-right:\s*var\(--rail\);[^}]*grid-template-columns:\s*var\(--rail-left\) minmax\(0, 1fr\) var\(--rail-right\);/u,
+    "each rail must be its own grid track variable, or one cannot fold without the other",
+  );
+  for (const [selector, property] of [
+    [':root\\[data-sidebar="collapsed"\\] \\.shell', "--rail-left"],
+    [':root\\[data-context-panel="hidden"\\] \\.shell', "--rail-right"],
+  ]) {
+    assert.match(
+      rendererCSS,
+      new RegExp(`${selector}\\s*\\{\\s*${property}:\\s*0px;\\s*\\}`, "u"),
+      `${property} is how the manual fold wins; a grid-template-columns here would lose to the :has() rule`,
+    );
+  }
+  assert.match(
+    rendererCSS,
+    /:root\[data-sidebar="collapsed"\]\s*\.sidebar\s*\{\s*display:\s*none;/u,
+    "a folded rail must be gone, not a zero-width column still painting its border",
+  );
+  assert.match(
+    rendererCSS,
+    /:root\[data-context-panel="hidden"\]\s*\.context-panel\s*\{\s*display:\s*none;/u,
+    "same for the workspace column",
+  );
+  // Below 1180px the workspace column is not a choice — the window cannot
+  // afford it — so the button that would pretend otherwise goes with it.
+  const narrow = rendererCSS.match(/@media \(max-width: 1180px\) \{([\s\S]*?)\n\}/u);
+  assert.ok(narrow, "the narrow-window fold must still exist");
+  assert.match(
+    narrow[1],
+    /#context-panel-button\s*\{\s*display:\s*none;/u,
+    "a toggle that cannot change what is on screen is worse than no toggle",
+  );
+}
+
+// --- The window's title bar carries the window-level controls -----------------
+//
+// The native title bar is hidden (HiddenInset, desktop/wails/main.go), so the
+// webview paints the strip the traffic lights sit on. The three view controls
+// — fold the rail, search, fold the workspace column — live there next to the
+// lights, not inside any column: a control that hides its column cannot bring
+// it back, and one toggle per column is the whole grammar.
+{
+  const titlebarAt = rendererHTML.indexOf('id="titlebar"');
+  const shellAt = rendererHTML.indexOf('<main class="shell">');
+  assert.ok(titlebarAt > 0 && shellAt > titlebarAt, "the title bar precedes the shell");
+  const titlebarHTML = rendererHTML.slice(titlebarAt, shellAt);
+  for (const id of ["sidebar-collapse-button", "sidebar-search-button", "context-panel-button"]) {
+    assert.match(
+      titlebarHTML,
+      new RegExp(`id=["']${id}["']`, "u"),
+      `${id} is a window-level control and belongs in the title bar`,
+    );
+  }
+  // The brand row is only the brand again: the icons that shared it moved up.
+  const brandAt = rendererHTML.indexOf('class="brand"');
+  const toolbarAt = rendererHTML.indexOf('class="thread-toolbar"');
+  assert.ok(brandAt > 0 && toolbarAt > brandAt, "the brand row still heads the rail");
+  assert.doesNotMatch(
+    rendererHTML.slice(brandAt, toolbarAt),
+    /<button/u,
+    "the rail's head carries no controls",
+  );
+  // The strip drags the window; the controls in it do not. The custom property
+  // inherits, so the no-drag has to be declared on the buttons themselves.
+  assert.match(
+    rendererCSS,
+    /\.titlebar\s*\{\s*--wails-draggable:\s*drag;/u,
+    "the title bar is the drag region",
+  );
+  assert.match(
+    rendererCSS,
+    /\.titlebar button\s*\{\s*--wails-draggable:\s*no-drag;/u,
+    "a button that drags the window cannot be clicked",
+  );
+  // The left indent clears the inset traffic lights; the workspace fold stands
+  // down whenever there is no run to project, wherever the button sits.
+  assert.match(
+    rendererCSS,
+    /\.titlebar\s*\{[\s\S]*?padding:\s*0 var\(--sp-2\) 0 (7[0-9]|8[0-9])px;/u,
+    "the first control starts right of the traffic lights",
+  );
+  assert.match(
+    rendererCSS,
+    /body:has\(#thread-panel\[hidden\]\)\s*#context-panel-button\s*\{\s*display:\s*none;/u,
+    "the workspace fold stands down when there is nothing to show",
+  );
+  assert.doesNotMatch(rendererHTML, /id=["']sidebar-expand-button["']/u);
+  assert.doesNotMatch(rendererSource, /sidebarExpandButton/u);
+}
+
+// --- The main column's chrome occupies nothing when it has nothing to say -----
+//
+// Same technique, same reason: the welcome screen is centred in the whole
+// column, not in what is left under a bar drawn for a conversation that is not
+// open. The strip owes nobody a control in this state — every view control it
+// used to carry in it lives in the title bar now, which is always on screen.
+{
+  assert.match(
+    rendererCSS,
+    /\.content:has\(#thread-panel\[hidden\]\)\s*\.content-topbar\s*\{\s*display:\s*none;/u,
+    "with nothing open the chrome strip must take no height at all",
+  );
+  // The header that used to live inside the thread panel is gone: it was two
+  // lines (title over metadata) inside a column that had a two-line rail head
+  // above it. Both are one line now, and the parts of it live in the strip —
+  // which is what lets the strip disappear with them.
+  assert.doesNotMatch(rendererCSS, /\.thread-panel header/u);
+  const topbarAt = rendererHTML.indexOf('id="content-topbar"');
+  const panelAt = rendererHTML.indexOf('id="thread-panel"');
+  assert.ok(topbarAt > 0 && panelAt > topbarAt, "the chrome strip precedes the thread panel");
+  const topbarHTML = rendererHTML.slice(topbarAt, panelAt);
+  for (const id of [
+    "thread-title-row",
+    "thread-title",
+    "thread-meta",
+    "rename-thread-button",
+    "export-thread-button",
+    "rename-thread-form",
+    "turn-state",
+  ]) {
+    assert.match(
+      topbarHTML,
+      new RegExp(`id=["']${id}["']`, "u"),
+      `${id} belongs to the main column's one line of chrome`,
+    );
+  }
 }
 
 // The conversation list keeps itself fresh: every mutation repaints it, and the
@@ -1680,37 +1814,91 @@ async function testThreadGroupingAndSearch() {
   );
   assert.ok(headings.length >= 2, "populated groups must be labelled");
 
-  // Driven through the input rather than by poking state: that is the path a
-  // user takes, and top-level consts in a VM script are not reachable from the
-  // context object anyway.
-  const search = document.byId.get("thread-search");
+  // Searching happens in the palette now, not in the rail. Driven through the
+  // palette's input rather than by poking state: that is the path a user takes,
+  // and top-level consts in a VM script are not reachable from the context
+  // object anyway.
+  const listed = () =>
+    Array.from(document.byId.get("thread-list").children)
+      .filter((n) => n.classList?.contains("thread-item")).length;
+  const before = listed();
+  assert.ok(before >= 5, "precondition: the rail lists every cached conversation");
+
+  document.dispatchKey({ key: "k", metaKey: true });
+  const search = document.byId.get("quick-switcher-input");
   search.value = "quarterly";
   search.dispatch("input");
-  const shown = Array.from(document.byId.get("thread-list").children)
-    .filter((n) => n.classList?.contains("thread-item"));
-  assert.equal(shown.length, 1, "search must narrow the list to matching titles");
+  const shown = walk(
+    document.byId.get("quick-switcher-list"),
+    (n) => n.classList?.contains("quick-switcher-item"),
+  );
+  assert.equal(shown.length, 1, "a query must narrow the palette to matching names");
+  assert.equal(
+    listed(),
+    before,
+    "and must NOT shorten the rail: the list behind a search window is not a result set",
+  );
 
   search.value = "nothing-matches-this";
   search.dispatch("input");
   assert.match(
-    document.byId.get("thread-list").textContent,
-    /No conversations match/,
-    "an empty result must say the query found nothing, not look like an empty cache",
-  );
-  assert.equal(
-    document.byId.get("thread-search-panel").hidden,
-    false,
-    "a query that matches nothing must keep its own input on screen — hiding it would strand the text the user typed",
+    document.byId.get("quick-switcher-list").textContent,
+    /Nothing matches/,
+    "an empty result must say so where the query was typed",
   );
 }
 
-// The counterpart to the assertion above: with nothing cached, the filter is
-// not just useless, it is misleading — an empty list under a search box reads
-// as "your search found nothing".
-async function testThreadSearchIsHiddenWithNothingToFilter() {
-  // A signed-in session whose thread list comes back empty, rather than the
-  // missing-bridge run: this has to prove renderThreads decided to hide the
-  // filter, not merely that index.html ships it hidden.
+// There is exactly one search in this app. The rail used to carry a second one
+// — a field under the product name that filtered titles in place and asked the
+// sidecar for message bodies — while ⌘K filtered the same titles and offered
+// actions. Two controls called search, overlapping vocabularies, neither
+// complete. Pinned here because the cheapest way to "fix" a palette that is
+// missing something is to put a small search back in the rail.
+{
+  assert.doesNotMatch(rendererHTML, /id=["']thread-search["']/u);
+  assert.doesNotMatch(rendererHTML, /id=["']thread-search-panel["']/u);
+  assert.doesNotMatch(rendererHTML, /id=["']content-match-panel["']/u);
+  assert.doesNotMatch(rendererSource, /threadSearchInput|threadQuery/u);
+  assert.doesNotMatch(rendererCSS, /\.thread-search|\.content-match/u);
+  // The rail's remaining entry point is an icon, and it opens the one palette.
+  assert.match(rendererHTML, /id=["']sidebar-search-button["']/u);
+  assert.match(rendererSource, /sidebarSearchButton/u);
+}
+
+// Icon-only controls. An icon is not a name: every one of these has to say
+// what it does to a screen reader and to a hovering pointer, and the icon
+// itself has to be hand-drawn inline SVG — the CSP allows no third-party
+// script, and the bundled-renderer allowlist would have to grow a file for a
+// sprite sheet.
+{
+  for (const [id, label] of [
+    ["sidebar-search-button", "Search conversations and actions"],
+    ["sidebar-collapse-button", "Hide sidebar"],
+    ["context-panel-button", "Hide workspace panel"],
+  ]) {
+    const tag = rendererHTML.match(new RegExp(`<button\\s+id="${id}"[\\s\\S]*?>`, "u"));
+    assert.ok(tag, `${id} must ship as a button`);
+    assert.match(tag[0], new RegExp(`aria-label="${label}"`, "u"), `${id} needs a name`);
+    assert.match(tag[0], /title="/u, `${id} needs a tooltip too — a name only a screen reader hears is half a label`);
+    assert.match(
+      tag[0],
+      /aria-(?:expanded|haspopup)="/u,
+      `${id} must say what pressing it does to the screen — open a dialog, or show and hide a column`,
+    );
+  }
+  // Six inline icons, one drawing convention: 16px box, currentColor, no fill.
+  assert.ok(
+    rendererHTML.match(/<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">/gu).length >= 3,
+    "the icons are inline SVG in the markup, drawn to one convention",
+  );
+  assert.match(rendererCSS, /\.icon-button svg \{[\s\S]*?stroke: currentColor;/u);
+  assert.doesNotMatch(rendererHTML, /<script[^>]+src="http/u);
+}
+
+// With nothing cached the rail says so, and says nothing else: no filter above
+// an empty list, which reads as "your search found nothing" when the truth is
+// that nothing has been created yet.
+async function testEmptyRailSaysNothingIsCached() {
   const bridge = {
     async fetch(pathname) {
       if (pathname === "/auth/status") {
@@ -1729,12 +1917,7 @@ async function testThreadSearchIsHiddenWithNothingToFilter() {
   assert.match(
     document.byId.get("thread-list").textContent,
     /No cached threads yet/,
-    "precondition: this run must have an empty thread list",
-  );
-  assert.equal(
-    document.byId.get("thread-search-panel").hidden,
-    true,
-    "the conversation filter must stay hidden until there is something to filter",
+    "an empty rail must name its own emptiness",
   );
 }
 
@@ -4928,7 +5111,12 @@ async function testSignedOutLocalCanCreateThread() {
   if (realRandomUUID) globalThis.crypto.randomUUID = realRandomUUID;
 }
 
-async function testSidebarContentSearch() {
+// Message bodies, in the palette. They arrive a debounce and a round trip
+// after the keystroke that asked for them, which is why they are the LAST
+// group: a group that appeared in the middle would move every row under it,
+// and the highlight sitting on one of those rows would end up pointing at
+// something the reader never chose.
+async function testPaletteSearchesMessageBodies() {
   const searchCalls = [];
   let pendingResolve = null;
   const bridge = {
@@ -4969,32 +5157,74 @@ async function testSidebarContentSearch() {
   const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
 
-  const input = document.byId.get("thread-search");
+  const matches = () =>
+    walk(
+      document.byId.get("quick-switcher-list"),
+      (n) => n.classList?.contains("quick-switcher-match"),
+    );
+
+  document.dispatchKey({ key: "k", metaKey: true });
+  const input = document.byId.get("quick-switcher-input");
+  input.value = "c";
+  input.dispatch("input");
+  await settle();
+  await settle();
+  assert.deepEqual(searchCalls, [], "one character is not a question worth asking a database");
+
   input.value = "churn";
   input.dispatch("input");
   await settle();
   await settle();
 
   assert.deepEqual(searchCalls, ["churn"], "typing asks the sidecar once (debounced)");
-  const panel = document.byId.get("content-match-panel");
-  assert.equal(panel.hidden, false, "content matches surface under their own group");
-  const match = walk(
-    document.byId.get("content-match-list"),
-    (n) => n.classList?.contains("content-match"),
-  )[0];
+  const headings = () =>
+    walk(
+      document.byId.get("quick-switcher-list"),
+      (n) => n.classList?.contains("quick-switcher-heading"),
+    ).map((n) => n.textContent);
+  assert.deepEqual(
+    headings(),
+    ["In messages"],
+    "bodies are a group of their own, named where the names group is not",
+  );
+  const match = matches()[0];
   assert.match(match.textContent, /churn 环比持平/, "the snippet is shown");
   assert.match(match.textContent, /Other work/, "the owning conversation is named");
 
-  match.click();
+  // Order, with all three groups present: names, then actions, then bodies.
+  // Bodies last is not a taste call — they arrive after the list is already
+  // drawn, and a group inserted ABOVE the highlight moves whatever Enter is
+  // pointing at.
+  input.value = "model";
+  input.dispatch("input");
+  await settle();
+  await settle();
+  assert.deepEqual(
+    headings(),
+    ["Actions", "In messages"],
+    "the group that arrives late must arrive at the bottom",
+  );
+
+  input.value = "churn";
+  input.dispatch("input");
+  await settle();
+  await settle();
+  matches()[0].click();
   await settle();
   assert.match(
     document.byId.get("thread-title").textContent,
     /Other work/,
-    "clicking a content match opens its conversation",
+    "choosing a body hit opens the conversation it was said in",
+  );
+  assert.equal(
+    document.byId.get("quick-switcher").hidden,
+    true,
+    "and closes the palette, like every other choice in it",
   );
 
   // Generation guard: a SLOW answer to an old query arrives after a newer
   // query already rendered — the stale answer must be dropped.
+  document.dispatchKey({ key: "k", metaKey: true });
   input.value = "slowquery";
   input.dispatch("input");
   await settle();
@@ -5006,20 +5236,28 @@ async function testSidebarContentSearch() {
   if (resolveStale) resolveStale();
   await settle();
   await settle();
-  const names = walk(
-    document.byId.get("content-match-list"),
-    (n) => n.classList?.contains("content-match"),
-  ).map((n) => n.textContent);
   assert.ok(
-    names.every((label) => !label.includes("STALE")),
+    matches().every((node) => !node.textContent.includes("STALE")),
     "a late answer to an old query must never overwrite the newer results",
   );
+  assert.equal(matches().length, 1, "precondition: the newer answer is what is on screen");
 
   // Clearing the query clears the group.
   input.value = "";
   input.dispatch("input");
   await settle();
-  assert.equal(panel.hidden, true, "no query, no content group");
+  assert.equal(matches().length, 0, "no query, no bodies");
+
+  // And closing the palette drops what it was holding: an answer to a question
+  // the reader has already dismissed must not be waiting there next time.
+  input.value = "churn";
+  input.dispatch("input");
+  await settle();
+  await settle();
+  assert.equal(matches().length, 1, "precondition: results are on screen");
+  document.dispatchKey({ key: "Escape" });
+  document.dispatchKey({ key: "k", metaKey: true });
+  assert.equal(matches().length, 0, "the palette opens on the query you are about to type");
 }
 
 async function testPaletteRunsCommands() {
@@ -5113,6 +5351,94 @@ async function testPaletteOpensWithoutThreads() {
       .length > 0,
     "actions are offered even with zero threads",
   );
+}
+
+// --- Folding the columns, from the buttons -----------------------------------
+//
+// Both folds are one attribute on <html> and the aria states of the one toggle
+// that owns each, which is all this stub can see — the CSS that reads the
+// attribute is pinned as text at the top of this file. What is checked here is
+// the half that is code: that the attribute is written and cleared, and that
+// the toggle says what pressing it will do next. Focus needs no checking: both
+// toggles live in the title bar, outside the columns they hide.
+async function testColumnFolds() {
+  const { bridge, desktopBridge } = localModeBridge({ localRoute: true });
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  const root = document.documentElement;
+  const collapse = document.byId.get("sidebar-collapse-button");
+  assert.equal(root.getAttribute("data-sidebar"), null, "the rail starts open");
+  assert.equal(collapse.getAttribute("aria-expanded"), "true");
+
+  collapse.click();
+  assert.equal(root.getAttribute("data-sidebar"), "collapsed", "the rail folds");
+  assert.equal(collapse.getAttribute("aria-expanded"), "false");
+  assert.equal(
+    collapse.getAttribute("aria-label"),
+    "Show sidebar",
+    "one toggle names the act it will perform, not the state it is looking at",
+  );
+
+  collapse.click();
+  assert.equal(root.getAttribute("data-sidebar"), null, "and unfolds from the same control");
+  assert.equal(collapse.getAttribute("aria-expanded"), "true");
+  assert.equal(collapse.getAttribute("aria-label"), "Hide sidebar");
+
+  // The binding every editor on this desktop already uses for this act.
+  document.dispatchKey({ key: "\\", metaKey: true });
+  assert.equal(root.getAttribute("data-sidebar"), "collapsed", "⌘\\ folds the rail");
+  document.dispatchKey({ key: "\\", metaKey: true });
+  assert.equal(root.getAttribute("data-sidebar"), null, "and unfolds it");
+
+  // The workspace column. One button, because it does not live in the column
+  // it hides — and a label that says which way it goes, since the icon cannot.
+  const panel = document.byId.get("context-panel-button");
+  assert.equal(root.getAttribute("data-context-panel"), null, "the workspace column starts open");
+  assert.equal(panel.getAttribute("aria-expanded"), "true");
+  assert.equal(panel.getAttribute("aria-label"), "Hide workspace panel");
+
+  panel.click();
+  assert.equal(root.getAttribute("data-context-panel"), "hidden");
+  assert.equal(panel.getAttribute("aria-expanded"), "false");
+  assert.equal(panel.getAttribute("aria-label"), "Show workspace panel");
+  assert.equal(panel.getAttribute("title"), "Show workspace panel");
+
+  // Selecting a conversation must not quietly reopen it. The automatic rule
+  // ("no run to project, no column") and this one do not argue: the automatic
+  // rule decides whether there is anything to show, this one decides whether
+  // the reader wants it, and a choice that a click elsewhere undoes is not a
+  // choice.
+  walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[0].click();
+  await settle();
+  assert.equal(
+    root.getAttribute("data-context-panel"),
+    "hidden",
+    "a manual close survives opening a conversation",
+  );
+
+  panel.click();
+  assert.equal(root.getAttribute("data-context-panel"), null, "and pressing again brings it back");
+}
+
+// The rail's search icon opens the one palette, and does not grow a second
+// search of its own on the way.
+async function testSidebarSearchIconOpensThePalette() {
+  const { bridge, desktopBridge } = localModeBridge({ localRoute: true });
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  const button = document.byId.get("sidebar-search-button");
+  assert.equal(document.byId.get("quick-switcher").hidden, true);
+  button.click();
+  assert.equal(document.byId.get("quick-switcher").hidden, false, "the icon opens the palette");
+  assert.equal(
+    document.byId.get("quick-switcher-input").focused,
+    true,
+    "and puts the caret where the query goes",
+  );
+  button.click();
+  assert.equal(document.byId.get("quick-switcher").hidden, true, "pressing it again dismisses");
 }
 
 async function testPinnedThreadsLeadTheSidebar() {
@@ -8657,7 +8983,7 @@ await testRejectsMalformedLoginTransactionResult();
 await testRedactsErrorStatusMessages();
 await testCachedStreamingStatesRenderPartialAndRejectUnknown();
 await testThreadGroupingAndSearch();
-await testThreadSearchIsHiddenWithNothingToFilter();
+await testEmptyRailSaysNothingIsCached();
 await testTaskContextPanelRendersOnLoad();
 await testShimInterceptsExternalLinks();
 await testThreadDeleteIsTwoStepAndLocalOnly();
@@ -8706,9 +9032,11 @@ await testOnboardingPathsLeadSomewhere();
 await testOnboardingHiddenOnceUsable();
 await testBridgeLibAcceptsLocalCreateContract();
 await testSignedOutLocalCanCreateThread();
-await testSidebarContentSearch();
+await testPaletteSearchesMessageBodies();
 await testPaletteRunsCommands();
 await testPaletteOpensWithoutThreads();
+await testColumnFolds();
+await testSidebarSearchIconOpensThePalette();
 await testPinnedThreadsLeadTheSidebar();
 await testModesParseFailureNamesTheSkew();
 await testLocalIdentityIsNamedWithoutAnyModel();

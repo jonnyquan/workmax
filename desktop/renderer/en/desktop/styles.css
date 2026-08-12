@@ -273,6 +273,10 @@ body {
      eats height, which forces the vertical bar for real: two scrollbars and
      a dead strip at the bottom of the window, forever. */
   overflow: hidden;
+  /* One column of two: the title bar the webview paints under the traffic
+     lights, then the three-column shell. The shell flexes; the bar does not. */
+  display: flex;
+  flex-direction: column;
   background: hsl(var(--background));
   font-size: var(--fs-base);
   line-height: var(--lh-ui);
@@ -356,10 +360,29 @@ button.ghost:hover:not(:disabled) {
 }
 
 .icon-button {
+  display: grid;
+  place-items: center;
   width: var(--h-control);
   min-width: var(--h-control);
   padding: 0;
   font-size: var(--fs-read);
+}
+
+/* Icons are hand-written inline SVG — no icon library, which the CSP and the
+   bundled-renderer allowlist would both have to be widened for, and which
+   would arrive with four hundred glyphs to get the six we draw. One stroke
+   weight, one size, currentColor throughout, so an icon inherits whatever the
+   button it sits in already resolved to (ghost grey, hover foreground,
+   disabled opacity) instead of carrying a second palette. */
+.icon-button svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* One focus ring, one colour, everywhere. There used to be two — a grey
@@ -485,17 +508,109 @@ textarea::placeholder {
   border: 0;
 }
 
+/* --- The window's title bar --------------------------------------------------
+   macOS hides the native title bar (HiddenInset — desktop/wails/main.go) and
+   leaves the traffic lights inset at the top left; this strip is what the
+   webview paints under them. Its height and left indent are the two numbers
+   in this file measured against AppKit rather than the spacing scale, so the
+   controls centre on the lights and begin just right of them (see the rule
+   for the figures).
+
+   The whole strip drags the window. --wails-draggable is the marker the Wails
+   runtime would read if it were loaded; it is not (the page is served from a
+   loopback origin), so renderer.js reads the same custom property and posts
+   the native drag message itself. The value inherits, which is exactly why
+   every control inside the strip has to say no-drag for itself. */
+.titlebar {
+  --wails-draggable: drag;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  /* Measured against AppKit, not the spacing scale: HiddenInset parks the
+     traffic lights 23.5pt below the window's top edge and clears 71pt across,
+     so a 46px strip centres its controls on the lights and an 78px indent
+     starts them a small gap right of the green one. */
+  height: 46px;
+  padding: 0 var(--sp-2) 0 78px;
+}
+
+.titlebar button {
+  --wails-draggable: no-drag;
+}
+
+.titlebar-leading,
+.titlebar-trailing {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 /* --- Shell -----------------------------------------------------------------
    Three columns: conversations, the conversation itself, and the context of
    the run. The middle one is the only one that flexes — the rails carry fixed
    lists and reading them is easier at a stable width. Both rails lost 40px in
    this pass; the middle column is where the words are. */
 .shell {
+  /* Both rails are the same width and always have been, but they are no longer
+     the same VARIABLE: each one can now be folded to nothing on its own, and
+     one shared token cannot express "the left one is away". --rail stays the
+     width; --rail-left / --rail-right are the two columns, which is why the
+     narrow-window media queries below still only have to move --rail. */
+  --rail-left: var(--rail);
+  --rail-right: var(--rail);
   display: grid;
-  grid-template-columns: var(--rail) minmax(0, 1fr) var(--rail);
+  grid-template-columns: var(--rail-left) minmax(0, 1fr) var(--rail-right);
   width: 100%;
-  height: 100%;
+  /* What is left of the window under the title bar. */
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
+}
+
+/* Each column names its own track. Auto-placement is not good enough here and
+   the failure is silent: a display:none element is not a grid item, so the
+   moment the rail folded, the conversation slid left into the rail's 0px track
+   and the workspace column took the 1fr — a window with nothing in it but a
+   "Files you attach…" line stretched across the whole screen. Named tracks
+   cannot do that. The two-column states below simply leave track 3 unused. */
+.sidebar {
+  grid-column: 1;
+}
+
+.content {
+  grid-column: 2;
+}
+
+.context-panel {
+  grid-column: 3;
+}
+
+/* --- Folding the two rails -------------------------------------------------
+   Both folds are an attribute on <html>, written by renderer.js, and both work
+   by taking the column's width to zero rather than by rewriting the template:
+   the :has() rule below outranks any plain .shell declaration, so a competing
+   grid-template-columns here would silently lose. A custom property cannot
+   lose that way — nothing else declares these two.
+
+   The state lives on the document element rather than on .shell so the
+   controls in the OTHER column can react to it too: the rail's collapse button
+   is inside the rail it hides, so something outside has to bring it back. */
+:root[data-sidebar="collapsed"] .shell {
+  --rail-left: 0px;
+}
+
+:root[data-sidebar="collapsed"] .sidebar {
+  display: none;
+}
+
+:root[data-context-panel="hidden"] .shell {
+  --rail-right: 0px;
+}
+
+:root[data-context-panel="hidden"] .context-panel {
+  display: none;
 }
 
 /* The third column is a projection of a run — which steps have happened, what
@@ -517,7 +632,7 @@ textarea::placeholder {
    is a drift waiting to happen. The panel's visibility is a consequence of the
    selection, not a thing maintained alongside it. */
 .shell:has(#thread-panel[hidden]) {
-  grid-template-columns: var(--rail) minmax(0, 1fr);
+  grid-template-columns: var(--rail-left) minmax(0, 1fr);
 }
 
 .shell:has(#thread-panel[hidden]) .context-panel {
@@ -532,9 +647,20 @@ textarea::placeholder {
 @media (max-width: 1180px) {
   .shell {
     --rail: 272px;
-    grid-template-columns: var(--rail) minmax(0, 1fr);
+    grid-template-columns: var(--rail-left) minmax(0, 1fr);
   }
-  .context-panel {
+  /* The .shell parent is not decoration: the column's own display:flex lives
+     further down the sheet at the same specificity a bare .context-panel
+     would have, and source order would hand it the win back. */
+  .shell .context-panel {
+    display: none;
+  }
+  /* The manual switch goes with it. Below this width the column is not a
+     choice — the window cannot afford it — and a button that presses without
+     changing anything on screen teaches the reader that the button is broken.
+     The stored preference is untouched, so widening the window restores
+     whatever the reader last chose rather than a default. */
+  #context-panel-button {
     display: none;
   }
 }
@@ -555,12 +681,15 @@ textarea::placeholder {
   background: hsl(var(--background));
 }
 
+/* One row: the product, and nothing else. The search and fold icons that used
+   to flank the name moved into the window's title bar, next to the traffic
+   lights. */
 .brand {
   display: flex;
   flex: none;
   gap: var(--sp-2);
   align-items: center;
-  padding: var(--sp-4) var(--sp-4) var(--sp-3);
+  padding: var(--sp-3) var(--sp-2) var(--sp-3) var(--sp-4);
 }
 
 .brand-mark {
@@ -580,22 +709,14 @@ textarea::placeholder {
 }
 
 .brand h1 {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
   font-size: var(--fs-base);
   font-weight: var(--fw-strong);
   line-height: var(--lh-tight);
-}
-
-.sidebar-nav-head {
-  flex: none;
-  padding: 0 var(--sp-3);
-}
-
-.thread-search {
-  padding-bottom: var(--sp-3);
-}
-
-.thread-search input {
-  background: hsl(var(--card));
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* A label, not a control. It names the list below it and must not look
@@ -608,10 +729,11 @@ textarea::placeholder {
 
 .thread-toolbar {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
-  padding-bottom: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-2);
 }
 
 /* An inline form in the rail. It is the only card-like thing in this column,
@@ -786,54 +908,6 @@ textarea::placeholder {
   padding: var(--sp-2);
 }
 
-.content-match-panel {
-  flex: none;
-  margin: 0;
-  padding: 0 var(--sp-2) var(--sp-2);
-}
-
-.content-match-list {
-  display: grid;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.content-match {
-  display: grid;
-  gap: 2px;
-  width: 100%;
-  height: auto;
-  padding: var(--sp-2);
-  border-color: transparent;
-  border-radius: var(--r-control);
-  background: transparent;
-  text-align: left;
-  white-space: normal;
-}
-
-.content-match:hover {
-  background: hsl(var(--muted));
-}
-
-.content-match strong {
-  overflow: hidden;
-  font-size: var(--fs-small);
-  font-weight: var(--fw-medium);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.content-match span {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  color: hsl(var(--muted-foreground));
-  font-size: var(--fs-micro);
-  line-height: var(--lh-ui);
-}
 
 /* --- Sidebar foot: state, identity, settings -------------------------------
    The bottom of the rail answers three questions in three lines: what is the
@@ -1186,6 +1260,30 @@ textarea::placeholder {
   background: hsl(var(--primary) / 0.1);
 }
 
+/* A message-body hit is the one row in this list that carries a quotation, so
+   it is the one row that stacks: the conversation it belongs to on top, the
+   matching words underneath, clamped to two lines. Everything else here is a
+   name and a hint on one line. */
+.quick-switcher-match {
+  display: grid;
+  gap: 2px;
+}
+
+.quick-switcher-match strong {
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
+}
+
+.quick-switcher-match span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--fs-micro);
+  line-height: var(--lh-ui);
+  white-space: normal;
+}
+
 .quick-switcher-empty {
   padding: var(--sp-4);
   color: hsl(var(--muted-foreground));
@@ -1487,17 +1585,61 @@ textarea::placeholder {
 
 /* --- Content ---------------------------------------------------------------
    The reading surface. */
+/* The chrome strip, then whichever of the two screens is showing. A column
+   rather than a grid with named rows: the strip and the welcome screen and the
+   thread panel are each individually display:none in some state, and a grid's
+   rows are assigned to the children that exist — so the moment the strip stood
+   down, the welcome screen inherited its `auto` row and stopped being centred
+   in anything. A flex column has no such opinion: what remains fills what is
+   left. (Seen in the app, not in a test — the stub does not evaluate CSS.) */
 .content {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   overflow: hidden;
   background: hsl(var(--card));
+}
+
+.content > .empty-state,
+.content > .thread-panel {
+  flex: 1;
+  min-height: 0;
+}
+
+/* --- The main column's chrome ----------------------------------------------
+   One line, and only the parts of it that have something to say. Which parts
+   those are is derived, not maintained: #thread-panel[hidden] already states
+   "nothing is open", and the collapse attribute already states "the rail is
+   away", so both facts are read here rather than mirrored into a class. */
+.content-topbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-3) var(--sp-4) var(--sp-3) var(--sp-5);
+}
+
+/* Nothing open: the strip is empty, so it takes no height and the welcome
+   screen is centred in the whole column rather than in what is left below a
+   bar. Unlike the old layout it owes nobody a control in this state — the
+   rail's fold and the workspace fold both live in the title bar now, which is
+   always on screen. */
+.content:has(#thread-panel[hidden]) .content-topbar {
+  display: none;
+}
+
+/* The workspace fold moved to the title bar with the other window-level
+   controls, so its "nothing to show" rule has to reach outside .content: the
+   button stands down whenever there is no run to project, wherever it sits. */
+body:has(#thread-panel[hidden]) #context-panel-button {
+  display: none;
 }
 
 .empty-state {
   display: grid;
   place-content: safe center;
   justify-items: center;
-  height: 100%;
   padding: var(--sp-7) var(--sp-6);
   overflow-y: auto;
   text-align: center;
@@ -1605,42 +1747,42 @@ textarea::placeholder {
   position: relative;
   display: flex;
   flex-direction: column;
-  height: 100%;
   min-height: 0;
 }
 
-.thread-panel header {
-  display: flex;
-  flex: none;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--sp-4);
-  padding: var(--sp-5) var(--sp-6) var(--sp-3);
-}
-
+/* The name and everything attached to it. It is the only part of the strip
+   that flexes, so the title is what gives up room when the column is narrow —
+   the state pill and the two view controls are fixed-size and cannot usefully
+   shrink. */
 .thread-header-copy {
+  flex: 1;
   min-width: 0;
 }
 
-.thread-panel header h2 {
-  font-size: var(--fs-title);
-  font-weight: var(--fw-strong);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Title with its controls beside it; the controls stay quiet until the header
-   is hovered, because they are things you do to a conversation occasionally
-   and never the reason you opened it. */
+/* Title, metadata and the two things you do to a conversation, on one line.
+   The metadata used to be a second line under the title; at 12px muted beside
+   it, it reads as the same sentence and costs no height. The controls stay
+   quiet until the strip is hovered, because they are things you do to a
+   conversation occasionally and never the reason you opened it. */
 .thread-title-row {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: var(--sp-2);
   min-width: 0;
 }
 
+.thread-title-row h2 {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fs-title);
+  font-weight: var(--fw-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .thread-title-row button {
+  flex: none;
   height: var(--h-control-sm);
   padding: 0 var(--sp-2);
   font-size: var(--fs-micro);
@@ -1649,19 +1791,27 @@ textarea::placeholder {
   transition: opacity 100ms ease;
 }
 
-.thread-panel header:hover .thread-title-row button,
+.content-topbar:hover .thread-title-row button,
 .thread-title-row button:focus-visible {
   opacity: 1;
 }
 
 #thread-meta {
-  margin-top: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+/* Renaming replaces the line it is renaming: the title hides, the form takes
+   the same row. A form that opened UNDER the title used to push the whole
+   transcript down by a row for as long as you were typing. */
 .rename-thread-form {
   display: flex;
   gap: var(--sp-2);
-  margin-top: var(--sp-2);
 }
 
 .rename-thread-form input {
@@ -2798,10 +2948,14 @@ textarea::placeholder {
 
 /* --- Narrow windows --------------------------------------------------------- */
 @media (max-width: 980px) {
-  .thread-panel header,
   .message-list {
     padding-right: var(--sp-5);
     padding-left: var(--sp-5);
+  }
+
+  .content-topbar {
+    padding-right: var(--sp-3);
+    padding-left: var(--sp-4);
   }
 
   .composer,

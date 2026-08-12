@@ -211,6 +211,17 @@ func runDesktop(boot *desktop.Boot) {
 		Width:  1200,
 		Height: 800,
 		URL:    ui.BaseURL(),
+		// HiddenInset: the title bar and its title go away, the traffic lights
+		// stay inset at the top left, and the webview paints the strip they sit
+		// on (FullSizeContent). The page owns that strip — #titlebar in
+		// index.html carries the fold/search/workspace controls next to the
+		// lights and drags the window everywhere else. Only the main window
+		// gets this: the kill-check and verify-app harness windows keep the
+		// default chrome, because nobody drags them and their screenshots are
+		// easier to read with a real title.
+		Mac: application.MacWindow{
+			TitleBar: application.MacTitleBarHiddenInset,
+		},
 		// Off unless explicitly asked for. The window holds an authenticated
 		// session and an API the proxy authenticates on its behalf; a devtools
 		// surface on a shipped build is a way in that nothing else grants.
