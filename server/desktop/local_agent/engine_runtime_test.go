@@ -63,7 +63,7 @@ func TestChat_ForeignRuntimeEngine(t *testing.T) {
 	for _, f := range frames {
 		kinds = append(kinds, f.Type)
 	}
-	if strings.Join(kinds, ",") != "text_delta,done" {
+	if strings.Join(kinds, ",") != "turn_meta,text_delta,done" {
 		t.Fatalf("frames = %v", kinds)
 	}
 	if rt.gotIn.Workspace != filepath.Join(root, "thread_thr_l2") {

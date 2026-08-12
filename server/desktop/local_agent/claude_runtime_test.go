@@ -172,7 +172,7 @@ func TestChat_PartialDeltasSupersedeFullBlocks(t *testing.T) {
 		kinds = append(kinds, f.Type)
 		deltas = append(deltas, f.Data)
 	}
-	want := []string{"reasoning_delta", "text_delta", "text_delta", "done"}
+	want := []string{"turn_meta", "reasoning_delta", "text_delta", "text_delta", "done"}
 	if strings.Join(kinds, ",") != strings.Join(want, ",") {
 		t.Fatalf("frame order = %v, want %v (data: %v)", kinds, want, deltas)
 	}
@@ -205,7 +205,7 @@ func TestChat_FullBlocksWithoutPartialsStillEmit(t *testing.T) {
 	for _, f := range frames {
 		kinds = append(kinds, f.Type)
 	}
-	want := []string{"reasoning_delta", "text_delta", "done"}
+	want := []string{"turn_meta", "reasoning_delta", "text_delta", "done"}
 	if strings.Join(kinds, ",") != strings.Join(want, ",") {
 		t.Fatalf("frame order = %v, want %v", kinds, want)
 	}
@@ -242,6 +242,10 @@ func TestChat_ToolResultsAreNamedAndCorrelated(t *testing.T) {
 		got = append(got, f.Type+" "+f.Data)
 	}
 	want := []string{
+		// Every turn opens by saying which engine ran it and which model it
+		// was told to use. It leads because an interrupted turn should still
+		// be able to say where its answer came from.
+		`turn_meta {"engine":"claude","model":"m"}`,
 		`tool_use {"name":"Write","target":"outline.md"}`,
 		`tool_result {"name":"Write","target":"outline.md"}`,
 		`tool_use {"name":"Read","target":"missing.md"}`,

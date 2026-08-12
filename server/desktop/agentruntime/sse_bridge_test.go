@@ -3,8 +3,11 @@
 package agentruntime
 
 import (
+	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	cloudproxy "server/desktop/cloud_proxy"
 )
@@ -51,6 +54,14 @@ func TestBridgeFrameShapes(t *testing.T) {
 			"tool_result", `{"name":"Write","target":"a.md"}`},
 		{"result error", Event{Kind: EventToolResult, Tool: ToolEvent{Name: "Read", IsError: true}},
 			"tool_result", `{"is_error":"true","name":"Read"}`},
+		{"turn meta", Event{Kind: EventTurnMeta, Turn: TurnMeta{Engine: "pi", Model: "qwen3-coder"}},
+			"turn_meta", `{"engine":"pi","model":"qwen3-coder"}`},
+		// No model configured means the engine chose its own default, and
+		// naming a model nobody picked would be worse than saying nothing.
+		{"turn meta without a model", Event{Kind: EventTurnMeta, Turn: TurnMeta{Engine: "claude"}},
+			"turn_meta", `{"engine":"claude"}`},
+		{"turn meta trims", Event{Kind: EventTurnMeta, Turn: TurnMeta{Engine: " claude ", Model: "  m  "}},
+			"turn_meta", `{"engine":"claude","model":"m"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -79,6 +90,9 @@ func TestBridgeQuietEvents(t *testing.T) {
 		{Kind: EventTextDelta, Delta: ""},
 		{Kind: EventThinkingDelta, Delta: ""},
 		{Kind: EventSessionRef, SessionRef: "sess-1"},
+		// An engine with no name is not a fact worth putting on the wire.
+		{Kind: EventTurnMeta, Turn: TurnMeta{Model: "m"}},
+		{Kind: EventTurnMeta, Turn: TurnMeta{Engine: "   "}},
 		{Kind: EventKind("from_the_future")},
 	} {
 		if err := b.Emit(ev); err != nil {
@@ -104,5 +118,39 @@ func TestBridgeAssistantAccumulation(t *testing.T) {
 	_ = b.Emit(Event{Kind: EventToolUse, Tool: ToolEvent{Name: "Read"}})
 	if got := b.AssistantText(); got != "hello" {
 		t.Errorf("AssistantText = %q, want hello", got)
+	}
+}
+
+// The model id is whatever the user typed into settings, so the bridge bounds
+// it rather than trusting it. Truncation is by rune: cutting a multi-byte
+// character in half would put invalid UTF-8 on a wire whose other end parses
+// JSON strictly, and the far end is a webview.
+func TestBridgeBoundsTurnMeta(t *testing.T) {
+	dst := &memWriter{}
+	b := NewSSEBridge(dst, nil)
+	if err := b.Emit(Event{Kind: EventTurnMeta, Turn: TurnMeta{
+		Engine: strings.Repeat("e", 100),
+		Model:  strings.Repeat("模", 200),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(dst.frames) != 1 {
+		t.Fatalf("frames = %d, want 1", len(dst.frames))
+	}
+	var got struct {
+		Engine string `json:"engine"`
+		Model  string `json:"model"`
+	}
+	if err := json.Unmarshal([]byte(dst.frames[0].Data), &got); err != nil {
+		t.Fatalf("the bounded frame must still be valid JSON: %v (%s)", err, dst.frames[0].Data)
+	}
+	if len([]rune(got.Engine)) != 32 {
+		t.Errorf("engine runes = %d, want 32", len([]rune(got.Engine)))
+	}
+	if len([]rune(got.Model)) != 80 {
+		t.Errorf("model runes = %d, want 80", len([]rune(got.Model)))
+	}
+	if !utf8.ValidString(got.Model) {
+		t.Error("truncation must not split a rune")
 	}
 }

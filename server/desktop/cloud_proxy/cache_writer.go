@@ -62,6 +62,8 @@ type CacheWriter struct {
 	messageIdempotencyKey string
 	userText              string
 	chatMode              string
+	agentEngine           string
+	agentModel            string
 
 	mu           sync.Mutex
 	row          *cacheRow // nil until first Enqueue triggers INSERT
@@ -126,6 +128,23 @@ func NewCacheWriter(db *gorm.DB, p CacheWriterParams) (*CacheWriter, error) {
 		chatMode:              p.ChatMode,
 		nowFn:                 time.Now,
 	}, nil
+}
+
+// SetProvenance records which engine ran this turn and which model it was
+// told to use, for the row this writer will create.
+//
+// Called before the row exists — turn_meta leads the stream and the row is
+// created on first Enqueue — so it only stores, and insertRowLocked writes.
+// A turn that never announces itself leaves both empty, which the renderer
+// reads as "no claim" rather than as a default worth printing.
+func (w *CacheWriter) SetProvenance(engine, model string) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.agentEngine = engine
+	w.agentModel = model
 }
 
 // MessageUUID returns the message row's uuid. Useful for the
@@ -252,9 +271,10 @@ func (w *CacheWriter) insertRowLocked() error {
 			res := w.db.Exec(`
 				UPDATE w_workagent_message
 				   SET user_text = ?, ai_text = '', chat_mode = ?,
+				       agent_engine = ?, agent_model = ?,
 				       streaming_state = ?, updated_at = ?
 				 WHERE id = ? AND uid = ? AND thread_id = ? AND message_idempotency_key = ?`,
-				w.userText, w.chatMode, streamingStateActive, now,
+				w.userText, w.chatMode, w.agentEngine, w.agentModel, streamingStateActive, now,
 				existing.ID, w.uid, w.threadID, w.messageIdempotencyKey,
 			)
 			if res.Error != nil {
@@ -276,10 +296,12 @@ func (w *CacheWriter) insertRowLocked() error {
 	err := w.db.Raw(
 		`INSERT INTO w_workagent_message
 			(uid, uuid, thread_id, user_text, ai_text, chat_mode,
+			 agent_engine, agent_model,
 			 message_idempotency_key, streaming_state, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)
 		 RETURNING id`,
 		w.uid, w.messageUUID, w.threadID, w.userText, w.chatMode,
+		w.agentEngine, w.agentModel,
 		w.messageIdempotencyKey, streamingStateActive, now, now,
 	).Row().Scan(&id)
 	if err != nil {

@@ -24,7 +24,7 @@ func TestApplyRunsMessageCreatedOrderIndexMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	want := []string{"0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012"}
+	want := []string{"0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013"}
 	if len(applied) != len(want) {
 		t.Fatalf("applied: got %v, want %v", applied, want)
 	}
@@ -157,6 +157,20 @@ func TestApplyRunsMessageCreatedOrderIndexMigration(t *testing.T) {
 	}
 	if err := db.Exec(`UPDATE w_desktop_ui_preference SET density = 'tight' WHERE id = 1`).Error; err == nil {
 		t.Fatal("the density CHECK accepted a value outside the vocabulary")
+	}
+
+	// 0013: an answer records which engine produced it. Empty by default, so
+	// every row written before this migration is silent rather than mislabelled.
+	var provenanceColumns int
+	if err := db.Raw(`
+		SELECT COUNT(*)
+		  FROM pragma_table_info('w_workagent_message')
+		 WHERE name IN ('agent_engine', 'agent_model')
+	`).Row().Scan(&provenanceColumns); err != nil {
+		t.Fatalf("scan provenance columns: %v", err)
+	}
+	if provenanceColumns != 2 {
+		t.Fatalf("provenance columns = %d, want 2", provenanceColumns)
 	}
 
 	if err := db.Exec(`

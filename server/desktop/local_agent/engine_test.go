@@ -169,18 +169,28 @@ func TestChat_StreamsTextToolsAndDone(t *testing.T) {
 	for _, f := range frames {
 		kinds = append(kinds, f.Type)
 	}
-	want := []string{"tool_use", "text_delta", "text_delta", "done"}
+	want := []string{"turn_meta", "tool_use", "text_delta", "text_delta", "done"}
 	if strings.Join(kinds, ",") != strings.Join(want, ",") {
 		t.Fatalf("frame order = %v, want %v", kinds, want)
 	}
 	var tu struct {
 		Name string `json:"name"`
 	}
-	if err := json.Unmarshal([]byte(frames[0].Data), &tu); err != nil || tu.Name != "Write" {
-		t.Errorf("tool_use payload = %q (%v)", frames[0].Data, err)
+	if err := json.Unmarshal([]byte(frames[1].Data), &tu); err != nil || tu.Name != "Write" {
+		t.Errorf("tool_use payload = %q (%v)", frames[1].Data, err)
 	}
-	if frames[3].Data != doneEventData {
-		t.Errorf("done frame = %q; it must be byte-identical to L1's so the cache classifier cannot tell routes apart", frames[3].Data)
+	// Indexed from the end: the frame list gained a leading turn_meta, and a
+	// positional index into it from the front is a test that has to be
+	// rewritten every time the stream grows a frame. The done frame is the
+	// last one by definition.
+	if last := frames[len(frames)-1]; last.Type != "done" || last.Data != doneEventData {
+		t.Errorf("done frame = %q %q; it must be byte-identical to L1's so the cache classifier cannot tell routes apart",
+			last.Type, last.Data)
+	}
+	// The opening frame says where the answer came from. Byte-checked, because
+	// this payload is assembled from user-supplied configuration.
+	if frames[0].Type != "turn_meta" || frames[0].Data != `{"engine":"claude","model":"m"}` {
+		t.Errorf("turn_meta frame = %q %q", frames[0].Type, frames[0].Data)
 	}
 
 	var state, aiText string

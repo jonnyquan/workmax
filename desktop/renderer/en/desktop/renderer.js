@@ -141,6 +141,7 @@ import {
   appendOptimisticTurn,
   appendRecoveredAssistant,
   attachMessageActions,
+  attachTurnProvenance,
   failTurnOpen,
   formatTurnDuration,
   isCurrentSelection,
@@ -2393,6 +2394,11 @@ export function finishActiveTurn(activeTurn, label, canceled) {
       activeTurn.assistantBubble.parentNode,
       "assistant",
       activeTurn.assistantText
+    );
+    attachTurnProvenance(
+      activeTurn.assistantBubble.parentNode,
+      activeTurn.engine,
+      activeTurn.model
     );
   }
   // How long the turn took, shown where its outcome is shown. Computed once

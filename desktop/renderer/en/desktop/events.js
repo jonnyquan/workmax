@@ -66,6 +66,7 @@ const PROXY_ERROR_KINDS = new Set([
 const AGENT_EVENT_TYPES = new Set([
   "text_delta",
   "reasoning_delta",
+  "turn_meta",
   "retrieval",
   "tool_use",
   "tool_denied",
@@ -190,6 +191,25 @@ export function parseAgentTurnEvent(value) {
         throw new Error("Malformed agent turn event");
       }
       return { type: value.type, turnID: value.turnID, delta: value.delta };
+    case "turn_meta":
+      // Provenance. The engine name is a closed vocabulary the sidecar owns,
+      // so it is held to the strict guard; the model is whatever the user
+      // typed into settings, so it is checked for shape and length and not
+      // against a vocabulary nobody owns. Empty model is a real answer — the
+      // engine chose its own default — not a missing one.
+      if (
+        !hasExactKeys(value, ["type", "turnID", "engine", "model"]) ||
+        !isSafeProtocolString(value.engine, 32) ||
+        !isSafeProtocolString(value.model, 80, true)
+      ) {
+        throw new Error("Malformed agent turn event");
+      }
+      return {
+        type: value.type,
+        turnID: value.turnID,
+        engine: value.engine,
+        model: value.model,
+      };
     case "approval_request":
       if (
         !hasExactKeys(value, ["type", "turnID", "id", "name", "target"]) ||
@@ -556,6 +576,13 @@ export function handleParsedTurnEvent(activeTurn, event) {
       // The mind icon's one honest cue: reasoning tokens really are arriving.
       // Re-armed per delta and cheap when already lit — see noteMindActivity.
       noteMindActivity("thinking");
+      return;
+    case "turn_meta":
+      // Recorded, not drawn. The footer belongs under a finished answer, and
+      // this frame leads the turn — so it is kept on the turn and read when
+      // the answer settles.
+      activeTurn.engine = event.engine;
+      activeTurn.model = event.model;
       return;
     case "approval_request":
       presentApprovalRequest(activeTurn, event);

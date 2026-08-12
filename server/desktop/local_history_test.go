@@ -54,6 +54,8 @@ func openHistoryTestDB(t testing.TB) *gorm.DB {
 		user_text TEXT,
 		ai_text TEXT,
 		chat_mode TEXT NOT NULL DEFAULT '',
+		agent_engine TEXT NOT NULL DEFAULT '',
+		agent_model TEXT NOT NULL DEFAULT '',
 		streaming_state TEXT NOT NULL DEFAULT 'complete',
 		created_at TEXT,
 		updated_at TEXT

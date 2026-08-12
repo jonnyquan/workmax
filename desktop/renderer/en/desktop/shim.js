@@ -335,6 +335,11 @@ const MAX_REASONING_DELTA_BYTES = 262144;
 const MAX_APPROVAL_ID_CHARS = 32;
 const MAX_APPROVAL_NAME_CHARS = 64;
 const MAX_APPROVAL_TARGET_CHARS = 80;
+// turn_meta. The sidecar bounds these too; the shim repeats the bounds rather
+// than trusting them, because it is the boundary and the model id started life
+// as something a user typed into a settings field.
+const MAX_TURN_ENGINE_CHARS = 32;
+const MAX_TURN_MODEL_CHARS = 80;
 
 // parseRetrievalSources returns a normalized list, or null if the payload is
 // not the shape this renderer understands. Every field is re-derived rather
@@ -384,6 +389,27 @@ function dispatchAgentSSEFrame(active, eventName, rawData) {
       return;
     }
     emit(active, { type: "reasoning_delta", turnID: active.turnID, delta: parsed.value.delta });
+    return;
+  }
+  if (eventName === "turn_meta") {
+    const parsed = parseAgentJSON(rawData);
+    const value = parsed.ok && isRecord(parsed.value) ? parsed.value : null;
+    // Provenance, not the answer: a malformed frame costs the footer under one
+    // reply and nothing else. An engine name is the whole point of the frame,
+    // so without a usable one there is nothing to say; a model is optional
+    // because an engine may have chosen its own default.
+    if (
+      !value ||
+      typeof value.engine !== "string" ||
+      value.engine === "" ||
+      value.engine.length > MAX_TURN_ENGINE_CHARS
+    ) {
+      return;
+    }
+    const event = { type: "turn_meta", turnID: active.turnID, engine: value.engine };
+    event.model =
+      typeof value.model === "string" ? value.model.slice(0, MAX_TURN_MODEL_CHARS) : "";
+    emit(active, event);
     return;
   }
   if (eventName === "approval_request") {

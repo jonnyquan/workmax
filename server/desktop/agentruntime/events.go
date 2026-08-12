@@ -29,6 +29,7 @@ const (
 	EventToolResult    EventKind = "tool_result"
 	EventSessionRef    EventKind = "session_ref"
 	EventApprovalReq   EventKind = "approval_request"
+	EventTurnMeta      EventKind = "turn_meta"
 )
 
 // Event is one unified runtime event. Exactly the fields for its Kind are
@@ -49,6 +50,31 @@ type Event struct {
 	// ApprovalID carries EventApprovalReq: the id the renderer answers with
 	// on the approve endpoint. Tool names what is being approved.
 	ApprovalID string
+
+	// Turn carries EventTurnMeta.
+	Turn TurnMeta
+}
+
+// TurnMeta says which engine ran a turn and which model it was told to use.
+//
+// It exists because the renderer could otherwise only show the CURRENT
+// setting, which stops being true the moment the setting changes: scroll back
+// after switching engines and every past answer silently claims to have come
+// from the new one. An answer should keep saying what produced it.
+//
+// Engine is certain — the caller holds the Runtime and asks it its name.
+// Model is what the turn was told to use: both runtimes pass TurnInput.ModelID
+// to their engine verbatim (claudesdk.WithModel, pi's --model) and neither
+// reads back what the far side actually loaded, so this is a faithful record
+// of the request and not a claim about the response. Empty when no model was
+// configured and the engine picked its own default — in which case the honest
+// thing is to say nothing rather than to name a model nobody chose.
+//
+// Deliberately NOT carried: the base URL. It is user-supplied, can hold
+// credentials in its query, and adds nothing a reader of one answer needs.
+type TurnMeta struct {
+	Engine string
+	Model  string
 }
 
 // ToolEvent names a tool step the way a work log would. Target is the

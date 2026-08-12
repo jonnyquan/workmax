@@ -249,6 +249,17 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	}
 
 	bridge := agentruntime.NewSSEBridge(dst, cache)
+	// Said before the turn runs, not after it: a turn that is interrupted or
+	// fails still came from an engine, and the answer it left behind should
+	// still be able to say which. Emitted here rather than by the runtime
+	// because this is where both facts are certain — the Runtime is asked its
+	// own name, and modelID is the value about to be handed to it.
+	if merr := bridge.Emit(agentruntime.Event{
+		Kind: agentruntime.EventTurnMeta,
+		Turn: agentruntime.TurnMeta{Engine: e.runtime.Name(), Model: modelID},
+	}); merr != nil {
+		return merr
+	}
 	runErr := e.runtime.RunTurn(ctx, agentruntime.TurnInput{
 		Prompt:     prompt,
 		Workspace:  workspace,

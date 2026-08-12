@@ -73,6 +73,17 @@ function optionalString(value) {
   return typeof value === "string" ? value : "";
 }
 
+// An optional string the page will display, clipped to a length the layout can
+// hold. Anything that is not a string, or that carries a control character,
+// reads as absent — this is provenance, and a field that cannot be trusted has
+// nothing to say. Slicing by code unit is safe here because the only consumer
+// sets it with textContent.
+function boundedString(value, maxChars) {
+  if (typeof value !== "string" || value === "") return "";
+  if (!hasWellFormedUTF16(value) || hasControlCharacter(value)) return "";
+  return value.slice(0, maxChars);
+}
+
 function optionalCount(value) {
   if (!isNonNegativeInteger(value)) {
     throw new Error("Malformed /agent/threads response");
@@ -170,6 +181,13 @@ function parseMessage(value) {
   return {
     user_text: optionalString(value.user_text),
     ai_text: optionalString(value.ai_text),
+    // Provenance, from migration 0013. Optional by construction: rows written
+    // before it, and turns the sidecar never announced, carry neither — and a
+    // row that says nothing must render as no claim rather than as a default.
+    // Bounded here as well as at the shim because this path is the OTHER way
+    // the value reaches the page, and a guard on one road is not a guard.
+    agent_engine: boundedString(value.agent_engine, 32),
+    agent_model: boundedString(value.agent_model, 80),
     streaming_state: value.streaming_state,
     // Validated above; carried so the transcript can date its rows.
     created_at: optionalString(value.created_at),

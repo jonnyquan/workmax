@@ -102,6 +102,32 @@ func (b *SSEBridge) Emit(ev Event) error {
 			Type: "approval_request",
 			Data: mustJSON(payload),
 		})
+	case EventTurnMeta:
+		// An engine with no name is not a fact worth sending; a model with no
+		// name is an engine default nobody chose, and saying nothing is the
+		// honest form of that. Both are bounded here rather than trusted from
+		// upstream: the model id is user-supplied configuration.
+		engine := boundedMeta(ev.Turn.Engine, 32)
+		if engine == "" {
+			return nil
+		}
+		model := boundedMeta(ev.Turn.Model, 80)
+		payload := map[string]string{"engine": engine}
+		if model != "" {
+			payload["model"] = model
+		}
+		// Recorded as well as sent. The frame only reaches the turn that is on
+		// screen right now; the row is what the transcript is rebuilt from
+		// after the turn is reconciled, and on every later launch. A footer
+		// that survived only until the next repaint would be a claim that
+		// disappears exactly when someone goes back to check it.
+		if b.cache != nil {
+			b.cache.SetProvenance(engine, model)
+		}
+		return b.dst.WriteEvent(cloudproxy.SSEEvent{
+			Type: "turn_meta",
+			Data: mustJSON(payload),
+		})
 	case EventSessionRef:
 		// Continuity bookkeeping, not narration: recorded for the caller,
 		// nothing on the wire.
@@ -120,6 +146,19 @@ func (b *SSEBridge) AssistantText() string { return b.assistant.String() }
 // SessionRef returns the continuity handle the runtime reported this turn
 // ("" when it reported none).
 func (b *SSEBridge) SessionRef() string { return b.sessionRef }
+
+// boundedMeta trims and truncates one turn_meta field. Truncation is by RUNE,
+// not byte: a model id can be any string the user typed, and cutting a
+// multi-byte character in half would put invalid UTF-8 on a wire whose other
+// end parses JSON strictly.
+func boundedMeta(value string, maxRunes int) string {
+	trimmed := strings.TrimSpace(value)
+	runes := []rune(trimmed)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes])
+	}
+	return trimmed
+}
 
 func mustJSON(v map[string]string) string {
 	raw, err := json.Marshal(v)

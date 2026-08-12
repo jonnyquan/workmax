@@ -1027,12 +1027,16 @@ function recoverableTurn(overrides = {}) {
   };
 }
 
-function message(uuid, userText, aiText, streamingState = "complete") {
+function message(uuid, userText, aiText, streamingState = "complete", provenance = {}) {
   return {
     uuid,
     user_text: userText,
     ai_text: aiText,
     streaming_state: streamingState,
+    // Migration 0013. Absent on every row written before it, which is why the
+    // default here is the empty pair rather than a plausible-looking model.
+    agent_engine: provenance.engine ?? "",
+    agent_model: provenance.model ?? "",
     created_at: "2026-05-21T00:00:00Z",
     updated_at: "2026-05-21T00:00:00Z",
   };
@@ -6778,6 +6782,50 @@ async function testShimDropsMalformedApprovalAndReasoningFrames() {
   assert.equal(reasoning.delta, "thinking hard");
   assert.ok(good.some((e) => e.type === "done"));
 
+  // turn_meta: which engine ran the turn, and which model it was told to use.
+  const meta = await runShimTurn(
+    'event: turn_meta\ndata: {"engine":"pi","model":"qwen3-coder"}\n\n' + SSE_DONE_FRAME,
+  );
+  const provenance = meta.find((e) => e.type === "turn_meta");
+  assert.ok(provenance, "a well-formed turn_meta frame must be delivered");
+  assert.equal(provenance.engine, "pi");
+  assert.equal(provenance.model, "qwen3-coder");
+  // An engine may pick its own default. The absent model normalizes to empty
+  // rather than being invented, and the frame still arrives — knowing WHICH
+  // engine answered is most of the value.
+  const bareMeta = await runShimTurn(
+    'event: turn_meta\ndata: {"engine":"claude"}\n\n' + SSE_DONE_FRAME,
+  );
+  const bareProvenance = bareMeta.find((e) => e.type === "turn_meta");
+  assert.ok(bareProvenance, "a turn_meta without a model is still a fact");
+  assert.equal(bareProvenance.model, "");
+  for (const payload of [
+    '{"model":"m"}',
+    '{"engine":"","model":"m"}',
+    '{"engine":42}',
+    `{"engine":"${"e".repeat(33)}"}`,
+    "not json",
+  ]) {
+    const events = await runShimTurn(
+      `event: turn_meta\ndata: ${payload}\n\n` + SSE_DONE_FRAME,
+    );
+    assert.equal(
+      events.some((e) => e.type === "turn_meta"),
+      false,
+      `a turn_meta with no usable engine must be dropped: ${payload}`,
+    );
+    assert.ok(
+      events.some((e) => e.type === "done"),
+      "and dropping provenance must never cost the answer",
+    );
+  }
+  // The model is user-typed configuration, so it is bounded rather than
+  // refused: an over-long id costs its tail, not the provenance line.
+  const longModel = await runShimTurn(
+    `event: turn_meta\ndata: {"engine":"pi","model":"${"m".repeat(200)}"}\n\n` + SSE_DONE_FRAME,
+  );
+  assert.equal(longModel.find((e) => e.type === "turn_meta").model.length, 80);
+
   const refused = [
     '{"name":"Write","target":"a.md"}',
     '{"id":"ap-1","target":"a.md"}',
@@ -8863,6 +8911,143 @@ async function testDensityIsThreeStateAndPersisted() {
   assert.equal(noBridge.document.documentElement.getAttribute("data-density"), "compact");
 }
 
+// --- An answer keeps saying where it came from -------------------------------
+//
+// This is the whole reason provenance is stored per message instead of being
+// drawn from the current settings. The renderer knows which engine is
+// configured NOW; what it cannot know, without being told per turn and having
+// it written down, is what produced the answer already on screen. Switch
+// engines mid-conversation and every earlier reply would silently start
+// claiming to have come from the new one.
+//
+// The live frame is only half of it. A finished turn is reconciled against the
+// sidecar's cached rows, and the app is reopened from those rows alone — so a
+// claim that lived only on the streamed nodes would vanish at exactly the
+// moment someone scrolls back to check it. This drives the durable path.
+async function testAnswersKeepNamingTheirOwnOrigin() {
+  let emit = () => {};
+  let turnSeq = 0;
+  // What the sidecar has cached, which is what a rebuilt transcript is made
+  // of. Turns append to it as they complete, each carrying its own engine.
+  const cached = [];
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-08-13T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        return response({ items: [thread("provenance-thread", "Provenance")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: cached.slice() });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      startTurn(input, callback) {
+        turnSeq += 1;
+        const turnID = `prov-turn-${turnSeq}`;
+        emit = (event) => callback({ ...event, turnID });
+        return { turnID };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  const provenance = () =>
+    walk(document.byId.get("message-list"), (n) =>
+      n.classList?.contains("message-provenance"),
+    ).map((n) => n.textContent);
+
+  // One turn: announced live, then cached with what the announcement said.
+  const runTurn = async (ask, answer, meta) => {
+    const input = document.byId.get("chat-input");
+    input.value = ask;
+    input.dispatch("input");
+    document.byId.get("chat-form").submit();
+    await settle();
+    if (meta) emit({ type: "turn_meta", ...meta });
+    emit({ type: "text_delta", delta: answer });
+    await settle();
+    cached.push(message(`m-${cached.length + 1}`, ask, answer, "complete", meta ?? {}));
+    emit({ type: "done", result: { code: "", subtype: "", is_error: false } });
+    await settle();
+  };
+
+  await runTurn("First question", "First answer.", { engine: "claude", model: "claude-sonnet-4.6" });
+  assert.deepEqual(provenance(), ["claude · claude-sonnet-4.6"]);
+
+  // The settings then change and the next turn runs somewhere else entirely.
+  // The first answer must not be rewritten by what the second one ran on.
+  await runTurn("Second question", "Second answer.", { engine: "pi", model: "qwen3-coder" });
+  assert.deepEqual(provenance(), ["claude · claude-sonnet-4.6", "pi · qwen3-coder"]);
+
+  // An engine that chose its own default names only itself. Inventing a model
+  // nobody picked is the failure this whole line exists to prevent.
+  await runTurn("Third question", "Third answer.", { engine: "pi", model: "" });
+  assert.equal(provenance()[2], "pi");
+
+  // A turn the sidecar never announced says nothing, rather than guessing from
+  // the current settings — which is the lie this replaces.
+  await runTurn("Fourth question", "Fourth answer.", null);
+  assert.equal(provenance().length, 3, "no announcement means no claim");
+
+  // And the part a live-only footer could never do: reopen the conversation.
+  // Everything on screen now came from the cache, and it still knows.
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+  assert.deepEqual(
+    provenance(),
+    ["claude · claude-sonnet-4.6", "pi · qwen3-coder", "pi"],
+    "a transcript rebuilt from cache must still say what produced each answer",
+  );
+
+  // A row whose provenance is not a string this page can safely print reads as
+  // no claim at all. It arrives from the sidecar's own database, which is
+  // exactly the kind of "trusted" source that stops being trusted the moment
+  // anything else can write to it.
+  cached.length = 0;
+  cached.push({
+    ...message("m-hostile", "Hostile", "Answer."),
+    agent_engine: "claude\u0000<img>",
+    agent_model: "m",
+  });
+  cached.push({
+    ...message("m-wrongtype", "Wrong type", "Answer."),
+    agent_engine: 42,
+    agent_model: null,
+  });
+  cached.push({
+    ...message("m-long", "Long", "Answer."),
+    agent_engine: "e".repeat(64),
+    agent_model: "m".repeat(200),
+  });
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+  const hostile = provenance();
+  assert.equal(hostile.length, 1, `only the printable row may make a claim: ${JSON.stringify(hostile)}`);
+  assert.equal(hostile[0].length, 32 + 3 + 80, "an over-long pair is clipped to what the layout can hold");
+
+  // It is a footnote, not a control: always present, never revealed on hover.
+  // Provenance you have to go looking for is provenance nobody checks.
+  assert.match(
+    rendererCSS,
+    /\.message-provenance \{[^}]*?font-size: var\(--fs-micro\);/u,
+    "the provenance line is the quietest type in the sheet",
+  );
+  assert.doesNotMatch(
+    rendererSource,
+    /message-provenance reveal-on-hover/u,
+    "provenance is not a hover affordance",
+  );
+}
+
 // --- Syntax highlighting -----------------------------------------------------
 async function testCodeTokenizerClassifiesTheLanguagesWeShip() {
   const { context, ns } = await runRenderer(undefined);
@@ -9593,6 +9778,7 @@ await testShimDropsMalformedApprovalAndReasoningFrames();
 await testStagedAttachmentsAreSentWithTheTurn();
 await testSynchronousTurnCallbacksAreBufferedUntilOpenResult();
 await testAgentTurnStreamsAndReconciles();
+await testAnswersKeepNamingTheirOwnOrigin();
 await testLateThreadHistoryCannotContaminateSelection();
 await testThreadSwitchCancelsAndFencesOldTurn();
 await testStopTurnIsSingleShot();

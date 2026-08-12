@@ -2449,6 +2449,17 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 /* Per-message actions. Ghost controls that appear on hover, in the row below
    the answer. They used to be outlined buttons sitting at 35% opacity, which
    is a control loud enough to see and too faint to read. */
+/* Where an answer came from. A footnote: the quietest type in the sheet, at
+   the smallest size, so it can be read when looked for and passed over when
+   not. It is always present rather than revealed on hover — provenance you
+   have to go looking for is provenance you will not check. */
+.message-provenance {
+  margin: var(--sp-1) 0 0;
+  color: hsl(var(--muted-foreground) / 0.75);
+  font-size: var(--fs-micro);
+  overflow-wrap: anywhere;
+}
+
 .message-actions {
   display: flex;
   gap: var(--sp-1);

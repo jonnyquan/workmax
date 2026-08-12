@@ -31,6 +31,12 @@ type LocalMessageRow struct {
 	UserText       string    `json:"user_text"`
 	AIText         string    `json:"ai_text"`
 	ChatMode       string    `json:"chat_mode"`
+	// Which engine produced this answer and which model it was told to use.
+	// Empty on every row written before migration 0013, and on any turn the
+	// sidecar did not announce — the renderer says nothing rather than
+	// labelling an answer with a setting that may have changed since.
+	AgentEngine    string    `json:"agent_engine"`
+	AgentModel     string    `json:"agent_model"`
 	StreamingState string    `json:"streaming_state"` // "streaming" | "complete" | "partial"
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
@@ -163,6 +169,8 @@ func ListLocalMessages(db *gorm.DB, uid uint64, threadUUID string, limit int) ([
 		       COALESCE(user_text, ''),
 		       COALESCE(ai_text, ''),
 		       chat_mode,
+		       COALESCE(agent_engine, ''),
+		       COALESCE(agent_model, ''),
 		       streaming_state,
 		       created_at,
 		       updated_at
@@ -191,7 +199,8 @@ func ListLocalMessages(db *gorm.DB, uid uint64, threadUUID string, limit int) ([
 			r                    LocalMessageRow
 			createdAt, updatedAt string
 		)
-		if err := rows.Scan(&r.UUID, &r.UserText, &r.AIText, &r.ChatMode, &r.StreamingState, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&r.UUID, &r.UserText, &r.AIText, &r.ChatMode,
+			&r.AgentEngine, &r.AgentModel, &r.StreamingState, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("list messages: scan: %w", err)
 		}
 		r.CreatedAt = parseSQLiteTime(createdAt)

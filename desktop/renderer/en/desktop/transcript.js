@@ -187,13 +187,20 @@ function buildExchangeNodes(item, isLast) {
   }
   if (item.ai_text || item.streaming_state !== "complete") {
     const regenerable = isLast && item.user_text && item.streaming_state === "complete";
+    const options = regenerable ? { regenerateText: item.user_text } : {};
+    // The stored provenance, so a rebuilt transcript still says what produced
+    // each answer. Without this the line would live only as long as the nodes
+    // the turn streamed into — gone at the post-turn reconcile, and gone on
+    // every later launch, which is exactly when someone goes back to check.
+    options.engine = item.agent_engine;
+    options.model = item.agent_model;
     nodes.push(
       renderMessage(
         "assistant",
         item.ai_text || "Response interrupted before text was cached.",
         item.streaming_state,
         item.updated_at || item.created_at,
-        regenerable ? { regenerateText: item.user_text } : {}
+        options
       )
     );
   }
@@ -456,6 +463,7 @@ function renderMessage(role, text, streamingState = "complete", timestamp = "", 
   wrapper.append(label, bubble);
 
   attachMessageActions(wrapper, role, text, actionOptions);
+  attachTurnProvenance(wrapper, actionOptions.engine, actionOptions.model);
   return wrapper;
 }
 
@@ -496,6 +504,38 @@ export function attachMessageActions(wrapper, role, text, options = {}) {
     actions.appendChild(reuse);
   }
   if (actions.children.length > 0) wrapper.appendChild(actions);
+}
+
+// A finished answer says what produced it: the engine that ran the turn, and
+// the model it was told to use.
+//
+// It exists because the renderer could otherwise only ever show the CURRENT
+// setting, which stops being true the moment the setting changes. Switch from
+// one engine to the other, scroll up, and every earlier answer silently claims
+// to have come from the new one. An answer that names its own origin keeps
+// being true after the settings move on — which is the whole reason this is
+// attached per message and not drawn once in the chrome.
+//
+// A footnote, not a dashboard: one quiet line under the reply. Duration is
+// deliberately absent — the work log already reports it, and a second copy
+// underneath would be the header repeating its own body.
+export function attachTurnProvenance(wrapper, engine, model) {
+  if (!wrapper || !engine) return;
+  for (const child of Array.from(wrapper.children || [])) {
+    if (child.classList?.contains("message-provenance")) return;
+  }
+  const line = document.createElement("p");
+  line.className = "message-provenance";
+  // An empty model means the engine picked its own default. Naming a model
+  // nobody chose would be worse than saying only which engine ran.
+  line.textContent = model ? `${engine} · ${model}` : engine;
+  const actions = Array.from(wrapper.children || []).find((child) =>
+    child.classList?.contains("message-actions")
+  );
+  // Above the action row: the provenance describes the answer, and the buttons
+  // act on it. Putting it below would separate the sentence from its subject.
+  if (actions) wrapper.insertBefore(line, actions);
+  else wrapper.appendChild(line);
 }
 
 // Only the FINAL answer is regenerable — re-running an earlier prompt
