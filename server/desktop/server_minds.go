@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -353,11 +354,19 @@ func (s *Server) handleUpdateMind(c *gin.Context) {
 
 // handleDeleteMind removes a mind and everything it was taught.
 //
-// The memory goes FIRST and the row only if that succeeded. The two live in
-// different stores and cannot share a transaction, so one of the two orders
-// has to be chosen deliberately: deleting the row first and failing on the
-// chunks would leave text on disk that nothing can ever reach or name again,
-// while failing this way leaves the mind intact and the delete retryable.
+// The ROW goes first, the memory second. The two live in different stores and
+// cannot share a transaction, so one of the two orders has to be chosen
+// deliberately — and this is the one that cannot lose data.
+//
+// Delete's own transaction holds the last-mind guard. If it fails — including
+// because a concurrent delete of another mind made this the last one —
+// nothing has been erased yet, not the row and not the memory, so the refusal
+// costs nothing and the delete is retryable. Once Delete succeeds, the memory
+// is already orphaned: retrieval keeps only the ACTIVE mind's material, and
+// this mind is no longer anyone's active one, so its chunks can never surface
+// again. Forgetting them is tidiness, not correctness — a failure here leaves
+// unreachable rows a future GC could reclaim, rather than losing taught
+// material the way the old order (memory first, row second) did.
 //
 // A sidecar with no knowledge store at all still deletes the row, because
 // there is no memory for it to be inconsistent with.
@@ -371,25 +380,17 @@ func (s *Server) handleDeleteMind(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	// Existence and the last-mind rule are checked before anything is erased,
-	// so a refused delete never costs a mind its memory.
-	if _, err := s.cfg.Minds.Get(identity.UID, id); err != nil {
-		writeMindError(c, err)
-		return
-	}
-	if mk := s.mindKnowledge(); mk != nil {
-		if err := s.cfg.Minds.CanDelete(identity.UID, id); err != nil {
-			writeMindError(c, err)
-			return
-		}
-		if _, err := mk.ForgetMind(c.Request.Context(), id); err != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "mind memory could not be erased"})
-			return
-		}
-	}
 	if err := s.cfg.Minds.Delete(identity.UID, id); err != nil {
 		writeMindError(c, err)
 		return
+	}
+	// Best-effort: the row is gone, so a failure here orphan rows rather than
+	// losing anything. Logged because it is a real condition (a locked
+	// knowledge store), not because the user can act on it.
+	if mk := s.mindKnowledge(); mk != nil {
+		if _, err := mk.ForgetMind(c.Request.Context(), id); err != nil {
+			log.Printf("minds: orphaned memory for %s after delete (unreachable, not lost): %v", id, err)
+		}
 	}
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, gin.H{"deleted": true})

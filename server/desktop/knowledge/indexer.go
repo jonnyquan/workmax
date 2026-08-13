@@ -441,11 +441,15 @@ func (i *Indexer) Retrieve(ctx context.Context, uid uint64, mindID, query string
 			// The wire vocabulary of kinds is closed (file | conversation) and
 			// checked at both ends of the bridge; a fed material reads as a
 			// document, so it presents as one, and the label — the title the
-			// user fed it under — carries the real provenance.
+			// user fed it under — carries the real provenance. The any-mind
+			// helper is used (not the bound MindSourceTitle) because the chunk
+			// may belong to any mind when no mind is active, and binding to the
+			// active mind's prefix would fail to label a chunk that is
+			// genuinely on screen.
 			r.Kind = "file"
 			r.Label = "Mind knowledge"
-			if parts := strings.SplitN(h.SourceID, ":", 3); len(parts) == 3 && parts[2] != "" {
-				r.Label = parts[2]
+			if title, ok := MindSourceTitleFromAny(h.SourceID); ok {
+				r.Label = title
 			}
 		} else {
 			r.Kind = "conversation"

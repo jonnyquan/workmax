@@ -143,18 +143,21 @@ func NewMindStore(db *gorm.DB) *MindStore {
 // runtime, so "the default mind" can only be created at the moment an
 // identity first asks.
 func (s *MindStore) ensureDefaultMind(uid uint64) error {
-	var count int64
-	if err := s.db.Raw(`SELECT COUNT(*) FROM w_desktop_mind WHERE uid = ?`, signedMindUID(uid)).Row().Scan(&count); err != nil {
-		return fmt.Errorf("minds: count: %w", err)
-	}
-	if count > 0 {
-		return nil
-	}
+	// A single atomic statement, not a COUNT-then-INSERT. Two concurrent
+	// first-access calls for a fresh identity used to both read count=0 and
+	// both INSERT an active default mind, because nothing held a transaction
+	// across the two steps and the table has no UNIQUE(uid) constraint.
+	//
+	// INSERT ... WHERE NOT EXISTS is atomic under SQLite's single-writer lock:
+	// the second call's NOT EXISTS sees the row the first just wrote and skips.
+	// No migration for a constraint is needed because the guard is in the
+	// statement itself.
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	return s.db.Exec(
 		`INSERT INTO w_desktop_mind (id, uid, name, description, role_hint, model_override, is_active, created_at, updated_at)
-		 VALUES (?, ?, ?, '', ?, NULL, 1, ?, ?)`,
-		newMindID(), signedMindUID(uid), defaultMindName, defaultMindRole, now, now,
+		 SELECT ?, ?, ?, '', ?, NULL, 1, ?, ?
+		 WHERE NOT EXISTS (SELECT 1 FROM w_desktop_mind WHERE uid = ?)`,
+		newMindID(), signedMindUID(uid), defaultMindName, defaultMindRole, now, now, signedMindUID(uid),
 	).Error
 }
 
@@ -212,7 +215,16 @@ func (s *MindStore) Get(uid uint64, id string) (Mind, error) {
 		signedMindUID(uid), id,
 	).Row()
 	if err := row.Scan(&m.ID, &m.Name, &m.Description, &m.RoleHint, &m.ModelOverride, &active, &m.CreatedAt, &m.UpdatedAt); err != nil {
-		return Mind{}, errMindNotFound
+		// sql.ErrNoRows is the one expected miss; every other Scan error is a
+		// real database condition (locked writer, I/O, schema drift) that the
+		// caller should see as a failure, not as "the mind is not there".
+		// Active() already makes this distinction; Get used to collapse both
+		// into errMindNotFound, which made a transiently-locked DB answer 404
+		// for a mind that exists.
+		if errors.Is(err, sql.ErrNoRows) {
+			return Mind{}, errMindNotFound
+		}
+		return Mind{}, fmt.Errorf("mind store: get: %w", err)
 	}
 	m.Active = active == 1
 	return m, nil

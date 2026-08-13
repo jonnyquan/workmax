@@ -23,6 +23,7 @@ import {
   mindCreateName,
   mindEditCancel,
   mindEditDelete,
+  mindEditDesc,
   mindEditForm,
   mindEditModel,
   mindEditName,
@@ -271,6 +272,7 @@ export function openMindEditor(id) {
   if (mindEditName) mindEditName.value = mind.name;
   if (mindEditRole) mindEditRole.value = mind.role_hint || "";
   if (mindEditModel) mindEditModel.value = mind.model_override || "";
+  if (mindEditDesc) mindEditDesc.value = mind.description || "";
   mindEditForm.hidden = false;
   setMindEditNote("");
   disarmMindDelete();
@@ -311,6 +313,7 @@ export async function submitEditMind(event) {
     const result = parseDesktopBridgeResult(
       await bridge.update(id, {
         name,
+        description: mindEditDesc ? mindEditDesc.value.trim() : "",
         role_hint: mindEditRole ? mindEditRole.value.trim() : "",
         model_override: mindEditModel ? mindEditModel.value.trim() : "",
       }),

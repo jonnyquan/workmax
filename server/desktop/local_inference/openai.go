@@ -18,10 +18,15 @@ func (openaiAdapter) endpoint(baseURL string) string {
 	return strings.TrimRight(baseURL, "/") + "/chat/completions"
 }
 
-func (openaiAdapter) requestBody(modelID string, history []Message, userText string, atts []Attachment) (io.Reader, error) {
+func (openaiAdapter) requestBody(modelID string, history []Message, userText string, atts []Attachment, systemMessage string) (io.Reader, error) {
 	// Prior exchanges ride as plain text — attachments and retrieval context
 	// belong to the turn that carried them, not to every turn after it.
-	messages := make([]map[string]any, 0, len(history)+1)
+	messages := make([]map[string]any, 0, len(history)+2)
+	// A mind's role hint rides the system message — the strongest slot this
+	// protocol offers for "how to work" rather than "what to work on".
+	if strings.TrimSpace(systemMessage) != "" {
+		messages = append(messages, map[string]any{"role": "system", "content": systemMessage})
+	}
 	for _, m := range history {
 		messages = append(messages, map[string]any{"role": m.Role, "content": m.Text})
 	}

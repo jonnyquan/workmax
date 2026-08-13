@@ -49,7 +49,7 @@ func (anthropicAdapter) endpoint(baseURL string) string {
 	return AnthropicBaseURL(baseURL) + "/v1/messages"
 }
 
-func (anthropicAdapter) requestBody(modelID string, history []Message, userText string, atts []Attachment) (io.Reader, error) {
+func (anthropicAdapter) requestBody(modelID string, history []Message, userText string, atts []Attachment, systemMessage string) (io.Reader, error) {
 	// History arrives as strictly alternating user/assistant pairs (the
 	// loader only emits completed exchanges), which is what this wire
 	// protocol requires — two user messages in a row are a 400.
@@ -63,6 +63,11 @@ func (anthropicAdapter) requestBody(modelID string, history []Message, userText 
 		"messages":   messages,
 		"max_tokens": 4096,
 		"stream":     true,
+	}
+	// A mind's role hint rides the system prompt — the strongest slot this
+	// protocol offers for "how to work" rather than "what to work on".
+	if strings.TrimSpace(systemMessage) != "" {
+		body["system"] = systemMessage
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

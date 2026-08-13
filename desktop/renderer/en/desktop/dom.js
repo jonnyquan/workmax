@@ -167,6 +167,7 @@ export const mindEditModel = document.querySelector("#mind-edit-model");
 export const mindEditSave = document.querySelector("#mind-edit-save");
 export const mindEditCancel = document.querySelector("#mind-edit-cancel");
 export const mindEditDelete = document.querySelector("#mind-edit-delete");
+export const mindEditDesc = document.querySelector("#mind-edit-desc");
 export const mindEditNote = document.querySelector("#mind-edit-note");
 export const mindAnatomyMeta = document.querySelector("#mind-anatomy-meta");
 export const mindBrainValue = document.querySelector("#mind-brain-value");

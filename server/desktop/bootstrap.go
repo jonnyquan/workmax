@@ -413,6 +413,11 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 		localFiles,
 		knowledge.Hooks,
 	)
+	// A mind means the same thing on both engines. Without this L1 would
+	// scope retrieval to the mind (via KnowledgeHooks) but not apply its model,
+	// persona or provenance — a half-wired hybrid that changes behaviour the
+	// moment a CLI is configured.
+	localInference.UseMind(activeMindPolicy(dbRes.DB))
 
 	// Local agent engine (L2): the tool loop, for anthropic_compatible local
 	// models. Gated on a claude CLI being named explicitly — L2d grows the

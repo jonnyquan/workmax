@@ -45,6 +45,31 @@ func MindSourceTitle(mindID, sourceID string) (string, bool) {
 	return title, found && title != ""
 }
 
+// MindSourceTitleFromAny extracts the title from a mind chunk's source_id
+// WITHOUT knowing which mind it belongs to.
+//
+// MindSourceTitle binds to one mind's prefix — right for the listing path,
+// where you are enumerating one mind's material and the source_id must belong
+// to it. The retrieval labeling path is different: the chunk on screen might
+// belong to any mind (when no mind is active, the scope filter does not run),
+// so binding to the active mind's prefix would fail to title a chunk that is
+// genuinely present. This helper strips the "mind:" type tag and the mind id
+// by structure, leaving the title, and is the one place that knows how a
+// source_id is laid out — so the format has one parser for any-mind use and
+// one validator for bound-mind use, not two independent splitters.
+func MindSourceTitleFromAny(sourceID string) (string, bool) {
+	rest, ok := strings.CutPrefix(sourceID, SourceTypeMind+":")
+	if !ok {
+		return "", false
+	}
+	// rest is "<mindID>:<title>"; mindID never contains a colon.
+	_, title, found := strings.Cut(rest, ":")
+	if !found || title == "" {
+		return "", false
+	}
+	return title, true
+}
+
 // chunksTable is the vec0 virtual table backing the knowledge store.
 const chunksTable = "w_desktop_knowledge_chunk"
 

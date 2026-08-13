@@ -4,6 +4,7 @@ package local_inference
 
 import (
 	"context"
+	"fmt"
 	"encoding/json"
 	"errors"
 	"io"
@@ -1180,5 +1181,136 @@ func TestLoadThreadHistory_CountsRunesNotBytes(t *testing.T) {
 	}
 	if len(history) != 4 {
 		t.Fatalf("history length = %d, want 4 (both pairs fit a rune-counted budget)", len(history))
+	}
+}
+
+// L1 must honour a mind the same way L2 does: apply its model, send its
+// persona as system instruction, and emit provenance. Without this, the
+// default local chat path would scope retrieval to the mind but not change
+// anything else — a half-wired hybrid that means a different thing the moment
+// a CLI is configured.
+func TestEngine_ActiveMindGovernsL1(t *testing.T) {
+	var gotBody map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		f := w.(http.Flusher)
+		sseLine(w, `data: {"choices":[{"delta":{"content":"ok"}}]}`)
+		sseLine(w, "")
+		f.Flush()
+		sseLine(w, "data: [DONE]")
+		sseLine(w, "")
+		f.Flush()
+	}))
+	t.Cleanup(upstream.Close)
+
+	db := openLocalTestDB(t)
+	engine := NewEngine(
+		stubProfile{protocol: protocolOpenAI, baseURL: upstream.URL, modelID: "identity-model"},
+		db, nil, nil,
+	)
+	engine.UseMind(func(uint64) MindPolicy {
+		return MindPolicy{
+			Name:    "Payroll mind",
+			Model:   "specialist-model",
+			Persona: "Answer only in bullet points.",
+		}
+	})
+
+	dst := &memSSEWriter{}
+	if err := engine.Chat(context.Background(), cloudproxy.ChatRequest{
+		ThreadID: 1, ThreadUUID: "thr_1", TurnUUID: engineTestTurnUUID,
+		UID: engineTestUID, UserText: "hi", ChatMode: "general",
+	}, dst); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	frames, _ := dst.snapshot()
+	var meta cloudproxy.SSEEvent
+	for _, f := range frames {
+		if f.Type == "turn_meta" {
+			meta = f
+		}
+	}
+	if meta.Type != "turn_meta" {
+		t.Fatal("L1 must emit turn_meta so an answer says what produced it")
+	}
+	// All three provenance fields, mind first.
+	assertTurnMetaContains(t, meta.Data, "local", "specialist-model", "Payroll mind")
+
+	// The model the upstream received is the mind's, not the identity's.
+	if gotBody["model"] != "specialist-model" {
+		t.Errorf("upstream model = %v, want specialist-model", gotBody["model"])
+	}
+	// The persona reached the model as a system message.
+	msgs, _ := gotBody["messages"].([]any)
+	if len(msgs) == 0 {
+		t.Fatal("no messages in request body")
+	}
+	first, _ := msgs[0].(map[string]any)
+	if first["role"] != "system" || !strings.Contains(fmt.Sprint(first["content"]), "bullet points") {
+		t.Errorf("the mind's persona must ride the system message, got: %+v", first)
+	}
+}
+
+// A mind with no opinion, and no mind wiring at all, both leave the identity's
+// configuration alone — the same fail-direction L2 takes.
+func TestEngine_NoMindLeavesIdentityConfig(t *testing.T) {
+	for name, wire := range map[string]bool{"not wired": false, "no opinion": true} {
+		t.Run(name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				f := w.(http.Flusher)
+				sseLine(w, `data: {"choices":[{"delta":{"content":"ok"}}]}`)
+				sseLine(w, "")
+				f.Flush()
+				sseLine(w, "data: [DONE]")
+				sseLine(w, "")
+				f.Flush()
+			}))
+			t.Cleanup(upstream.Close)
+
+			db := openLocalTestDB(t)
+			engine := NewEngine(
+				stubProfile{protocol: protocolOpenAI, baseURL: upstream.URL, modelID: "identity-model"},
+				db, nil, nil,
+			)
+			if wire {
+				engine.UseMind(func(uint64) MindPolicy { return MindPolicy{} })
+			}
+			dst := &memSSEWriter{}
+			if err := engine.Chat(context.Background(), cloudproxy.ChatRequest{
+				ThreadID: 1, ThreadUUID: "thr_1", TurnUUID: engineTestTurnUUID,
+				UID: engineTestUID, UserText: "hi", ChatMode: "general",
+			}, dst); err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			// turn_meta still says "local" — provenance is always on — but
+			// with no mind name.
+			frames, _ := dst.snapshot()
+			for _, f := range frames {
+				if f.Type == "turn_meta" {
+					if strings.Contains(f.Data, "mind") {
+						t.Errorf("a mind with no opinion must not be named: %s", f.Data)
+					}
+				}
+			}
+		})
+	}
+}
+
+func assertTurnMetaContains(t *testing.T, data, engine, model, mind string) {
+	t.Helper()
+	for _, want := range []string{
+		fmt.Sprintf(`"engine":%q`, engine),
+		fmt.Sprintf(`"model":%q`, model),
+		fmt.Sprintf(`"mind":%q`, mind),
+	} {
+		if !strings.Contains(data, want) {
+			t.Errorf("turn_meta missing %s in %s", want, data)
+		}
 	}
 }

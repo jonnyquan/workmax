@@ -646,6 +646,41 @@ func TestMindDeleteTakesItsMemoryWithIt(t *testing.T) {
 	}
 }
 
+// The partial-failure window the old order got wrong. With the row deleted
+// first, a ForgetMind failure leaves ORPHANED memory — chunks whose mind no
+// longer exists, unreachable by any future retrieval — rather than losing
+// taught material. The delete itself succeeds, because the user's intent
+// (remove the mind) was achieved by the row delete.
+func TestMindDeleteSucceedsWhenForgetMindFails(t *testing.T) {
+	fake := &fakeMindKnowledge{failForget: errors.New("knowledge store locked")}
+	base, tok, _ := bootMindsFixture(t, fake)
+
+	_, body := mindsRequest(t, http.MethodPost, base+"/minds", tok, `{"name":"Compensation"}`)
+	var created Mind
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatalf("parse create: %v", err)
+	}
+	if resp, b := mindsRequest(t, http.MethodPost, base+"/minds/"+created.ID+"/feed", tok,
+		`{"title":"Bands","text":"L4 is one hundred eighty thousand"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("feed status %d: %s", resp.StatusCode, b)
+	}
+
+	// The delete succeeds even though ForgetMind failed.
+	resp, body := mindsRequest(t, http.MethodDelete, base+"/minds/"+created.ID, tok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete status %d: %s — the row delete must succeed independently", resp.StatusCode, body)
+	}
+	// The mind is gone from the roster.
+	if _, listBody := mindsRequest(t, http.MethodGet, base+"/minds", tok, ""); strings.Contains(string(listBody), created.ID) {
+		t.Fatalf("the mind should be deleted even though its memory lingers: %s", listBody)
+	}
+	// The memory lingers as an orphan — unreachable, not lost. This is the
+	// trade-off that makes this order safe: the old order lost it.
+	if len(fake.feeds) != 1 {
+		t.Fatalf("orphaned memory should still be on disk (unreachable, not erased): %+v", fake.feeds)
+	}
+}
+
 // Deleting the ACTIVE mind hands the flag on. An identity with no active mind
 // falls back to unscoped retrieval, which is a behaviour change nobody asked
 // for arriving silently.

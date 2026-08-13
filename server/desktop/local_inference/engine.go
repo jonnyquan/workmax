@@ -108,7 +108,7 @@ const (
 // endpoint 路径、请求体、鉴权头、以及如何从一帧 SSE 提取文本/识别终端。
 type protocolAdapter interface {
 	endpoint(baseURL string) string
-	requestBody(modelID string, history []Message, userText string, atts []Attachment) (io.Reader, error)
+	requestBody(modelID string, history []Message, userText string, atts []Attachment, systemMessage string) (io.Reader, error)
 	setAuth(req *http.Request, apiKey string)
 	// extractText 解析一帧 SSE（已组装好的 event + data），返回文本片段与
 	// 是否终端帧。文本为空且 terminal=false 表示该帧为元数据，可跳过。
@@ -122,18 +122,47 @@ type protocolAdapter interface {
 // Engine 满足 desktop.TurnRunner（duck-typed），与 *cloudproxy.Proxy 在
 // streamLegacyAgentTurn 的路由分发处二选一：handleAgentChat 零改动，turn
 // intent 幂等 / CacheWriter / renderer SSE / 恢复全部免费复用。
+// MindPolicy is what an active mind asks of one turn. Defined here rather
+// than in local_agent because BOTH local engines need it and neither can
+// import the other — local_inference is the leaf, local_agent imports it.
+// Both fields are optional; a zero value is "no opinion".
+type MindPolicy struct {
+	// Name is what to call this mind in the transcript footer. It changes
+	// nothing about how the turn runs; it is the label that tells two minds
+	// apart when they share a model.
+	Name string
+	// Model wins over the identity's configured model. A mind picks a MODEL,
+	// not a provider: the endpoint stays the identity's.
+	Model string
+	// Persona is the mind's role hint, handed to the model as system-level
+	// instruction. It changes how the model works; the mind's memory changes
+	// what it knows.
+	Persona string
+}
+
 type Engine struct {
 	profile    ProfileReader
 	db         *gorm.DB
 	httpClient *http.Client     // Timeout: 0（SSE turn 可持续数分钟）
 	loader     AttachmentLoader // 可 nil（无附件场景）
 	hooks      KnowledgeHooks   // 可 nil（L3c-4/5 RAG：索引 turn + 检索注入；nil=关闭）
+	// mind answers "what has the identity's active mind asked for". Injected
+	// by bootstrap; nil on any build that has not wired minds. Same shape as
+	// local_agent.Engine.mind, deliberately — a mind should mean the same
+	// thing on both local engines.
+	mind func(uid uint64) MindPolicy
 
 	// idleTimeout 是上游 SSE body 的静默上限：超过它没有任何字节到达就由
 	// 看门狗强制关连接（对齐 cloud_proxy 的 IdleWatchdogReader）。零值 =
 	// cloudproxy.SSEIdleTimeout；测试注入小值让「挂死上游」用例跑得快。
 	idleTimeout time.Duration
 }
+
+// UseMind lets the identity's active mind govern a turn — same hook the L2
+// tool-loop engine takes. Without it, L1 applies the mind's retrieval scope
+// (via KnowledgeHooks) but not its model, persona or provenance, so a mind
+// would mean a different thing on L1 than on L2.
+func (e *Engine) UseMind(fn func(uid uint64) MindPolicy) { e.mind = fn }
 
 // NewEngine 构造本地推理引擎。db 用于 CacheWriter 持久化本地 turn；loader
 // 把 file_ids 解析为模型 context（可 nil，表示该 Engine 不处理附件）；
@@ -181,6 +210,21 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 			Retryable: false,
 		})
 	}
+
+	// A mind's model wins over the identity's, and its persona reaches the
+	// model as system instruction. Applied here so a mind means the same thing
+	// on L1 as it does on L2: same scope (via KnowledgeHooks above), same
+	// model, same persona, same provenance footer. Without this, the default
+	// local chat path would scope retrieval to the mind but run it on the
+	// identity's model with no role hint — a half-wired hybrid.
+	var mind MindPolicy
+	if e.mind != nil {
+		mind = e.mind(req.UID)
+	}
+	if override := strings.TrimSpace(mind.Model); override != "" {
+		modelID = override
+	}
+	persona := strings.TrimSpace(mind.Persona)
 	adapter, aerr := selectAdapter(protocol)
 	if aerr != nil {
 		return emitProxyError(dst, cloudproxy.ProxyError{
@@ -217,6 +261,14 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	}
 	// 命名返回值 err 在 defer 闭包里被 Finalize 捕获：nil→complete，非 nil→partial。
 	defer func() { _ = cache.Finalize(err) }()
+
+	// Provenance, said before the turn runs and recorded for the rebuilt
+	// transcript — the same contract L2 honours through agentruntime's
+	// bridge. L1 speaks straight to the SSE writer, so the frame is built
+	// here; its shape is the one the shim and renderer already parse.
+	// "local" is the engine name rather than a CLI name, because L1 is the
+	// path with no subprocess.
+	emitTurnMeta(dst, cache, "local", modelID, mind.Name)
 
 	// 3. 加载附件（如有）→ 模型 context（图片 base64 / 文档提取文本）。
 	var atts []Attachment
@@ -259,7 +311,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 		history = nil
 	}
 
-	body, berr := adapter.requestBody(modelID, history, userText, atts)
+	body, berr := adapter.requestBody(modelID, history, userText, atts, persona)
 	if berr != nil {
 		_ = dst.WriteProxyError(cloudproxy.ProxyError{Kind: cloudproxy.KindBadRequest, Message: "本地推理请求构造失败"})
 		return berr
@@ -705,4 +757,35 @@ func selectAdapter(protocol string) (protocolAdapter, error) {
 func emitProxyError(dst cloudproxy.SSEWriter, pe cloudproxy.ProxyError) error {
 	_ = dst.WriteProxyError(pe)
 	return fmt.Errorf("local inference: %s", pe.Kind)
+}
+
+// emitTurnMeta writes the provenance frame and records it on the cache row,
+// the same contract L2 honours through agentruntime.SSEBridge. L1 speaks
+// straight to the SSE writer, so the frame is built here; its shape matches
+// the one the shim and renderer already parse. Engine is always "local" on
+// this path, because L1 is the engine with no subprocess.
+//
+// Bounded and silent-on-empty exactly like the bridge: an empty engine is
+// not a fact worth sending (and cannot happen here, "local" is a constant),
+// and the model/mind are trimmed so a whitespace-only value reads as absent.
+func emitTurnMeta(dst cloudproxy.SSEWriter, cache *cloudproxy.CacheWriter, engine, model, mind string) {
+	engine = strings.TrimSpace(engine)
+	if engine == "" {
+		return
+	}
+	model = strings.TrimSpace(model)
+	mind = strings.TrimSpace(mind)
+	payload := map[string]string{"engine": engine}
+	if model != "" {
+		payload["model"] = model
+	}
+	if mind != "" {
+		payload["mind"] = mind
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	cache.SetProvenance(engine, model, mind)
+	_ = dst.WriteEvent(cloudproxy.SSEEvent{Type: "turn_meta", Data: string(raw)})
 }

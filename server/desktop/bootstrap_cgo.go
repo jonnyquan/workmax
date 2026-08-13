@@ -134,6 +134,14 @@ func (l *lazyKnowledge) begin() bool {
 
 func (l *lazyKnowledge) end() { l.inFlight.Done() }
 
+// mindScopeFailedSentinel is the mindID passed to Retrieve when the active
+// mind could not be read. It matches no real mind's source_id prefix (real
+// ids are "mind-<uuid>"; MindSourcePrefix would build "mind:mind-…:"), so
+// keepChunksInScope drops every mind's chunks while leaving the identity's
+// files and conversations untouched. Fail-closed: a transient read error
+// must not leak other minds' material into the answer.
+const mindScopeFailedSentinel = "__scope_failed__"
+
 // errKnowledgeClosed is returned to work that arrives during shutdown. It is
 // not a failure worth surfacing: the answer was already delivered, and only
 // the background indexing of it is being skipped.
@@ -322,13 +330,20 @@ func (l *lazyKnowledge) Retrieve(ctx context.Context, uid uint64, query string, 
 	// worlds, and doing it here means the local inference path and the agent
 	// path are scoped identically without either having to remember to be.
 	//
-	// A mind table that cannot be read scopes nothing rather than failing the
-	// turn: the cost of answering from the identity's whole memory is a wider
-	// answer, and the cost of erroring is no answer at all.
+	// A mind table that cannot be read must fail CLOSED, not open. Returning
+	// mindID="" would mean "no mind chosen", which keepChunksInScope reads as
+	// "do not filter" — and every other mind's taught material would silently
+	// flow into this turn's answer. The sentinel below matches no real mind's
+	// prefix (real ids are "mind-<uuid>", so their prefix is "mind:mind-…"),
+	// so keepChunksInScope drops every mind's chunks while leaving the
+	// identity's files and conversations in scope. The cost is a narrower
+	// answer; the alternative is a privacy leak.
 	mindID := ""
 	if l.deps.DB != nil {
-		if active, ok, merr := NewMindStore(l.deps.DB).Active(uid); merr != nil {
-			log.Printf("knowledge: active mind for retrieval: %v", merr)
+		active, ok, merr := NewMindStore(l.deps.DB).Active(uid)
+		if merr != nil {
+			log.Printf("knowledge: active mind for retrieval (failing closed): %v", merr)
+			mindID = mindScopeFailedSentinel
 		} else if ok {
 			mindID = active.ID
 		}

@@ -108,32 +108,10 @@ type Engine struct {
 	mind func(uid uint64) MindPolicy
 }
 
-// MindPolicy is what an active mind asks of one turn. Both fields are
-// optional; a zero value is "no opinion" and leaves the turn exactly as the
-// identity configured it.
-type MindPolicy struct {
-	// Name is what to call this mind under an answer. It changes nothing about
-	// how the turn runs; it is the label the transcript keeps so a reader can
-	// tell two minds apart when they share a model, which is the ordinary case.
-	Name string
-
-	// Model wins over the identity's configured model.
-	//
-	// A mind picks a MODEL, not a provider: base URL and credentials stay the
-	// identity's, because they are what the machine is configured to reach and
-	// a mind that could redirect them would be choosing where the words go,
-	// not which brain reads them. A model the configured endpoint does not
-	// serve fails the way any wrong model id fails, which is the same failure
-	// the setting itself can already produce.
-	Model string
-
-	// Persona is the mind's role hint, handed to the runtime as system-level
-	// instruction. It changes how the model works; the mind's memory changes
-	// what it knows. Keeping them separate is why a mind can be a specialist
-	// without being taught anything, and can be taught without being told how
-	// to behave.
-	Persona string
-}
+// MindPolicy is the shared type, defined in local_inference (the leaf both
+// engines import). A mind should mean the same thing on L1 and L2, so there
+// is one definition rather than two that could drift.
+type MindPolicy = localinference.MindPolicy
 
 // UseMind lets the identity's active mind govern a turn.
 func (e *Engine) UseMind(fn func(uid uint64) MindPolicy) { e.mind = fn }
