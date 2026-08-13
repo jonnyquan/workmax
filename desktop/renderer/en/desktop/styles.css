@@ -1333,7 +1333,7 @@ textarea::placeholder {
   justify-content: center;
   align-items: center;
   padding: var(--sp-5);
-  background: hsl(40 10% 8% / 0.35);
+  background: hsl(0 0% 8% / 0.35);
 }
 
 /* The switcher is a keyboard tool: it belongs where the eye already is, near
@@ -1350,7 +1350,7 @@ textarea::placeholder {
   background: hsl(var(--card));
   box-shadow:
     0 0 0 1px hsl(var(--border)),
-    0 24px 64px hsl(40 10% 8% / 0.28);
+    0 24px 64px hsl(0 0% 8% / 0.28);
 }
 
 .quick-switcher-panel input {
@@ -1476,7 +1476,7 @@ textarea::placeholder {
   background: hsl(var(--background));
   box-shadow:
     0 0 0 1px hsl(var(--border)),
-    0 24px 64px hsl(40 10% 8% / 0.28);
+    0 24px 64px hsl(0 0% 8% / 0.28);
 }
 
 .settings-nav {
@@ -1742,7 +1742,7 @@ textarea::placeholder {
 .segment.active,
 .segment.active:hover {
   background: hsl(var(--card));
-  box-shadow: 0 1px 2px hsl(40 10% 10% / 0.1);
+  box-shadow: 0 1px 2px hsl(0 0% 8% / 0.1);
   color: hsl(var(--foreground));
   font-weight: var(--fw-medium);
 }
@@ -3150,7 +3150,7 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   background: hsl(var(--card));
   box-shadow:
     0 0 0 1px hsl(var(--border)),
-    0 4px 14px hsl(40 10% 10% / 0.12);
+    0 4px 14px hsl(0 0% 8% / 0.12);
   color: hsl(var(--foreground));
   font-size: var(--fs-small);
   transform: translateX(-50%);
