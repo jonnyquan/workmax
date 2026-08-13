@@ -188,8 +188,11 @@ import {
   settleTurnNarration,
 } from "./context-panel.js";
 import {
+  activeMind,
+  loadMindRoster,
   mindPanelHidden,
   mindPanelShown,
+  mindState,
   closeMindEditor,
   submitCreateMind,
   submitDeleteMind,
@@ -1348,6 +1351,39 @@ export function renderComposerChips() {
       accountChip.hidden = true;
     }
   }
+  renderMindChip();
+}
+
+// Which mind will answer the next turn.
+//
+// It belongs here rather than in the title bar because this is the moment the
+// answer can still be changed: a mind decides which memory is in scope, which
+// model reads it and how that model works, and finding that out afterwards is
+// finding it out too late. The panel already shows it, but only to someone who
+// opened the panel.
+//
+// Hidden when there is nothing it could distinguish — one mind, asking nothing
+// of the turn. The account chip next to it takes the same position about a
+// placeholder name, and for the same reason: a chip that says the same word on
+// every message teaches the reader to stop reading it, which costs the times
+// it would have mattered.
+export function renderMindChip() {
+  const chip = document.querySelector("#mind-chip");
+  if (!chip) return;
+  const mind = activeMind();
+  const governs = Boolean(mind && (mind.model_override || mind.role_hint));
+  // Deliberately not gated on canSendTurn, unlike the runtime chip beside it.
+  // That one describes a pending turn and means nothing without one; this
+  // names a standing property of the identity, and it is also the control that
+  // changes it — both of which are still true on a screen with nothing open.
+  if (!mind || (mindState.minds.length < 2 && !governs)) {
+    chip.hidden = true;
+    return;
+  }
+  chip.textContent = mind.name;
+  chip.title = mind.role_hint || mind.description || mind.name;
+  chip.setAttribute("aria-label", `Mind: ${mind.name}. Open the mind panel`);
+  chip.hidden = false;
 }
 
 function renderLocalAccountItem(account) {
@@ -3262,6 +3298,15 @@ renderLocalAccountBinding();
 
 void refresh();
 
+// The roster, at boot rather than when the panel is first opened.
+//
+// The chip in the composer exists to tell someone which mind will answer
+// WITHOUT their having to go looking, and a roster that arrives only once the
+// panel has been opened would make it appear exactly when it is least needed.
+// One local list request, and it is also what the panel would have paid for on
+// its first open.
+void loadMindRoster();
+
 buildStarterCards();
 
 // Paint the panel once on load. Without this it keeps whatever static markup
@@ -3347,6 +3392,13 @@ if (mindPanel) {
     toggleRightPanel("mind");
     if (mindButton) mindButton.focus();
   });
+}
+const mindChipEl = document.querySelector("#mind-chip");
+if (mindChipEl) {
+  // The chip names the mind and the panel is where it is chosen; making the
+  // chip the way in means the reader never has to find the brain icon to act
+  // on what the chip just told them.
+  mindChipEl.addEventListener("click", () => toggleRightPanel("mind"));
 }
 if (mindButton) {
   mindButton.addEventListener("click", () => toggleRightPanel("mind"));

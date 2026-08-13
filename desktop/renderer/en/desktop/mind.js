@@ -46,7 +46,7 @@ import {
   mindSubtitle,
 } from "./dom.js";
 import { isRecord, parseDesktopBridgeResult, sanitizeErrorMessage } from "./protocol.js";
-import { state } from "./renderer.js";
+import { renderMindChip, state } from "./renderer.js";
 
 // The two things that count as real mental activity, and how long each one is
 // worth showing. Thinking re-arms on every reasoning delta, so its window only
@@ -151,7 +151,13 @@ export function mindPanelHidden() {
 // rather than one fat endpoint because they answer different questions and
 // change at different rates: the roster moves when a user creates or switches,
 // the status moves whenever the mind is taught something.
-export async function loadMinds() {
+// The roster alone: who the minds are and what each asks of a turn.
+//
+// Split from loadMinds because the two halves cost different things. This one
+// is a row read; the status below it walks the knowledge store for a memory
+// count. Boot wants the first and not the second — the composer's chip needs
+// a name, not an inventory.
+export async function loadMindRoster() {
   const bridge = mindBridge();
   if (!bridge) {
     // A shell too old to carry the mind routes is a build fact, not a user
@@ -174,6 +180,15 @@ export async function loadMinds() {
     mindState.loading = false;
   }
   renderMindPanel();
+  // The composer names the mind that will answer the next turn, and the roster
+  // is the only thing that knows when that changed.
+  renderMindChip();
+}
+
+// The roster and then the active mind's status: what the panel needs, which is
+// everything.
+export async function loadMinds() {
+  await loadMindRoster();
   await loadMindStatus();
 }
 

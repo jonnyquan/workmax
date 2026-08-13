@@ -3162,6 +3162,25 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   font-weight: var(--fw-medium);
 }
 
+/* The mind chip is a control, so it may not read louder than the facts beside
+   it. Same size, same quiet colour as every other chip; the only difference
+   is that it answers a pointer. */
+.mind-chip {
+  height: auto;
+  max-width: 14ch;
+  border: none;
+  overflow: hidden;
+  font: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mind-chip:hover {
+  color: hsl(var(--foreground));
+}
+
 #composer-status {
   min-width: 0;
   overflow: hidden;

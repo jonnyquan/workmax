@@ -10038,6 +10038,77 @@ async function testMindPanelShowsRealAnatomyAndTeaches() {
   );
 }
 
+// --- The composer names the mind that will answer ----------------------------
+//
+// A mind decides which memory is in scope, which model reads it, and how that
+// model works. Finding that out from the transcript afterwards is finding it
+// out too late; the panel shows it, but only to someone who opened the panel.
+//
+// What is worth testing is WHEN it appears. A chip that says the same word on
+// every message teaches the reader to stop reading it, which costs the times
+// it would have mattered — so it stands down when there is nothing it could
+// distinguish, exactly as the account chip beside it does for a placeholder
+// name.
+async function testComposerNamesTheMindThatWillAnswer() {
+  // One mind, asking nothing of the turn: nothing to distinguish, no chip.
+  const quiet = mindBridge({
+    minds: [mindRecord(MIND_A, "General mind", { active: true })],
+  });
+  const bare = await runRenderer(quiet.bridge, quiet.desktopBridge);
+  await settle();
+  assert.equal(
+    bare.document.byId.get("mind-chip").hidden,
+    true,
+    "a lone mind with no opinion has nothing to say on every message",
+  );
+
+  // One mind that DOES govern the turn — it names a model of its own — is
+  // worth saying, because the answer will differ from the identity's setting.
+  const opinionated = mindBridge({
+    minds: [mindRecord(MIND_A, "Payroll mind", { active: true, model_override: "claude-opus-4.1" })],
+  });
+  const single = await runRenderer(opinionated.bridge, opinionated.desktopBridge);
+  await settle();
+  const soloChip = single.document.byId.get("mind-chip");
+  assert.equal(soloChip.hidden, false, "a mind that changes the turn names itself");
+  assert.equal(soloChip.textContent, "Payroll mind");
+
+  // Two minds: which one is active is now a real question whichever way it is
+  // answered, so the chip is always on.
+  const harness = mindBridge();
+  const { document } = await runRenderer(harness.bridge, harness.desktopBridge);
+  await settle();
+  const chip = document.byId.get("mind-chip");
+  assert.equal(chip.hidden, false);
+  assert.equal(chip.textContent, "General mind");
+  assert.match(
+    chip.getAttribute("aria-label"),
+    /^Mind: General mind\./u,
+    "a chip that is a button has to say what pressing it is about",
+  );
+
+  // Switching repaints it. The roster is the only thing that knows the active
+  // mind changed, so the composer has to be told rather than to poll.
+  document.byId.get("mind-button").click();
+  await settle();
+  walk(document.byId.get("mind-roster"), (n) => n.classList?.contains("mind-roster-item"))[1].click();
+  await settle();
+  assert.equal(chip.textContent, "Payroll mind", "the composer follows the switch");
+
+  // And it is the way in: a chip that states a governing fact and offers no
+  // way to act on it makes the reader hunt for the control.
+  document.byId.get("mind-button").click();
+  await settle();
+  assert.equal(document.documentElement.getAttribute("data-right-panel"), null);
+  chip.click();
+  await settle();
+  assert.equal(
+    document.documentElement.getAttribute("data-right-panel"),
+    "mind",
+    "pressing the chip opens the panel that changes what it names",
+  );
+}
+
 async function testMindSwitchingReReadsTheStatus() {
   const harness = mindBridge();
   const { document } = await runRenderer(harness.bridge, harness.desktopBridge);
@@ -10171,6 +10242,7 @@ async function testMindFeedIsRefusedWithoutLocalRecall() {
 // bridge, whose fixtures are declared in this section.
 await testRightColumnHoldsOnePanelAtATime();
 await testMindPanelShowsRealAnatomyAndTeaches();
+await testComposerNamesTheMindThatWillAnswer();
 await testMindSwitchingReReadsTheStatus();
 await testMindIconMovesOnlyForRealMentalActivity();
 await testMindFeedIsRefusedWithoutLocalRecall();
