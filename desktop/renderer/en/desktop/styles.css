@@ -2814,6 +2814,14 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   color: hsl(var(--success));
 }
 
+/* The tail a fold did not name. Quieter than the targets it follows — it is
+   a count, not a file — but present, because a fold that silently drops rows
+   reads as "that is all of it". */
+.worklog-fold-more {
+  color: hsl(var(--muted-foreground) / 0.75);
+  font-size: var(--fs-micro);
+}
+
 .worklog-denied {
   color: hsl(var(--destructive));
   font-size: var(--fs-micro);

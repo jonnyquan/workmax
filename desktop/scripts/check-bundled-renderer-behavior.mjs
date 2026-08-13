@@ -8921,6 +8921,157 @@ async function testDensityIsThreeStateAndPersisted() {
   assert.equal(noBridge.document.documentElement.getAttribute("data-density"), "compact");
 }
 
+// --- Consecutive looking is one act; consecutive writing is not --------------
+//
+// A turn that reads twelve files makes twelve rows, and the reader is scanning
+// for which files — not for twelve separate events. Runs of the same
+// navigation tool fold into one row.
+//
+// Writes never fold. Three reads in a row are one act of looking around;
+// three writes are three files that changed, and "Write · 3 files" would hide
+// the thing this log is scanned for.
+async function testWorkLogFoldsRunsOfLooking() {
+  const { ns } = await runRenderer(undefined);
+  const { foldWorkLogRuns } = ns;
+
+  const read = (target, extra = {}) => ({ name: "Read", target, done: true, ...extra });
+  // Joined rather than compared as an array: foldWorkLogRuns runs inside the
+  // module graph's own realm, so what it returns is a different Array
+  // prototype and deepStrictEqual compares prototypes. A string says the same
+  // thing and says it in one realm.
+  const shape = (entries) =>
+    entries
+      .map((entry) => (entry.run ? `${entry.name}×${entry.run.length}` : entry.step.name))
+      .join(", ");
+
+  assert.equal(
+    shape(foldWorkLogRuns([read("a.md"), read("b.md"), read("c.md")])),
+    "Read×3",
+    "a run of reads is one act of looking",
+  );
+
+  // Consecutive matters: reads separated by a write are two separate acts, and
+  // merging across the write would put them in an order that never happened.
+  assert.equal(
+    shape(foldWorkLogRuns([
+      read("a.md"),
+      read("b.md"),
+      { name: "Write", target: "out.md", done: true },
+      read("c.md"),
+      read("d.md"),
+    ])),
+    "Read×2, Write, Read×2",
+  );
+
+  // Two different looking tools are two different acts, and a row can only
+  // carry one verb — without this a Grep would be counted under "Read".
+  assert.equal(
+    shape(foldWorkLogRuns([
+      read("a.md"),
+      read("b.md"),
+      { name: "Grep", target: "todo", done: true },
+      { name: "Grep", target: "fixme", done: true },
+    ])),
+    "Read×2, Grep×2",
+  );
+
+  // Writes never fold, however many of them there are.
+  assert.equal(
+    shape(foldWorkLogRuns([
+      { name: "Write", target: "a.md", done: true },
+      { name: "Write", target: "b.md", done: true },
+      { name: "Edit", target: "c.md", done: true },
+      { name: "Edit", target: "d.md", done: true },
+    ])),
+    "Write, Write, Edit, Edit",
+    "three writes are three files that changed",
+  );
+
+  // Each of these is information of its own, and a folded row can only carry
+  // one state honestly. A denied read is the whole reason someone is reading
+  // this log.
+  assert.equal(
+    shape(foldWorkLogRuns([read("a.md"), { name: "Read", target: "b.md", denied: true, done: true }, read("c.md")])),
+    "Read, Read, Read",
+    "a denial keeps its own row, and does not fold its neighbours together either",
+  );
+  assert.equal(
+    shape(foldWorkLogRuns([read("a.md"), { name: "Read", target: "b.md", done: true, failed: true }, read("c.md")])),
+    "Read, Read, Read",
+  );
+  assert.equal(
+    shape(foldWorkLogRuns([read("a.md"), { name: "Read", target: "b.md" }, read("c.md")])),
+    "Read, Read, Read",
+    "an unfinished read has no outcome to fold into",
+  );
+  // A run of one is a step: folding it would spend a different row shape on
+  // exactly the same information.
+  assert.equal(shape(foldWorkLogRuns([read("only.md")])), "Read");
+
+  // And the wiring, on the rendered log. A fold helper that is tested and
+  // never called is a failure this file has already been caught by once.
+  const harness = foldingTurn();
+  const { document } = await runRenderer(harness.bridge, harness.desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+  const input = document.byId.get("chat-input");
+  input.value = "Look around";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  for (const target of ["a.md", "b.md", "c.md", "d.md", "e.md", "f.md", "g.md", "h.md"]) {
+    harness.emit({ type: "tool_use", name: "Read", target });
+    harness.emit({ type: "tool_result", name: "Read", target, isError: false });
+  }
+  harness.emit({ type: "tool_use", name: "Write", target: "out.md" });
+  harness.emit({ type: "tool_result", name: "Write", target: "out.md", isError: false });
+  harness.emit({ type: "text_delta", delta: "Done." });
+  await settle();
+
+  const rows = () =>
+    walk(document.byId.get("message-list"), (n) => n.classList?.contains("worklog-step"));
+  assert.equal(rows().length, 2, "eight reads and a write are two rows, not nine");
+  const folded = rows()[0];
+  assert.match(folded.textContent, /Read/u);
+  assert.match(folded.textContent, /a\.md, b\.md/u, "a folded row names the files it looked at");
+  // Six named, and the remainder COUNTED rather than dropped: a fold that
+  // quietly loses rows reads as "that is all of it", which is the one thing a
+  // work log must never imply.
+  assert.match(folded.textContent, /\+2 more/u);
+  assert.doesNotMatch(folded.textContent, /g\.md/u);
+  assert.match(rows()[1].textContent, /Write.*out\.md/su, "the write keeps its own row");
+}
+
+// A thread whose turn the caller drives frame by frame.
+function foldingTurn() {
+  const harness = { emit: () => {} };
+  harness.bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-08-13T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        return response({ items: [thread("folding-thread", "Folding")] });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  harness.desktopBridge = {
+    agent: {
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      startTurn(input, callback) {
+        harness.emit = (event) => callback({ ...event, turnID: "folding-turn" });
+        return { turnID: "folding-turn" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+  return harness;
+}
+
 // --- An answer keeps saying where it came from -------------------------------
 //
 // This is the whole reason provenance is stored per message instead of being
@@ -9816,6 +9967,7 @@ await testShimDropsMalformedApprovalAndReasoningFrames();
 await testStagedAttachmentsAreSentWithTheTurn();
 await testSynchronousTurnCallbacksAreBufferedUntilOpenResult();
 await testAgentTurnStreamsAndReconciles();
+await testWorkLogFoldsRunsOfLooking();
 await testAnswersKeepNamingTheirOwnOrigin();
 await testLateThreadHistoryCannotContaminateSelection();
 await testThreadSwitchCancelsAndFencesOldTurn();

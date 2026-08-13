@@ -216,8 +216,8 @@ function renderWorkLog(wrapper, steps, produced, live = false, duration = "") {
   }
 
   const stepRows = expanded ? steps : [];
-  for (const step of stepRows) {
-    strip.appendChild(renderWorkLogStep(step));
+  for (const entry of foldWorkLogRuns(stepRows)) {
+    strip.appendChild(entry.run ? renderWorkLogFold(entry) : renderWorkLogStep(entry.step));
   }
   for (const file of produced) {
     const row = document.createElement("li");
@@ -253,6 +253,87 @@ function renderWorkLog(wrapper, steps, produced, live = false, duration = "") {
 // before it asks, and no renderer can reorder that), so a separate card
 // meant the screen showed a step that looked done next to someone asking
 // whether it may happen. Answering resolves the row in place.
+// The tools whose interesting fact is WHICH FILES, not what happened.
+//
+// Writes are deliberately absent. Three reads in a row are one act of looking
+// around; three writes are three files that changed, and folding them into
+// "Write · 3 files" would hide the thing a reader is scanning this log for.
+const FOLDABLE_TOOLS = new Set(["Read", "Glob", "Grep", "Find", "Ls"]);
+
+// How many targets a folded row names before it stops. Six fits the reading
+// measure at this size; past that the row becomes the wall of text the fold
+// exists to prevent. The remainder is COUNTED rather than dropped — a fold
+// that quietly loses rows reads as "that is all of it", which is the one
+// thing a work log must never imply.
+const FOLD_TARGET_LIMIT = 6;
+
+// A step folds only when it is plainly finished: no question attached, not
+// denied, not failed, and returned. Each of those is information of its own —
+// a denied read is the whole reason a reader is looking at this log — and a
+// folded row can only carry one state honestly.
+function foldable(step) {
+  return (
+    FOLDABLE_TOOLS.has(step.name) &&
+    Boolean(step.done) &&
+    !step.approval &&
+    !step.denied &&
+    !step.failed
+  );
+}
+
+// Consecutive runs of the same foldable tool become one row. Consecutive
+// matters: reads separated by a write are two separate acts of looking, and
+// merging across the write would put them in an order that never happened.
+export function foldWorkLogRuns(steps) {
+  const out = [];
+  for (const step of steps) {
+    const last = out[out.length - 1];
+    if (
+      last &&
+      last.run &&
+      last.name === step.name &&
+      foldable(step) &&
+      foldable(last.run[last.run.length - 1])
+    ) {
+      last.run.push(step);
+      continue;
+    }
+    out.push(foldable(step) ? { name: step.name, run: [step] } : { step });
+  }
+  // A run of one is a step. Folding it would spend a different row shape on
+  // exactly the same information.
+  return out.map((entry) =>
+    entry.run && entry.run.length === 1 ? { step: entry.run[0] } : entry
+  );
+}
+
+function renderWorkLogFold(entry) {
+  const row = document.createElement("li");
+  row.className = "worklog-step done";
+  const verb = document.createElement("span");
+  verb.className = "worklog-verb";
+  verb.textContent = entry.name;
+  row.appendChild(verb);
+
+  const named = entry.run.slice(0, FOLD_TARGET_LIMIT);
+  const targets = document.createElement("span");
+  targets.className = "worklog-target";
+  targets.textContent = named
+    .map((step) => step.target)
+    .filter(Boolean)
+    .join(", ");
+  row.appendChild(targets);
+
+  const hidden = entry.run.length - named.length;
+  if (hidden > 0) {
+    const more = document.createElement("span");
+    more.className = "worklog-fold-more";
+    more.textContent = `+${hidden} more`;
+    row.appendChild(more);
+  }
+  return row;
+}
+
 function renderWorkLogStep(step) {
   const row = document.createElement("li");
   const approval = step.approval;
