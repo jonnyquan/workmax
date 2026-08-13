@@ -131,13 +131,18 @@ func NewCacheWriter(db *gorm.DB, p CacheWriterParams) (*CacheWriter, error) {
 	}, nil
 }
 
-// SetProvenance records which engine ran this turn and which model it was
-// told to use, for the row this writer will create.
+// SetProvenance records which engine ran this turn and which model/mind it
+// was told to use.
 //
-// Called before the row exists — turn_meta leads the stream and the row is
-// created on first Enqueue — so it only stores, and insertRowLocked writes.
-// A turn that never announces itself leaves both empty, which the renderer
-// reads as "no claim" rather than as a default worth printing.
+// Two paths, because the row may or may not exist yet. Today's runtimes emit
+// turn_meta before the first text delta, so the row is created afterwards and
+// insertRowLocked picks up the in-memory fields — that is the fast path and
+// it costs one UPDATE nothing. But that ordering is a convention, not a
+// guarantee: a future runtime, a retry/resume that re-uses an existing row,
+// or a refactor that reorders events would arrive here with the row already
+// in place. The UPDATE below is the guard that turns "should work" into
+// "does work" — without it, provenance arriving late would stay in memory
+// forever and the row would carry empty columns nobody could explain.
 func (w *CacheWriter) SetProvenance(engine, model, mind string) {
 	if w == nil {
 		return
@@ -147,6 +152,12 @@ func (w *CacheWriter) SetProvenance(engine, model, mind string) {
 	w.agentEngine = engine
 	w.agentModel = model
 	w.agentMind = mind
+	if w.row != nil {
+		_ = w.db.Exec(
+			`UPDATE w_workagent_message SET agent_engine = ?, agent_model = ?, agent_mind = ? WHERE id = ?`,
+			engine, model, mind, w.row.ID,
+		).Error
+	}
 }
 
 // MessageUUID returns the message row's uuid. Useful for the

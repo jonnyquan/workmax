@@ -502,3 +502,42 @@ func TestShouldFlush(t *testing.T) {
 		})
 	}
 }
+
+// SetProvenance must persist even when the row already exists — the guard
+// that turns the "turn_meta arrives before text" convention into something
+// that holds if the convention ever breaks. Without the UPDATE path, a
+// runtime that emitted text first would leave provenance in memory and the
+// row's columns empty forever.
+func TestCacheWriter_SetProvenanceAfterRowExists(t *testing.T) {
+	db := openCacheTestDB(t)
+	w, err := NewCacheWriter(db, CacheWriterParams{
+		UID: 1, ThreadID: 1, ThreadUUID: "thr", MessageIdempotencyKey: "desktop-turn:late-prov",
+		UserText: "hi", ChatMode: "general",
+	})
+	if err != nil {
+		t.Fatalf("NewCacheWriter: %v", err)
+	}
+	// Text first — row is created with empty provenance.
+	if err := w.Enqueue("text", "answer"); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	// Provenance arrives late. The UPDATE guard must persist it.
+	w.SetProvenance("local", "specialist-model", "Payroll mind")
+	if err := w.Enqueue("done", ""); err != nil {
+		t.Fatalf("Enqueue done: %v", err)
+	}
+	if err := w.Finalize(nil); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	var engine, model, mind string
+	if err := db.Raw(
+		`SELECT agent_engine, agent_model, agent_mind FROM w_workagent_message WHERE uuid = ?`,
+		w.MessageUUID(),
+	).Row().Scan(&engine, &model, &mind); err != nil {
+		t.Fatalf("read provenance: %v", err)
+	}
+	if engine != "local" || model != "specialist-model" || mind != "Payroll mind" {
+		t.Errorf("late provenance = engine=%q model=%q mind=%q; the UPDATE guard did not fire", engine, model, mind)
+	}
+}

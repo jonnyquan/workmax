@@ -4,6 +4,7 @@ package agentruntime
 
 import (
 	"encoding/json"
+	"log"
 	"strings"
 
 	cloudproxy "server/desktop/cloud_proxy"
@@ -109,6 +110,12 @@ func (b *SSEBridge) Emit(ev Event) error {
 		// upstream: the model id is user-supplied configuration.
 		engine := boundedMeta(ev.Turn.Engine, 32)
 		if engine == "" {
+			// Unreachable today (every runtime's Name() returns a non-empty
+			// string), but a future runtime whose Name() returns "" would
+			// silently drop the footer AND the cache's provenance for every
+			// turn it runs. Logging turns that into a diagnosable condition
+			// rather than a mystery.
+			log.Printf("agent runtime: turn_meta dropped — engine name is empty; provenance will be missing for this turn")
 			return nil
 		}
 		model := boundedMeta(ev.Turn.Model, 80)
