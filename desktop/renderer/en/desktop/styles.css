@@ -3412,8 +3412,10 @@ button.composer-chip:hover {
   gap: var(--sp-2);
   margin-bottom: var(--sp-2);
   color: hsl(var(--muted-foreground));
-  font-size: var(--fs-small);
+  font-size: var(--fs-micro);
   font-weight: var(--fw-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .context-section-meta {
