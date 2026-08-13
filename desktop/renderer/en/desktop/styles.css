@@ -3225,12 +3225,12 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   font-weight: var(--fw-medium);
 }
 
-/* The mind chip is a control, so it may not read louder than the facts beside
-   it. Same size, same quiet colour as every other chip; the only difference
-   is that it answers a pointer. */
-.mind-chip {
+/* Chips that are buttons (mind, model) — they answer a pointer, so they may
+   not read louder than the facts beside them. Same quiet colour as every other
+   chip; the only difference is the cursor and the truncation. */
+button.composer-chip {
   height: auto;
-  max-width: 14ch;
+  max-width: 18ch;
   border: none;
   overflow: hidden;
   font: inherit;
@@ -3240,7 +3240,7 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   white-space: nowrap;
 }
 
-.mind-chip:hover {
+button.composer-chip:hover {
   color: hsl(var(--foreground));
 }
 

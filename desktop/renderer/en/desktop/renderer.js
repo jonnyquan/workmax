@@ -397,6 +397,7 @@ export const state = {
   skills: [],
   allowedModes: [],
   selectedMode: "",
+  modelLabel: "",
   skillsLoading: false,
   skillsDegraded: false,
   agentAvailable: false,
@@ -989,6 +990,9 @@ async function submitModelSettings(event) {
     // all, so the gate is re-read here rather than left until the next
     // refresh — otherwise saving "local" appears to do nothing.
     await loadLocalModes();
+    // The composer's model chip shows whichever model the next turn will use,
+    // and a settings save is the moment that changes.
+    void loadModelLabel();
     renderEmptyState();
     setStatus(
       preferred === "local"
@@ -1352,6 +1356,25 @@ export function renderComposerChips() {
     }
   }
   renderMindChip();
+  renderModelChip();
+}
+
+// The model the next turn will use — readable at a glance and one click from
+// the settings that change it. Claude and Codex both show this beside the send
+// button; a model hidden behind a settings dialog is a model the reader has to
+// remember, and the reader has better things to remember.
+function renderModelChip() {
+  const chip = document.querySelector("#model-chip");
+  if (!chip) return;
+  const label = state.modelLabel;
+  if (!label || !canSendTurn()) {
+    chip.hidden = true;
+    return;
+  }
+  chip.textContent = label;
+  chip.title = "Model: " + label + ". Click to change.";
+  chip.setAttribute("aria-label", "Model: " + label + ". Open settings");
+  chip.hidden = false;
 }
 
 // Which mind will answer the next turn.
@@ -3299,6 +3322,32 @@ renderLocalAccountBinding();
 
 void refresh();
 
+// The model the next turn will use, shown in the composer so the reader never
+// has to open Settings to check. Loaded once at boot and refreshed when the
+// settings dialog saves.
+async function loadModelLabel() {
+  const settings = window.desktopBridge?.settings;
+  if (!settings || typeof settings.getModelRoute !== "function") return;
+  try {
+    const result = parseDesktopBridgeResult(
+      await settings.getModelRoute(),
+      "settings.getModelRoute"
+    );
+    if (!result.ok) return;
+    const route = result.data;
+    if (route.preferred_route === "official" && route.official_model_id) {
+      state.modelLabel = route.official_model_id;
+    } else if (route.local?.model_id) {
+      state.modelLabel = route.local.model_id;
+    } else {
+      state.modelLabel = "";
+    }
+  } catch {
+    state.modelLabel = "";
+  }
+  renderModelChip();
+}
+
 // The roster, at boot rather than when the panel is first opened.
 //
 // The chip in the composer exists to tell someone which mind will answer
@@ -3307,6 +3356,7 @@ void refresh();
 // One local list request, and it is also what the panel would have paid for on
 // its first open.
 void loadMindRoster();
+void loadModelLabel();
 
 buildStarterCards();
 
@@ -3393,6 +3443,10 @@ if (mindPanel) {
     toggleRightPanel("mind");
     if (mindButton) mindButton.focus();
   });
+}
+const modelChipEl = document.querySelector("#model-chip");
+if (modelChipEl) {
+  modelChipEl.addEventListener("click", () => openModelSettings("model"));
 }
 const mindChipEl = document.querySelector("#mind-chip");
 if (mindChipEl) {
