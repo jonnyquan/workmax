@@ -37,6 +37,7 @@ type LocalMessageRow struct {
 	// labelling an answer with a setting that may have changed since.
 	AgentEngine    string    `json:"agent_engine"`
 	AgentModel     string    `json:"agent_model"`
+	AgentMind      string    `json:"agent_mind"`
 	StreamingState string    `json:"streaming_state"` // "streaming" | "complete" | "partial"
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
@@ -171,6 +172,7 @@ func ListLocalMessages(db *gorm.DB, uid uint64, threadUUID string, limit int) ([
 		       chat_mode,
 		       COALESCE(agent_engine, ''),
 		       COALESCE(agent_model, ''),
+		       COALESCE(agent_mind, ''),
 		       streaming_state,
 		       created_at,
 		       updated_at
@@ -200,7 +202,7 @@ func ListLocalMessages(db *gorm.DB, uid uint64, threadUUID string, limit int) ([
 			createdAt, updatedAt string
 		)
 		if err := rows.Scan(&r.UUID, &r.UserText, &r.AIText, &r.ChatMode,
-			&r.AgentEngine, &r.AgentModel, &r.StreamingState, &createdAt, &updatedAt); err != nil {
+			&r.AgentEngine, &r.AgentModel, &r.AgentMind, &r.StreamingState, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("list messages: scan: %w", err)
 		}
 		r.CreatedAt = parseSQLiteTime(createdAt)

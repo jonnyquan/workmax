@@ -198,9 +198,10 @@ export function parseAgentTurnEvent(value) {
       // against a vocabulary nobody owns. Empty model is a real answer — the
       // engine chose its own default — not a missing one.
       if (
-        !hasExactKeys(value, ["type", "turnID", "engine", "model"]) ||
+        !hasExactKeys(value, ["type", "turnID", "engine", "model", "mind"]) ||
         !isSafeProtocolString(value.engine, 32) ||
-        !isSafeProtocolString(value.model, 80, true)
+        !isSafeProtocolString(value.model, 80, true) ||
+        !isSafeProtocolString(value.mind, 64, true)
       ) {
         throw new Error("Malformed agent turn event");
       }
@@ -209,6 +210,7 @@ export function parseAgentTurnEvent(value) {
         turnID: value.turnID,
         engine: value.engine,
         model: value.model,
+        mind: value.mind,
       };
     case "approval_request":
       if (
@@ -583,6 +585,7 @@ export function handleParsedTurnEvent(activeTurn, event) {
       // the answer settles.
       activeTurn.engine = event.engine;
       activeTurn.model = event.model;
+      activeTurn.mind = event.mind;
       return;
     case "approval_request":
       presentApprovalRequest(activeTurn, event);

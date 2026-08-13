@@ -131,7 +131,11 @@ func TestChat_ActiveMindChoosesTheModel(t *testing.T) {
 	}
 
 	in, frames := run(t, func(uint64) MindPolicy {
-		return MindPolicy{Model: "the-minds-model", Persona: "Answer only in bullet points."}
+		return MindPolicy{
+			Name:    "Payroll mind",
+			Model:   "the-minds-model",
+			Persona: "Answer only in bullet points.",
+		}
 	})
 	if in.ModelID != "the-minds-model" {
 		t.Errorf("model = %q, want the active mind's", in.ModelID)
@@ -147,6 +151,11 @@ func TestChat_ActiveMindChoosesTheModel(t *testing.T) {
 	// persona changes how it works, and the two travel in different fields.
 	if in.Persona != "Answer only in bullet points." {
 		t.Errorf("persona = %q, want the active mind's role hint", in.Persona)
+	}
+	// The name changes nothing about the turn; it is the label the transcript
+	// keeps so a reader can tell two minds apart when they share a model.
+	if !strings.Contains(frames[0].Data, `"mind":"Payroll mind"`) {
+		t.Errorf("the turn must record which mind produced it: %q", frames[0].Data)
 	}
 	if strings.Contains(in.Prompt, "bullet points") {
 		t.Error("the persona must not be folded into the user's turn by the engine")

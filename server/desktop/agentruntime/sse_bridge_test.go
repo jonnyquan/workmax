@@ -56,6 +56,12 @@ func TestBridgeFrameShapes(t *testing.T) {
 			"tool_result", `{"is_error":"true","name":"Read"}`},
 		{"turn meta", Event{Kind: EventTurnMeta, Turn: TurnMeta{Engine: "pi", Model: "qwen3-coder"}},
 			"turn_meta", `{"engine":"pi","model":"qwen3-coder"}`},
+		// The mind is what tells two answers apart when they share a model,
+		// which is the ordinary case.
+		{"turn meta with a mind", Event{Kind: EventTurnMeta, Turn: TurnMeta{Engine: "pi", Model: "m", Mind: "Payroll mind"}},
+			"turn_meta", `{"engine":"pi","mind":"Payroll mind","model":"m"}`},
+		{"turn meta without a mind", Event{Kind: EventTurnMeta, Turn: TurnMeta{Engine: "pi", Mind: "  "}},
+			"turn_meta", `{"engine":"pi"}`},
 		// No model configured means the engine chose its own default, and
 		// naming a model nobody picked would be worse than saying nothing.
 		{"turn meta without a model", Event{Kind: EventTurnMeta, Turn: TurnMeta{Engine: "claude"}},

@@ -112,9 +112,13 @@ func (b *SSEBridge) Emit(ev Event) error {
 			return nil
 		}
 		model := boundedMeta(ev.Turn.Model, 80)
+		mind := boundedMeta(ev.Turn.Mind, 64)
 		payload := map[string]string{"engine": engine}
 		if model != "" {
 			payload["model"] = model
+		}
+		if mind != "" {
+			payload["mind"] = mind
 		}
 		// Recorded as well as sent. The frame only reaches the turn that is on
 		// screen right now; the row is what the transcript is rebuilt from
@@ -122,7 +126,7 @@ func (b *SSEBridge) Emit(ev Event) error {
 		// that survived only until the next repaint would be a claim that
 		// disappears exactly when someone goes back to check it.
 		if b.cache != nil {
-			b.cache.SetProvenance(engine, model)
+			b.cache.SetProvenance(engine, model, mind)
 		}
 		return b.dst.WriteEvent(cloudproxy.SSEEvent{
 			Type: "turn_meta",

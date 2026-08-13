@@ -194,6 +194,7 @@ function buildExchangeNodes(item, isLast) {
     // every later launch, which is exactly when someone goes back to check.
     options.engine = item.agent_engine;
     options.model = item.agent_model;
+    options.mind = item.agent_mind;
     nodes.push(
       renderMessage(
         "assistant",
@@ -463,7 +464,12 @@ function renderMessage(role, text, streamingState = "complete", timestamp = "", 
   wrapper.append(label, bubble);
 
   attachMessageActions(wrapper, role, text, actionOptions);
-  attachTurnProvenance(wrapper, actionOptions.engine, actionOptions.model);
+  attachTurnProvenance(
+    wrapper,
+    actionOptions.engine,
+    actionOptions.model,
+    actionOptions.mind
+  );
   return wrapper;
 }
 
@@ -519,16 +525,26 @@ export function attachMessageActions(wrapper, role, text, options = {}) {
 // A footnote, not a dashboard: one quiet line under the reply. Duration is
 // deliberately absent — the work log already reports it, and a second copy
 // underneath would be the header repeating its own body.
-export function attachTurnProvenance(wrapper, engine, model) {
+export function attachTurnProvenance(wrapper, engine, model, mind) {
   if (!wrapper || !engine) return;
   for (const child of Array.from(wrapper.children || [])) {
     if (child.classList?.contains("message-provenance")) return;
   }
   const line = document.createElement("p");
   line.className = "message-provenance";
-  // An empty model means the engine picked its own default. Naming a model
-  // nobody chose would be worse than saying only which engine ran.
-  line.textContent = model ? `${engine} · ${model}` : engine;
+  // Read as one sentence: which mind, on which engine, with which model. The
+  // mind leads because it is what identifies the answer — two minds usually
+  // share a model, so the model alone cannot tell them apart.
+  //
+  // Each part is dropped when it is not known, rather than filled in: an empty
+  // model means the engine chose its own default, and an empty mind means none
+  // was active. Naming either would be inventing a fact about how an answer
+  // came to be, which is the one thing this line exists not to do.
+  //
+  // Unlike the composer's chip, this does NOT stand down when the mind is the
+  // only one — the chip is chrome and has to earn its space every second,
+  // while this is a record and its job is to still be true in six months.
+  line.textContent = [mind, engine, model].filter(Boolean).join(" · ");
   const actions = Array.from(wrapper.children || []).find((child) =>
     child.classList?.contains("message-actions")
   );

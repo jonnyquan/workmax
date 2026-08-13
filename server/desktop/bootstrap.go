@@ -784,6 +784,7 @@ func activeMindPolicy(db *gorm.DB) func(uid uint64) localagent.MindPolicy {
 			return localagent.MindPolicy{}
 		}
 		return localagent.MindPolicy{
+			Name:  active.Name,
 			Model: active.ModelOverride,
 			// The role hint is what the user wrote to say what this mind is
 			// for. It is bounded and control-free by the create handler's

@@ -340,6 +340,7 @@ const MAX_APPROVAL_TARGET_CHARS = 80;
 // as something a user typed into a settings field.
 const MAX_TURN_ENGINE_CHARS = 32;
 const MAX_TURN_MODEL_CHARS = 80;
+const MAX_TURN_MIND_CHARS = 64;
 
 // parseRetrievalSources returns a normalized list, or null if the payload is
 // not the shape this renderer understands. Every field is re-derived rather
@@ -409,6 +410,8 @@ function dispatchAgentSSEFrame(active, eventName, rawData) {
     const event = { type: "turn_meta", turnID: active.turnID, engine: value.engine };
     event.model =
       typeof value.model === "string" ? value.model.slice(0, MAX_TURN_MODEL_CHARS) : "";
+    event.mind =
+      typeof value.mind === "string" ? value.mind.slice(0, MAX_TURN_MIND_CHARS) : "";
     emit(active, event);
     return;
   }

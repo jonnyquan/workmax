@@ -63,6 +63,7 @@ func newMessagesJobFixture(t *testing.T, handler http.HandlerFunc) *messagesJobF
 		user_rating INTEGER NOT NULL DEFAULT 0, user_feedback TEXT,
 		agent_engine TEXT NOT NULL DEFAULT '',
 		agent_model TEXT NOT NULL DEFAULT '',
+		agent_mind TEXT NOT NULL DEFAULT '',
 		streaming_state TEXT NOT NULL DEFAULT 'complete',
 		created_at TEXT, updated_at TEXT
 	)`).Error; err != nil {

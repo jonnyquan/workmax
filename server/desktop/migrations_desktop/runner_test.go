@@ -24,7 +24,7 @@ func TestApplyRunsMessageCreatedOrderIndexMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	want := []string{"0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013"}
+	want := []string{"0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014"}
 	if len(applied) != len(want) {
 		t.Fatalf("applied: got %v, want %v", applied, want)
 	}
@@ -165,12 +165,14 @@ func TestApplyRunsMessageCreatedOrderIndexMigration(t *testing.T) {
 	if err := db.Raw(`
 		SELECT COUNT(*)
 		  FROM pragma_table_info('w_workagent_message')
-		 WHERE name IN ('agent_engine', 'agent_model')
+		 WHERE name IN ('agent_engine', 'agent_model', 'agent_mind')
 	`).Row().Scan(&provenanceColumns); err != nil {
 		t.Fatalf("scan provenance columns: %v", err)
 	}
-	if provenanceColumns != 2 {
-		t.Fatalf("provenance columns = %d, want 2", provenanceColumns)
+	// 0014 adds the mind: two minds usually share a model, so the model alone
+	// cannot tell an answer's minds apart.
+	if provenanceColumns != 3 {
+		t.Fatalf("provenance columns = %d, want 3", provenanceColumns)
 	}
 
 	if err := db.Exec(`

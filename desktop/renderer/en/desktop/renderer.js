@@ -2440,7 +2440,8 @@ export function finishActiveTurn(activeTurn, label, canceled) {
     attachTurnProvenance(
       activeTurn.assistantBubble.parentNode,
       activeTurn.engine,
-      activeTurn.model
+      activeTurn.model,
+      activeTurn.mind
     );
   }
   // How long the turn took, shown where its outcome is shown. Computed once

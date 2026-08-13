@@ -1037,6 +1037,7 @@ function message(uuid, userText, aiText, streamingState = "complete", provenance
     // default here is the empty pair rather than a plausible-looking model.
     agent_engine: provenance.engine ?? "",
     agent_model: provenance.model ?? "",
+    agent_mind: provenance.mind ?? "",
     created_at: "2026-05-21T00:00:00Z",
     updated_at: "2026-05-21T00:00:00Z",
   };
@@ -6790,6 +6791,15 @@ async function testShimDropsMalformedApprovalAndReasoningFrames() {
   assert.ok(provenance, "a well-formed turn_meta frame must be delivered");
   assert.equal(provenance.engine, "pi");
   assert.equal(provenance.model, "qwen3-coder");
+  assert.equal(provenance.mind, "", "an absent mind normalizes to empty, not to a guess");
+  const withMind = await runShimTurn(
+    'event: turn_meta\ndata: {"engine":"pi","model":"m","mind":"Payroll mind"}\n\n' + SSE_DONE_FRAME,
+  );
+  assert.equal(withMind.find((e) => e.type === "turn_meta").mind, "Payroll mind");
+  const longMind = await runShimTurn(
+    `event: turn_meta\ndata: {"engine":"pi","mind":"${"n".repeat(200)}"}\n\n` + SSE_DONE_FRAME,
+  );
+  assert.equal(longMind.find((e) => e.type === "turn_meta").mind.length, 64);
   // An engine may pick its own default. The absent model normalizes to empty
   // rather than being invented, and the frame still arrives — knowing WHICH
   // engine answered is most of the value.
@@ -8980,23 +8990,46 @@ async function testAnswersKeepNamingTheirOwnOrigin() {
     await settle();
   };
 
-  await runTurn("First question", "First answer.", { engine: "claude", model: "claude-sonnet-4.6" });
-  assert.deepEqual(provenance(), ["claude · claude-sonnet-4.6"]);
+  await runTurn("First question", "First answer.", {
+    engine: "claude",
+    model: "claude-sonnet-4.6",
+    mind: "General mind",
+  });
+  // One sentence, mind first: it is what identifies the answer, because two
+  // minds usually share a model and the model alone cannot tell them apart.
+  assert.deepEqual(provenance(), ["General mind · claude · claude-sonnet-4.6"]);
 
   // The settings then change and the next turn runs somewhere else entirely.
   // The first answer must not be rewritten by what the second one ran on.
-  await runTurn("Second question", "Second answer.", { engine: "pi", model: "qwen3-coder" });
-  assert.deepEqual(provenance(), ["claude · claude-sonnet-4.6", "pi · qwen3-coder"]);
+  await runTurn("Second question", "Second answer.", {
+    engine: "pi",
+    model: "qwen3-coder",
+    mind: "Payroll mind",
+  });
+  assert.deepEqual(provenance(), [
+    "General mind · claude · claude-sonnet-4.6",
+    "Payroll mind · pi · qwen3-coder",
+  ]);
+
+  // The case the mind exists FOR: same engine, same model, different mind.
+  // Without the mind these two answers would be indistinguishable, which is
+  // the whole reason 0014 exists.
+  await runTurn("Same model, other mind", "Third answer.", {
+    engine: "pi",
+    model: "qwen3-coder",
+    mind: "Research mind",
+  });
+  assert.equal(provenance()[2], "Research mind · pi · qwen3-coder");
 
   // An engine that chose its own default names only itself. Inventing a model
   // nobody picked is the failure this whole line exists to prevent.
-  await runTurn("Third question", "Third answer.", { engine: "pi", model: "" });
-  assert.equal(provenance()[2], "pi");
+  await runTurn("No model chosen", "Fourth answer.", { engine: "pi", model: "", mind: "" });
+  assert.equal(provenance()[3], "pi");
 
   // A turn the sidecar never announced says nothing, rather than guessing from
   // the current settings — which is the lie this replaces.
-  await runTurn("Fourth question", "Fourth answer.", null);
-  assert.equal(provenance().length, 3, "no announcement means no claim");
+  await runTurn("Unannounced", "Fifth answer.", null);
+  assert.equal(provenance().length, 4, "no announcement means no claim");
 
   // And the part a live-only footer could never do: reopen the conversation.
   // Everything on screen now came from the cache, and it still knows.
@@ -9004,7 +9037,12 @@ async function testAnswersKeepNamingTheirOwnOrigin() {
   await settle();
   assert.deepEqual(
     provenance(),
-    ["claude · claude-sonnet-4.6", "pi · qwen3-coder", "pi"],
+    [
+      "General mind · claude · claude-sonnet-4.6",
+      "Payroll mind · pi · qwen3-coder",
+      "Research mind · pi · qwen3-coder",
+      "pi",
+    ],
     "a transcript rebuilt from cache must still say what produced each answer",
   );
 

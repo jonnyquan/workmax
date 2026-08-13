@@ -188,6 +188,7 @@ function parseMessage(value) {
     // the value reaches the page, and a guard on one road is not a guard.
     agent_engine: boundedString(value.agent_engine, 32),
     agent_model: boundedString(value.agent_model, 80),
+    agent_mind: boundedString(value.agent_mind, 64),
     streaming_state: value.streaming_state,
     // Validated above; carried so the transcript can date its rows.
     created_at: optionalString(value.created_at),

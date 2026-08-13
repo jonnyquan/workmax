@@ -112,6 +112,11 @@ type Engine struct {
 // optional; a zero value is "no opinion" and leaves the turn exactly as the
 // identity configured it.
 type MindPolicy struct {
+	// Name is what to call this mind under an answer. It changes nothing about
+	// how the turn runs; it is the label the transcript keeps so a reader can
+	// tell two minds apart when they share a model, which is the ordinary case.
+	Name string
+
 	// Model wins over the identity's configured model.
 	//
 	// A mind picks a MODEL, not a provider: base URL and credentials stay the
@@ -298,7 +303,11 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	// own name, and modelID is the value about to be handed to it.
 	if merr := bridge.Emit(agentruntime.Event{
 		Kind: agentruntime.EventTurnMeta,
-		Turn: agentruntime.TurnMeta{Engine: e.runtime.Name(), Model: modelID},
+		Turn: agentruntime.TurnMeta{
+			Engine: e.runtime.Name(),
+			Model:  modelID,
+			Mind:   strings.TrimSpace(mind.Name),
+		},
 	}); merr != nil {
 		return merr
 	}

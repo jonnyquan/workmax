@@ -503,6 +503,9 @@ func TestActiveMindPolicyCarriesBothHalves(t *testing.T) {
 	}
 
 	policy := activeMindPolicy(db)(0)
+	if policy.Name != "Compensation" {
+		t.Errorf("name = %q; without it the transcript cannot tell two minds apart", policy.Name)
+	}
 	if policy.Model != "specialist-model" {
 		t.Errorf("model = %q, want the mind's", policy.Model)
 	}

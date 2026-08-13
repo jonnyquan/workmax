@@ -75,6 +75,12 @@ type Event struct {
 type TurnMeta struct {
 	Engine string
 	Model  string
+	// Mind is the name of the identity's active mind, or "" when none was
+	// chosen. The NAME rather than the id: this is read by a person under an
+	// answer, and a uuid tells them nothing. A mind that is later renamed
+	// therefore leaves older answers naming what it was called at the time,
+	// which is what a record should do.
+	Mind string
 }
 
 // ToolEvent names a tool step the way a work log would. Target is the
