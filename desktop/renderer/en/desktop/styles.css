@@ -47,40 +47,55 @@
 */
 
 :root {
-  --background: 40 12% 96%;
-  --foreground: 40 8% 13%;
-  --card: 40 25% 99%;
-  --card-foreground: 40 8% 13%;
+  --background: 30 5% 97%;
+  --foreground: 30 5% 13%;
+  --card: 0 0% 100%;
+  --card-foreground: 30 5% 13%;
   --primary: 158 34% 27%;
-  --primary-foreground: 40 25% 99%;
-  --secondary: 40 10% 93%;
-  --secondary-foreground: 40 8% 13%;
-  --muted: 40 10% 93%;
-  --muted-foreground: 40 6% 42%;
+  --primary-foreground: 30 5% 97%;
+  --secondary: 30 4% 95%;
+  --secondary-foreground: 30 5% 13%;
+  --muted: 30 4% 95%;
+  --muted-foreground: 30 3% 45%;
   --accent: 158 34% 27%;
-  --accent-foreground: 40 25% 99%;
+  --accent-foreground: 30 5% 97%;
   --destructive: 0 68% 45%;
   --destructive-foreground: 0 0% 98%;
   --success: 152 42% 33%;
   --warning: 38 82% 40%;
-  --warning-foreground: 40 8% 13%;
+  --warning-foreground: 30 5% 13%;
   --info: 185 38% 34%;
-  --border: 40 8% 88%;
-  --input: 40 8% 88%;
+  --border: 30 4% 90%;
+  --input: 30 4% 90%;
   --ring: 158 34% 27%;
   --radius: 0.5rem;
-  /* Syntax colours. Same HSL channel form as the rest, so a token can be used
-     at partial opacity without a second definition. Hues are picked from the
-     palette's own families (green for strings, the info teal for builtins)
-     rather than from a generic rainbow theme, so a code block reads as part of
-     this product and not as an embedded editor. */
-  --code-comment: 40 8% 48%;
+  /* Code surface: a COOL dark panel against the warm page, the way Claude's
+     cream canvas sits against its navy code windows. The contrast is the
+     point — it creates depth without shadows and gives code its own room. */
+  --code-surface: 220 10% 12%;
+  --code-surface-foreground: 220 8% 88%;
+  /* Syntax colours for the dark code surface. These are always the dark-theme
+     values regardless of the page theme, because the code surface is always
+     dark. The page-level --code-* tokens below stay for inline code. */
+  --cb-comment: 220 6% 50%;
+  --cb-keyword: 292 45% 72%;
+  --cb-string: 150 36% 60%;
+  --cb-number: 24 70% 66%;
+  --cb-function: 205 60% 68%;
+  --cb-builtin: 185 45% 62%;
+  --cb-punct: 220 8% 62%;
+  --cb-tag: 350 60% 70%;
+  --cb-attr: 30 60% 66%;
+  /* Inline-code syntax colours (light page background). Same HSL form as the
+     rest so a token can be used at partial opacity. Hues are picked from the
+     palette's own families so inline code reads as part of this product. */
+  --code-comment: 30 4% 50%;
   --code-keyword: 292 35% 42%;
   --code-string: 152 42% 30%;
   --code-number: 24 65% 38%;
   --code-function: 210 45% 38%;
   --code-builtin: 185 38% 30%;
-  --code-punct: 40 8% 40%;
+  --code-punct: 30 5% 40%;
   --code-tag: 350 45% 42%;
   --code-attr: 24 55% 38%;
 }
@@ -88,34 +103,45 @@
 /* (2) dark because the system says so — unless the user forced light. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --background: 40 6% 9%;
-    --foreground: 40 8% 92%;
-    --card: 40 5% 12%;
-    --card-foreground: 40 8% 92%;
+    --background: 30 5% 9%;
+    --foreground: 30 5% 92%;
+    --card: 30 4% 12%;
+    --card-foreground: 30 5% 92%;
     --primary: 150 36% 52%;
-    --primary-foreground: 40 6% 9%;
-    --secondary: 40 5% 16%;
-    --secondary-foreground: 40 8% 92%;
-    --muted: 40 5% 16%;
-    --muted-foreground: 40 6% 62%;
+    --primary-foreground: 30 5% 9%;
+    --secondary: 30 4% 16%;
+    --secondary-foreground: 30 5% 92%;
+    --muted: 30 4% 16%;
+    --muted-foreground: 30 4% 62%;
     --accent: 150 36% 52%;
-    --accent-foreground: 40 6% 9%;
+    --accent-foreground: 30 5% 9%;
     --destructive: 0 72% 62%;
     --destructive-foreground: 0 0% 98%;
     --success: 150 36% 52%;
     --warning: 38 78% 58%;
-    --warning-foreground: 40 6% 9%;
+    --warning-foreground: 30 5% 9%;
     --info: 185 38% 52%;
-    --border: 40 5% 20%;
-    --input: 40 5% 20%;
+    --border: 30 4% 20%;
+    --input: 30 4% 20%;
     --ring: 150 36% 52%;
-    --code-comment: 42 8% 50%;
+    --code-surface: 220 10% 14%;
+    --code-surface-foreground: 220 8% 88%;
+    --cb-comment: 220 6% 50%;
+    --cb-keyword: 292 45% 72%;
+    --cb-string: 150 36% 60%;
+    --cb-number: 24 70% 66%;
+    --cb-function: 205 60% 68%;
+    --cb-builtin: 185 45% 62%;
+    --cb-punct: 220 8% 62%;
+    --cb-tag: 350 60% 70%;
+    --cb-attr: 30 60% 66%;
+    --code-comment: 30 4% 50%;
     --code-keyword: 292 45% 72%;
     --code-string: 150 36% 60%;
     --code-number: 24 70% 66%;
     --code-function: 205 60% 68%;
     --code-builtin: 185 45% 62%;
-    --code-punct: 42 10% 62%;
+    --code-punct: 30 6% 62%;
     --code-tag: 350 60% 70%;
     --code-attr: 30 60% 66%;
   }
@@ -124,34 +150,45 @@
 /* (3) dark because the user said so, whatever the system says. Must stay
    byte-identical to (2) — the behaviour suite checks it. */
 :root[data-theme="dark"] {
-  --background: 40 6% 9%;
-  --foreground: 40 8% 92%;
-  --card: 40 5% 12%;
-  --card-foreground: 40 8% 92%;
+  --background: 30 5% 9%;
+  --foreground: 30 5% 92%;
+  --card: 30 4% 12%;
+  --card-foreground: 30 5% 92%;
   --primary: 150 36% 52%;
-  --primary-foreground: 40 6% 9%;
-  --secondary: 40 5% 16%;
-  --secondary-foreground: 40 8% 92%;
-  --muted: 40 5% 16%;
-  --muted-foreground: 40 6% 62%;
+  --primary-foreground: 30 5% 9%;
+  --secondary: 30 4% 16%;
+  --secondary-foreground: 30 5% 92%;
+  --muted: 30 4% 16%;
+  --muted-foreground: 30 4% 62%;
   --accent: 150 36% 52%;
-  --accent-foreground: 40 6% 9%;
+  --accent-foreground: 30 5% 9%;
   --destructive: 0 72% 62%;
   --destructive-foreground: 0 0% 98%;
   --success: 150 36% 52%;
   --warning: 38 78% 58%;
-  --warning-foreground: 40 6% 9%;
+  --warning-foreground: 30 5% 9%;
   --info: 185 38% 52%;
-  --border: 40 5% 20%;
-  --input: 40 5% 20%;
+  --border: 30 4% 20%;
+  --input: 30 4% 20%;
   --ring: 150 36% 52%;
-  --code-comment: 42 8% 50%;
+  --code-surface: 220 10% 14%;
+  --code-surface-foreground: 220 8% 88%;
+  --cb-comment: 220 6% 50%;
+  --cb-keyword: 292 45% 72%;
+  --cb-string: 150 36% 60%;
+  --cb-number: 24 70% 66%;
+  --cb-function: 205 60% 68%;
+  --cb-builtin: 185 45% 62%;
+  --cb-punct: 220 8% 62%;
+  --cb-tag: 350 60% 70%;
+  --cb-attr: 30 60% 66%;
+  --code-comment: 30 4% 50%;
   --code-keyword: 292 45% 72%;
   --code-string: 150 36% 60%;
   --code-number: 24 70% 66%;
   --code-function: 205 60% 68%;
   --code-builtin: 185 45% 62%;
-  --code-punct: 42 10% 62%;
+  --code-punct: 30 6% 62%;
   --code-tag: 350 60% 70%;
   --code-attr: 30 60% 66%;
 }
@@ -170,9 +207,18 @@
   --fs-title: 17px;   /* the thing you are looking at */
   --fs-display: 22px; /* the one headline on an empty screen */
 
+  /* Three font families, one per role. Serif for display and headings gives
+     the app a voice that is not generic-SaaS-sans — the same bet Claude's
+     Copernicus makes. System fonts only: no @font-face, no packaged files,
+     no CSP change, no binary growth. New York ships on every macOS; Georgia
+     and the sans/mono stacks cover the fallback. */
+  --font-serif: "New York", "Iowan Old Style", Georgia, "Times New Roman", serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
+
   --lh-tight: 1.3;
   --lh-ui: 1.45;
-  --lh-read: 1.65;
+  --lh-read: 1.7;
 
   --fw-normal: 400;
   --fw-medium: 500;
@@ -231,7 +277,7 @@
      means "whichever the system picked"; the two overrides below pin it, so a
      forced theme does not leave native chrome arguing with the page. */
   color-scheme: light dark;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
   font-size: var(--fs-base);
   background: hsl(var(--background));
   color: hsl(var(--foreground));
@@ -2611,6 +2657,7 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 .md-heading {
   margin: var(--sp-5) 0 var(--sp-2);
   color: hsl(var(--foreground));
+  font-family: var(--font-serif);
   font-size: var(--fs-read);
   font-weight: var(--fw-strong);
   line-height: var(--lh-tight);
@@ -2642,11 +2689,16 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 
 /* Code chrome lives in a header strip above the <pre>, never inside it — a
    label or button inside the block becomes part of its selectable text. */
+/* Code blocks sit on a dark surface — a cool dark panel against the warm
+   page, the way Claude's cream canvas meets its navy code windows. The
+   contrast is the point: it gives code its own room without a border or a
+   shadow, and the syntax colours (always the dark-surface palette below)
+   pop without needing high saturation. */
 .md-code-wrap {
   margin: 0 0 var(--sp-3);
   overflow: hidden;
   border-radius: var(--r-control);
-  background: hsl(var(--muted) / 0.7);
+  background: hsl(var(--code-surface));
 }
 
 .md-code-head {
@@ -2658,8 +2710,8 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 }
 
 .md-code-lang {
-  color: hsl(var(--muted-foreground));
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: hsl(var(--code-surface-foreground) / 0.5);
+  font-family: var(--font-mono);
   font-size: var(--fs-micro);
   letter-spacing: 0.03em;
 }
@@ -2668,16 +2720,22 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   height: var(--h-control-sm);
   padding: 0 var(--sp-2);
   border-color: transparent;
-  color: hsl(var(--muted-foreground));
+  color: hsl(var(--code-surface-foreground) / 0.6);
   font-size: var(--fs-micro);
   font-weight: var(--fw-normal);
+}
+
+.md-code-head button:hover {
+  color: hsl(var(--code-surface-foreground));
+  background: hsl(var(--code-surface-foreground) / 0.1);
 }
 
 .md-code {
   margin: 0 0 var(--sp-3);
   padding: var(--sp-3);
   border-radius: var(--r-control);
-  background: hsl(var(--muted) / 0.7);
+  background: hsl(var(--code-surface));
+  color: hsl(var(--code-surface-foreground));
   /* The one place horizontal scrolling belongs: a long line of code must not
      widen the message column. */
   overflow-x: auto;
@@ -2692,9 +2750,10 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 }
 
 .md-code code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-small);
   line-height: 1.55;
+  color: hsl(var(--code-surface-foreground));
 }
 
 .md-code-inline {
@@ -2703,7 +2762,7 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   padding: 1px 4px;
   border-radius: 4px;
   background: hsl(var(--muted));
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-small);
   overflow-wrap: anywhere;
 }
@@ -2723,20 +2782,22 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 /* Syntax tokens. Colour only — no weight or size changes, because a code block
    whose lines shift as it is highlighted is worse than one that never was. The
    classes are produced by the tokenizer in markdown.js; a language it does not
-   know simply leaves the text unclassified and inherits the block's colour. */
+   know simply leaves the text unclassified and inherits the block's colour.
+   These use the --cb-* (code-block) palette because code blocks are always on
+   a dark surface, regardless of the page theme. */
 .tok-comment {
-  color: hsl(var(--code-comment));
+  color: hsl(var(--cb-comment));
   font-style: italic;
 }
 
-.tok-keyword { color: hsl(var(--code-keyword)); }
-.tok-string { color: hsl(var(--code-string)); }
-.tok-number { color: hsl(var(--code-number)); }
-.tok-function { color: hsl(var(--code-function)); }
-.tok-builtin { color: hsl(var(--code-builtin)); }
-.tok-punct { color: hsl(var(--code-punct)); }
-.tok-tag { color: hsl(var(--code-tag)); }
-.tok-attr { color: hsl(var(--code-attr)); }
+.tok-keyword { color: hsl(var(--cb-keyword)); }
+.tok-string { color: hsl(var(--cb-string)); }
+.tok-number { color: hsl(var(--cb-number)); }
+.tok-function { color: hsl(var(--cb-function)); }
+.tok-builtin { color: hsl(var(--cb-builtin)); }
+.tok-punct { color: hsl(var(--cb-punct)); }
+.tok-tag { color: hsl(var(--cb-tag)); }
+.tok-attr { color: hsl(var(--cb-attr)); }
 
 /* --- Inline run narration --------------------------------------------------
    The work log: what the agent did, above the words that explain it. Reads
@@ -2795,7 +2856,7 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 }
 
 .worklog-target {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-micro);
   overflow-wrap: anywhere;
 }
@@ -3121,17 +3182,12 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   padding: var(--sp-3);
   border-radius: var(--r-panel);
   background: hsl(var(--card));
-  box-shadow:
-    0 0 0 1px hsl(var(--border)),
-    0 1px 2px hsl(40 10% 10% / 0.04),
-    0 8px 24px hsl(40 10% 10% / 0.05);
+  box-shadow: 0 0 0 1px hsl(var(--border));
   transition: box-shadow 100ms ease;
 }
 
 .composer:focus-within {
-  box-shadow:
-    0 0 0 1px hsl(var(--ring) / 0.55),
-    0 8px 24px hsl(40 10% 10% / 0.06);
+  box-shadow: 0 0 0 1px hsl(var(--ring) / 0.5);
 }
 
 .composer-toolbar,
@@ -3394,7 +3450,7 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 .context-run-detail {
   min-width: 0;
   color: hsl(var(--muted-foreground));
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-micro);
   overflow-wrap: anywhere;
 }
