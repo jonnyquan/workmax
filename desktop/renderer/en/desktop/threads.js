@@ -53,6 +53,26 @@ import {
 // conversation from 11pm last night belongs under "Yesterday" at 1am, not
 // "3 hours ago", and a timestamp that will not parse goes to Older rather than
 // silently disappearing. Future timestamps stay in Today.
+// The short time that sits at the right end of a row, the way Codex places
+// it: "3m", "2h", "5d" — one glance, no sentence. Older than a week falls
+// back to a date; the group header above already carries the calendar story.
+export function relativeTime(value) {
+  const then = new Date(value).getTime();
+  if (Number.isNaN(then)) return "";
+  const minutes = Math.floor((Date.now() - then) / 60000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d`;
+  const date = new Date(then);
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  return sameYear
+    ? date.toLocaleDateString([], { month: "short", day: "numeric" })
+    : date.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+}
+
 export function localCalendarDay(date) {
   return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000;
 }
@@ -335,11 +355,14 @@ function renderThreadButton(thread, inProject = false) {
   button.classList.toggle("active", thread.uuid === state.selectedThreadUUID);
   const title = document.createElement("strong");
   title.textContent = thread.name || "Untitled thread";
-  // One line per conversation, Codex-style. The date group headers already
-  // say when; the message count said little and doubled every row's height.
-  // The title carries the timestamp as its tooltip instead.
+  // One line per conversation: the title, and a short relative time at the
+  // right end — visible, not behind a tooltip, the way Codex places it. The
+  // tooltip keeps the full sentence for when the short form is not enough.
   title.title = `${formatMessageTime(thread.updated_at) || formatDate(thread.updated_at)} · ${thread.message_count || 0} messages`;
-  button.appendChild(title);
+  const when = document.createElement("span");
+  when.className = "thread-when";
+  when.textContent = relativeTime(thread.updated_at);
+  button.append(title, when);
   if (state.recoverableTurns.some((turn) => turn.thread_uuid === thread.uuid)) {
     const badge = document.createElement("span");
     badge.className = "thread-recovery-badge";
@@ -453,6 +476,17 @@ function toggleProjectGroup(heading, indicator) {
 // why it had a second empty state ("No conversations match …"); searching
 // happens in the palette now, and a list that quietly shortens itself while
 // another window has focus is not something this column should do.
+// The rail's own search: what is typed here narrows the list below it, live,
+// the way Codex's does. It does not open the palette and it does not search
+// message bodies — those are the palette's jobs; this is a filter over the
+// conversations you can see.
+let railQuery = "";
+
+export function setRailSearch(query) {
+  railQuery = typeof query === "string" ? query.trim().toLowerCase() : "";
+  renderThreads();
+}
+
 export function renderThreads() {
   threadList.textContent = "";
   if (state.threads.length === 0) {
@@ -462,8 +496,16 @@ export function renderThreads() {
     renderEmptyState();
     return;
   }
-
-  const groups = groupThreads(state.threads, new Date());
+  const visible = railQuery
+    ? state.threads.filter((thread) => threadMatchesQuery(thread, railQuery))
+    : state.threads;
+  if (visible.length === 0) {
+    const item = document.createElement("li");
+    item.appendChild(renderNotice("No conversations match."));
+    threadList.appendChild(item);
+    return;
+  }
+  const groups = groupThreads(visible, new Date());
 
   // Pinned leads. A pin overrides project and calendar alike.
   if (groups.pinned.length > 0) {

@@ -562,21 +562,37 @@
              answer) already offers Retry on the status line, which calls the
              same refresh(). An unlabelled glyph for a job nobody has is how
              a toolbar starts collecting them. -->
-        <!-- The rail's three destinations. Chats is the working surface;
-             Schedule and Plugins are where those features land, and the
-             sections say the honest thing (empty) rather than hiding the
-             destination. -->
-        <nav class="rail-nav" aria-label="Sidebar sections">
-          <button id="rail-nav-chats" class="rail-nav-item" type="button" aria-current="page">Chats</button>
-          <button id="rail-nav-schedule" class="rail-nav-item" type="button">Schedule</button>
-          <button id="rail-nav-plugins" class="rail-nav-item" type="button">Plugins</button>
+        <!-- Codex's rail chrome, adopted whole: a prominent New chat button,
+             then an inline search over the conversations, then the list.
+             Schedule and Plugins are quiet destinations under the search —
+             present, not shouting. -->
+        <button id="new-thread-button" class="rail-new" type="button" disabled>
+          <span class="rail-new-icon" aria-hidden="true">+</span>
+          New chat
+        </button>
+
+        <div class="rail-search">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <circle cx="7" cy="7" r="4.25" />
+            <path d="m10.2 10.2 3 3" />
+          </svg>
+          <input
+            id="thread-search"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Search chats…"
+            aria-label="Search chats"
+          />
+        </div>
+
+        <nav class="rail-subnav" aria-label="Sidebar sections">
+          <button id="rail-nav-chats" class="rail-subnav-item" type="button" aria-current="page">Chats</button>
+          <button id="rail-nav-schedule" class="rail-subnav-item" type="button">Schedule</button>
+          <button id="rail-nav-plugins" class="rail-subnav-item" type="button">Plugins</button>
         </nav>
 
         <div id="rail-view-chats">
-        <div class="thread-toolbar">
-          <span class="rail-label">Conversations</span>
-          <button id="new-thread-button" type="button" disabled>New</button>
-        </div>
 
         <form
           id="new-thread-form"

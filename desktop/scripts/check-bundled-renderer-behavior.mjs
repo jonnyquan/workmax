@@ -249,8 +249,8 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   }
   // The brand row is only the brand again: the icons that shared it moved up.
   const brandAt = rendererHTML.indexOf('class="brand"');
-  const toolbarAt = rendererHTML.indexOf('class="thread-toolbar"');
-  assert.ok(brandAt > 0 && toolbarAt > brandAt, "the brand row still heads the rail");
+  const newChatAt = rendererHTML.indexOf('id="new-thread-button"');
+  assert.ok(brandAt > 0 && newChatAt > brandAt, "the brand row still heads the rail");
   // The BRAND ROW carries no controls (search and the fold live in the title
   // bar). The rail-nav between brand and toolbar is a legitimate section
   // switcher, so the slice checked here is the brand row alone.
@@ -2124,11 +2124,13 @@ async function testThreadGroupingAndSearch() {
 // complete. Pinned here because the cheapest way to "fix" a palette that is
 // missing something is to put a small search back in the rail.
 {
-  assert.doesNotMatch(rendererHTML, /id=["']thread-search["']/u);
+  // An inline search in the rail is the deliberate design now (Codex's
+  // chrome). The OLD panel id stays banned — the dead panel must not return.
+  assert.match(rendererHTML, /id="thread-search"/u);
   assert.doesNotMatch(rendererHTML, /id=["']thread-search-panel["']/u);
   assert.doesNotMatch(rendererHTML, /id=["']content-match-panel["']/u);
   assert.doesNotMatch(rendererSource, /threadSearchInput|threadQuery/u);
-  assert.doesNotMatch(rendererCSS, /\.thread-search|\.content-match/u);
+  assert.doesNotMatch(rendererCSS, /\.content-match/u);
   // The rail's remaining entry point is an icon, and it opens the one palette.
   assert.match(rendererHTML, /id=["']sidebar-search-button["']/u);
   assert.match(rendererSource, /sidebarSearchButton/u);

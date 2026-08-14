@@ -3834,35 +3834,108 @@ button.composer-chip:hover {
   display: none;
 }
 
-/* --- Rail section nav (Chats / Schedule / Plugins) --------------------------
-   Three destinations, one visible at a time. Quiet pills, not tabs: this is
-   a wayfinding row, not a control surface. */
-.rail-nav {
+/* --- Rail chrome, Codex's shape ------------------------------------------------
+   A prominent New chat button, an inline search, and a quiet subnav. The
+   button is the one primary action in the column; the search narrows the
+   list under it live. */
+.rail-new {
   display: flex;
-  gap: var(--sp-1);
-  padding: var(--sp-1) var(--sp-3) var(--sp-2);
-}
-
-.rail-nav-item {
-  flex: 1;
-  height: var(--h-control-sm);
-  padding: 0 var(--sp-2);
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0 var(--sp-3);
+  height: var(--h-control);
+  padding: 0 var(--sp-3);
   border: none;
   border-radius: var(--r-control);
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+}
+
+.rail-new:hover:not(:disabled) {
+  background: hsl(var(--primary) / 0.9);
+}
+
+.rail-new-icon {
+  font-size: var(--fs-title);
+  font-weight: var(--fw-normal);
+  line-height: 1;
+}
+
+.rail-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: var(--sp-2) var(--sp-3) 0;
+  padding: 0 var(--sp-2);
+  height: var(--h-control);
+  border-radius: var(--r-control);
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+
+.rail-search svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.rail-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: var(--fs-base);
+}
+
+.rail-search input::placeholder {
+  color: hsl(var(--muted-foreground));
+}
+
+.rail-search input:focus {
+  outline: none;
+}
+
+.rail-search:focus-within {
+  background: hsl(var(--card));
+  box-shadow: 0 0 0 1px hsl(var(--ring) / 0.5);
+}
+
+.rail-subnav {
+  display: flex;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3) var(--sp-1);
+}
+
+.rail-subnav-item {
+  padding: 0;
+  border: none;
   background: transparent;
   color: hsl(var(--muted-foreground));
   font-size: var(--fs-small);
   font-weight: var(--fw-medium);
+  height: auto;
 }
 
-.rail-nav-item:hover {
-  background: hsl(var(--muted));
+.rail-subnav-item:hover {
   color: hsl(var(--foreground));
 }
 
-.rail-nav-item.active {
-  background: hsl(var(--muted));
+.rail-subnav-item.active {
   color: hsl(var(--foreground));
+}
+
+/* The relative time at a row's right end — muted, tabular, one glance. */
+.thread-when {
+  flex: none;
+  margin-left: auto;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
 }
 
 .rail-view {
