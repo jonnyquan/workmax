@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -274,6 +275,12 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	}
 
 	bridge := agentruntime.NewSSEBridge(dst, cache)
+	// Snapshot the workspace before the turn runs, so a diff taken afterwards
+	// is exactly this turn's work. Best-effort: a workspace without git still
+	// answers, it just cannot diff.
+	if err := snapshotWorkspace(workspace); err != nil {
+		log.Printf("local agent: pre-turn snapshot for thread %s: %v", req.ThreadUUID, err)
+	}
 	// Said before the turn runs, not after it: a turn that is interrupted or
 	// fails still came from an engine, and the answer it left behind should
 	// still be able to say which. Emitted here rather than by the runtime
@@ -452,7 +459,67 @@ func (e *Engine) ensureWorkspace(threadUUID string) (string, error) {
 			return "", err
 		}
 	}
+	// Turn the workspace into a git repo so a diff endpoint can show what each
+	// turn changed. Git is the one tool that covers every kind of change —
+	// Write, Edit, Bash mv/rm/sed — without a second snapshot subsystem. The
+	// .git directory sits in the agent's Cwd, which is normal: the claude CLI
+	// works inside existing git repos every day. The .claude-home isolation
+	// dir is gitignored so it does not pollute diffs.
+	if err := initWorkspaceRepo(dir, root); err != nil {
+		log.Printf("local agent: workspace git init for thread %s: %v (diff will be unavailable)", threadUUID, err)
+	}
 	return dir, nil
+}
+
+// initWorkspaceRepo makes the per-thread workspace a git repo and takes the
+// baseline commit. Best-effort: a workspace without git still works, it just
+// cannot answer "what did this turn change".
+func initWorkspaceRepo(dir, root string) error {
+	for _, args := range [][]string{
+		{"init", "--quiet"},
+		{"config", "user.email", "agent@workmax.local"},
+		{"config", "user.name", "WorkMax Agent"},
+		{"config", "commit.gpgsign", "false"},
+	} {
+		if err := exec.Command("git", args...).Run(); err != nil {
+			return fmt.Errorf("git %s: %w", args[0], err)
+		}
+	}
+	// Ignore the claude CLI's isolation HOME so it never appears in a diff.
+	gitignore := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(gitignore, []byte(".claude-home/\n"), 0o644); err != nil {
+		return fmt.Errorf("write .gitignore: %w", err)
+	}
+	return snapshotWorkspace(dir)
+}
+
+// snapshotWorkspace stages everything and commits. Called before a turn so
+// the diff after it is exactly the turn's work, and at creation so HEAD exists.
+func snapshotWorkspace(dir string) error {
+	add := exec.Command("git", "add", "-A")
+	add.Dir = dir
+	if out, err := add.CombinedOutput(); err != nil {
+		return fmt.Errorf("git add: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	commit := exec.Command("git", "commit", "--quiet", "--allow-empty", "-m", "snapshot")
+	commit.Dir = dir
+	if out, err := commit.CombinedOutput(); err != nil {
+		return fmt.Errorf("git commit: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// diffWorkspace returns the unified diff between the last snapshot and the
+// current workspace state — i.e. everything the most recent turn changed. Empty
+// string when nothing changed or when the workspace has no git history.
+func diffWorkspace(dir string) (string, error) {
+	cmd := exec.Command("git", "diff", "HEAD", "--no-color")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git diff: %w", err)
+	}
+	return string(out), nil
 }
 
 // indexCompletedTurn mirrors local_inference's helper, including the recover:

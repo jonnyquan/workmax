@@ -184,6 +184,7 @@ import {
   attachLastTurnLog,
   contextState,
   loadWorkspaceDeliverables,
+  loadWorkspaceDiff,
   renderTaskContext,
   settleTurnNarration,
 } from "./context-panel.js";
@@ -1752,6 +1753,7 @@ export async function exportSelectedThread() {
     // The file is a deliverable; the panel that lists deliverables should
     // know about it without waiting for the next turn.
     void loadWorkspaceDeliverables(threadUUID);
+    void loadWorkspaceDiff(threadUUID);
   } catch (error) {
     setStatus(String(error.message || error), "error");
   } finally {
@@ -2496,6 +2498,7 @@ export function finishActiveTurn(activeTurn, label, canceled) {
   // A completed turn is the only time new workspace files can exist. What is
   // new or changed against the pre-turn snapshot is what THIS turn made.
   void loadWorkspaceDeliverables(activeTurn.threadUUID).then(() => {
+    void loadWorkspaceDiff(activeTurn.threadUUID);
     const log = contextState.lastTurnLog;
     if (!log || log.threadUUID !== activeTurn.threadUUID) return;
     log.produced = contextState.deliverables.filter(

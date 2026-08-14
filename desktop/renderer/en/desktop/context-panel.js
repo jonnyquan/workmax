@@ -1185,6 +1185,7 @@ export async function loadThreadSources(threadUUID) {
   contextState.selectedFileIDs = new Set();
   renderTaskContext();
   void loadWorkspaceDeliverables(threadUUID);
+  void loadWorkspaceDiff(threadUUID);
   if (!threadUUID) return;
 
   const agent = desktopAgentBridge();
@@ -1201,4 +1202,114 @@ export async function loadThreadSources(threadUUID) {
     // unaffected, so this must not surface as a turn error.
   }
   renderTaskContext();
+}
+
+// --- Diff --------------------------------------------------------------------
+//
+// What the most recent turn changed, straight from the workspace's git repo.
+// The engine snapshots before each turn and the diff endpoint reads what came
+// after. This is the one thing Codex and Claude both make a first-class panel:
+// the reader can see not just THAT files appeared but WHAT is in them.
+
+export async function loadWorkspaceDiff(threadUUID) {
+  const agent = desktopAgentBridge();
+  const diffSection = document.querySelector("#context-diff");
+  if (!diffSection) return;
+  if (!threadUUID || !agent || typeof agent.workspaceDiff !== "function") {
+    diffSection.hidden = true;
+    return;
+  }
+  try {
+    const result = await agent.workspaceDiff(threadUUID);
+    if (!result || !result.ok) {
+      diffSection.hidden = true;
+      return;
+    }
+    renderWorkspaceDiff(result.data);
+  } catch {
+    diffSection.hidden = true;
+  }
+}
+
+function renderWorkspaceDiff(data) {
+  const section = document.querySelector("#context-diff");
+  const meta = document.querySelector("#diff-meta");
+  const filesEl = document.querySelector("#diff-files");
+  const patchEl = document.querySelector("#diff-patch");
+  if (!section || !filesEl || !patchEl) return;
+
+  if (!data || !data.git || data.files.length === 0) {
+    section.hidden = true;
+    return;
+  }
+
+  // The meta line: total additions and removals, like a PR stat.
+  const totalAdded = data.files.reduce((n, f) => n + f.added, 0);
+  const totalRemoved = data.files.reduce((n, f) => n + f.removed, 0);
+  if (meta) meta.textContent = `+${totalAdded} −${totalRemoved}`;
+
+  // File list: one row per changed file, clickable to expand the patch.
+  filesEl.innerHTML = "";
+  for (const file of data.files) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "diff-file-row";
+    const name = document.createElement("span");
+    name.className = "diff-file-name";
+    name.textContent = file.path;
+    const stat = document.createElement("span");
+    stat.className = "diff-file-stat";
+    stat.textContent = `+${file.added} −${file.removed}`;
+    row.append(name, stat);
+    row.addEventListener("click", () => {
+      const open = patchEl.hidden === false;
+      patchEl.hidden = open;
+      if (!open) renderDiffPatch(patchEl, data.patch, file.path);
+      row.classList.toggle("expanded", !open);
+    });
+    filesEl.appendChild(row);
+  }
+
+  // The full patch, hidden until a file is clicked. Rendering all of it at
+  // once would be heavy for large diffs; expanding one file at a time keeps
+  // the DOM proportional to what the reader is looking at.
+  patchEl.hidden = true;
+  patchEl.innerHTML = "";
+
+  section.hidden = false;
+}
+
+function renderDiffPatch(el, patch, filterPath) {
+  // A lightweight unified-diff renderer: colour +/- lines, dim headers and
+  // context. Not a full syntax highlighter — the point is scanning changes,
+  // not reading code. When a specific file is clicked, only that file's
+  // hunks are shown.
+  const lines = patch.split("\n");
+  const frag = document.createDocumentFragment();
+  let inFile = !filterPath;
+  for (const line of lines) {
+    if (line.startsWith("diff --git")) {
+      const path = line.split(" b/")[1] || "";
+      inFile = !filterPath || path === filterPath;
+    }
+    if (!inFile && filterPath) continue;
+
+    const span = document.createElement("span");
+    span.className = "diff-line";
+    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") || line.startsWith("index ")) {
+      span.classList.add("diff-line-meta");
+    } else if (line.startsWith("@@")) {
+      span.classList.add("diff-line-hunk");
+    } else if (line.startsWith("+") && !line.startsWith("+++")) {
+      span.classList.add("diff-line-add");
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      span.classList.add("diff-line-del");
+    }
+    span.textContent = line;
+    frag.appendChild(span);
+    frag.appendChild(document.createTextNode("\n"));
+  }
+  el.innerHTML = "";
+  el.appendChild(frag);
+  el.hidden = false;
 }

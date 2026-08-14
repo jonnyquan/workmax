@@ -176,6 +176,7 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	newCurrentSidecarRoutePolicy("agent.thread-file-upload", http.MethodPost, "/agent/threads/:uuid/files", SidecarBodyRequired, maxThreadFileUploadBodyBytes, "multipart/form-data"),
 	newCurrentSidecarRoutePolicy("agent.thread-file-list", http.MethodGet, "/agent/threads/:uuid/files", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-workspace-list", http.MethodGet, "/agent/threads/:uuid/workspace", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("agent.thread-workspace-diff", http.MethodGet, "/agent/threads/:uuid/workspace/diff", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-workspace-reveal", http.MethodPost, "/agent/threads/:uuid/workspace/reveal", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-export", http.MethodPost, "/agent/threads/:uuid/export", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.search", http.MethodGet, "/agent/search", SidecarBodyForbidden, 0),
@@ -489,6 +490,8 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handleRenameAgentThread, true
 	case "agent.thread-file-list":
 		return s.handleListThreadFiles, true
+	case "agent.thread-workspace-diff":
+		return s.handleWorkspaceDiff, true
 	case "agent.thread-workspace-list":
 		return s.handleListWorkspaceFiles, true
 	case "agent.thread-workspace-reveal":

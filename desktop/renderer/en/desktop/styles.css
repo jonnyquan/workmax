@@ -3640,3 +3640,85 @@ button.composer-chip:hover {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* --- Diff panel -------------------------------------------------------------
+   What the most recent turn changed. A first-class panel the way Codex's
+   review sidebar and Claude's diff viewer are: the reader sees not just that
+   files appeared but what is in them. */
+
+.diff-files {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.diff-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  height: auto;
+  padding: var(--sp-1) var(--sp-2);
+  border: none;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: hsl(var(--foreground));
+  font-size: var(--fs-small);
+  text-align: left;
+}
+
+.diff-file-row:hover {
+  background: hsl(var(--muted));
+}
+
+.diff-file-row.expanded {
+  background: hsl(var(--muted));
+}
+
+.diff-file-name {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-file-stat {
+  flex: none;
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.diff-patch {
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  max-height: 50vh;
+  overflow: auto;
+  border-radius: var(--r-control);
+  background: hsl(var(--code-surface));
+  color: hsl(var(--code-surface-foreground));
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.diff-line {
+  display: block;
+}
+
+.diff-line-add {
+  color: hsl(var(--cb-string));
+}
+
+.diff-line-del {
+  color: hsl(var(--cb-tag));
+}
+
+.diff-line-hunk {
+  color: hsl(var(--code-surface-foreground) / 0.5);
+}
+
+.diff-line-meta {
+  color: hsl(var(--code-surface-foreground) / 0.4);
+}

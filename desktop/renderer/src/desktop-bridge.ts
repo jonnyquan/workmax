@@ -397,6 +397,19 @@ export interface AgentThreadExport {
   bytes: number;
 }
 
+export interface AgentWorkspaceDiffFile {
+  path: string;
+  added: number;
+  removed: number;
+}
+
+export interface AgentWorkspaceDiff {
+  files: AgentWorkspaceDiffFile[];
+  patch: string;
+  truncated: boolean;
+  git: boolean;
+}
+
 export interface AgentWorkspaceFileList {
   items: AgentWorkspaceFile[];
   count: number;
@@ -692,6 +705,9 @@ export interface DesktopBridge {
     listWorkspaceFiles: (
       threadUUID: string
     ) => Promise<DesktopBridgeResult<AgentWorkspaceFileList>>;
+    workspaceDiff: (
+      threadUUID: string
+    ) => Promise<DesktopBridgeResult<AgentWorkspaceDiff>>;
     revealWorkspace: (
       threadUUID: string
     ) => Promise<DesktopBridgeResult<{ revealed: boolean }>>;
@@ -941,6 +957,14 @@ const ROUTES = {
     "agent.thread-workspace-list",
     "GET",
     "/agent/threads/:uuid/workspace",
+    "none",
+    null
+  ),
+  agentWorkspaceDiff: defineTypedRoute(
+    "agent.workspaceDiff",
+    "agent.thread-workspace-diff",
+    "GET",
+    "/agent/threads/:uuid/workspace/diff",
     "none",
     null
   ),
@@ -1224,6 +1248,14 @@ export function createDesktopBridge(
           encodeURIComponent(uuid)
         );
         return execute<AgentWorkspaceFileList>(deps, ROUTES.agentListWorkspaceFiles, path);
+      },
+      workspaceDiff: async (threadUUID) => {
+        const uuid = validateCanonicalV4UUID(threadUUID, "workspaceDiff threadUUID");
+        const path = ROUTES.agentWorkspaceDiff.path.replace(
+          ":uuid",
+          encodeURIComponent(uuid)
+        );
+        return execute<AgentWorkspaceDiff>(deps, ROUTES.agentWorkspaceDiff, path);
       },
       revealWorkspace: async (threadUUID) => {
         const uuid = validateCanonicalV4UUID(threadUUID, "revealWorkspace threadUUID");

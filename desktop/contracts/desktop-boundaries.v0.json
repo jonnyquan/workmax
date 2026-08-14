@@ -115,6 +115,10 @@
         "routeId": "agent.thread-workspace-list"
       },
       {
+        "bridgeMethod": "agent.workspaceDiff",
+        "routeId": "agent.thread-workspace-diff"
+      },
+      {
         "bridgeMethod": "agent.revealWorkspace",
         "routeId": "agent.thread-workspace-reveal"
       },
@@ -582,6 +586,18 @@
       "id": "agent.thread-workspace-list",
       "method": "GET",
       "path": "/agent/threads/:uuid/workspace",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "agent.thread-workspace-diff",
+      "method": "GET",
+      "path": "/agent/threads/:uuid/workspace/diff",
       "credential": "local-token",
       "requestPolicy": {
         "origin": "absent",

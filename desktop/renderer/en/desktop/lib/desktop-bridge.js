@@ -23,6 +23,7 @@ const ROUTES = {
     agentCreateThread: defineTypedRoute("agent.createThread", "agent.thread-put", "PUT", "/agent/threads/:uuid", "json", "application/json"),
     agentDeleteThread: defineTypedRoute("agent.deleteThread", "agent.thread-delete", "DELETE", "/agent/threads/:uuid", "none", null),
     agentListWorkspaceFiles: defineTypedRoute("agent.listWorkspaceFiles", "agent.thread-workspace-list", "GET", "/agent/threads/:uuid/workspace", "none", null),
+    agentWorkspaceDiff: defineTypedRoute("agent.workspaceDiff", "agent.thread-workspace-diff", "GET", "/agent/threads/:uuid/workspace/diff", "none", null),
     agentRevealWorkspace: defineTypedRoute("agent.revealWorkspace", "agent.thread-workspace-reveal", "POST", "/agent/threads/:uuid/workspace/reveal", "none", null),
     agentExportThread: defineTypedRoute("agent.exportThread", "agent.thread-export", "POST", "/agent/threads/:uuid/export", "none", null),
     agentSearchMessages: defineTypedRoute("agent.searchMessages", "agent.search", "GET", "/agent/search", "none", null),
@@ -124,6 +125,11 @@ function createDesktopBridge(deps) {
                 const uuid = validateCanonicalV4UUID(threadUUID, "listWorkspaceFiles threadUUID");
                 const path = ROUTES.agentListWorkspaceFiles.path.replace(":uuid", encodeURIComponent(uuid));
                 return execute(deps, ROUTES.agentListWorkspaceFiles, path);
+            },
+            workspaceDiff: async (threadUUID) => {
+                const uuid = validateCanonicalV4UUID(threadUUID, "workspaceDiff threadUUID");
+                const path = ROUTES.agentWorkspaceDiff.path.replace(":uuid", encodeURIComponent(uuid));
+                return execute(deps, ROUTES.agentWorkspaceDiff, path);
             },
             revealWorkspace: async (threadUUID) => {
                 const uuid = validateCanonicalV4UUID(threadUUID, "revealWorkspace threadUUID");
