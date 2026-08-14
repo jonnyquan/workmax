@@ -179,6 +179,7 @@ import {
   closeQuickSwitcher,
   openQuickSwitcher,
   renderThreads,
+  updateThreadRunning,
 } from "./threads.js";
 import {
   attachLastTurnLog,
@@ -2139,6 +2140,7 @@ export function submitChat(event) {
   contextState.selectedFileIDs = new Set();
   renderAttachments();
   setTurnState("Working");
+  if (state.activeTurn?.threadUUID) updateThreadRunning(state.activeTurn.threadUUID, true);
   renderTaskContext();
   updateComposerState();
 
@@ -2281,6 +2283,7 @@ function resumeRecoverableTurn() {
     }
     activeTurn.turnID = openResult.turnID;
     setTurnState("Working");
+  if (state.activeTurn?.threadUUID) updateThreadRunning(state.activeTurn.threadUUID, true);
   renderTaskContext();
     const pendingEvents = activeTurn.pendingEvents;
     activeTurn.pendingEvents = [];
@@ -2297,6 +2300,7 @@ function resumeRecoverableTurn() {
     state.recoveryFeedbackKind = "error";
     activeTurn.assistantBubble.textContent = "Response recovery is waiting to retry.";
     setTurnState("Interrupted");
+  updateThreadRunning(state.selectedThreadUUID, false);
     updateComposerState();
     setStatus("The interrupted response could not be resumed yet.", "error");
     turnRecoveryResumeButton.focus();
@@ -2333,6 +2337,7 @@ async function dismissRecoverableTurn() {
     state.dismissingRecovery = false;
     removeRecoverableTurn(recoverable.turn_uuid);
     setTurnState("Ready");
+  updateThreadRunning(state.selectedThreadUUID, false);
     setStatus(
       result.canceled
         ? "Interrupted response dismissed."
@@ -2363,6 +2368,7 @@ export function keepRecoverableTurnForRetry(activeTurn, feedback, statusMessage)
     activeTurn.assistantBubble.textContent = "Response recovery is waiting to retry.";
   }
   setTurnState("Interrupted");
+  updateThreadRunning(state.selectedThreadUUID, false);
   updateComposerState();
   setStatus(statusMessage, "error");
   turnRecoveryResumeButton.focus();
@@ -2445,6 +2451,7 @@ export function handleInitialTurnBusy(activeTurn) {
       "Response interrupted before it produced text.";
   }
   setTurnState("Interrupted");
+  updateThreadRunning(state.selectedThreadUUID, false);
   setStatus(
     "This request is still busy; no new execution was started. Checking recovery state...",
     "error"
@@ -2653,6 +2660,7 @@ async function stopActiveTurn() {
     }
     activeTurn.stopRequested = false;
     setTurnState("Working");
+  if (state.activeTurn?.threadUUID) updateThreadRunning(state.activeTurn.threadUUID, true);
     renderTaskContext();
     updateComposerState();
   } catch {
@@ -2681,6 +2689,7 @@ async function stopActiveTurn() {
     }
     activeTurn.stopRequested = false;
     setTurnState("Working");
+  if (state.activeTurn?.threadUUID) updateThreadRunning(state.activeTurn.threadUUID, true);
     renderTaskContext();
     updateComposerState();
     setStatus("The Agent turn could not be stopped yet.", "error");
@@ -3038,6 +3047,7 @@ export async function refresh() {
   emptyState.hidden = false;
   threadPanel.hidden = true;
   setTurnState("Ready");
+  updateThreadRunning(state.selectedThreadUUID, false);
   updateComposerState();
   // A source build stamps no version, and "sidecar unknown · app unknown"
   // reads as a fault rather than as the absence of a number. Say nothing

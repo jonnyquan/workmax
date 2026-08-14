@@ -3730,3 +3730,18 @@ button.composer-chip:hover {
   color: hsl(var(--primary));
   background: hsl(var(--primary) / 0.1);
 }
+
+/* A dot on the conversation that has an agent working in it right now.
+   Primary-coloured, static (not animated — a pulsing dot on every running
+   thread would be the kind of motion that earns a reduced-motion query). */
+.thread-button.thread-running::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: var(--sp-2);
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: hsl(var(--primary));
+  transform: translateY(-50%);
+}

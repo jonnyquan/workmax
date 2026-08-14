@@ -219,6 +219,7 @@ async function deleteThread(thread) {
 function renderThreadButton(thread) {
   const item = document.createElement("li");
   item.className = "thread-item reveal-on-hover-host";
+  item.dataset.threadUuid = thread.uuid;
   const button = document.createElement("button");
   button.type = "button";
   button.className = "thread-button";
@@ -330,6 +331,18 @@ export function renderThreads() {
   }
   renderEmptyState();
 }
+// Update the running indicator on the thread that has an active turn, without
+// re-rendering the whole list. Called when a turn starts and when it settles.
+export function updateThreadRunning(threadUUID, running) {
+  if (!threadList) return;
+  for (const item of threadList.children) {
+    const button = item.querySelector?.(".thread-button");
+    if (!button) continue;
+    const isActive = item.dataset?.threadUuid === threadUUID;
+    button.classList.toggle("thread-running", isActive && running);
+  }
+}
+
 let quickSwitcherIndex = 0;
 
 // The palette's action half: things you can DO from the keyboard, not just
