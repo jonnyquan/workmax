@@ -21,6 +21,7 @@ type LocalThreadRow struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 	CloudSync    string    `json:"cloud_sync_state"`
 	Pinned       bool      `json:"pinned"`
+	Project      string    `json:"project"`
 }
 
 // LocalMessageRow is the per-message row the renderer sees from
@@ -87,6 +88,12 @@ func ListLocalThreads(db *gorm.DB, uid uint64, limit int, includePaused bool) ([
 		         SELECT 1 FROM w_desktop_thread_pin p
 		          WHERE p.uid = w_workagent_thread.uid
 		            AND p.thread_uuid = w_workagent_thread.uuid
+		       ),
+		       COALESCE(
+		         (SELECT pr.project_key FROM w_desktop_thread_project pr
+		           WHERE pr.uid = w_workagent_thread.uid
+		             AND pr.thread_uuid = w_workagent_thread.uuid),
+		         ''
 		       )
 		  FROM w_workagent_thread
 		 WHERE agent_type = 'general_agent'`
@@ -120,7 +127,7 @@ func ListLocalThreads(db *gorm.DB, uid uint64, limit int, includePaused bool) ([
 			updatedAt string
 			pinned    int
 		)
-		if err := rows.Scan(&r.UUID, &r.Name, &r.AgentMode, &r.MessageCount, &updatedAt, &r.CloudSync, &pinned); err != nil {
+		if err := rows.Scan(&r.UUID, &r.Name, &r.AgentMode, &r.MessageCount, &updatedAt, &r.CloudSync, &pinned, &r.Project); err != nil {
 			return nil, fmt.Errorf("list threads: scan: %w", err)
 		}
 		r.Pinned = pinned == 1

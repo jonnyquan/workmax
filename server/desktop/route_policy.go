@@ -182,6 +182,8 @@ var currentSidecarRoutePolicies = []SidecarRoutePolicy{
 	newCurrentSidecarRoutePolicy("agent.search", http.MethodGet, "/agent/search", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-pin", http.MethodPost, "/agent/threads/:uuid/pin", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-unpin", http.MethodDelete, "/agent/threads/:uuid/pin", SidecarBodyForbidden, 0),
+	newCurrentSidecarRoutePolicy("agent.thread-project-set", http.MethodPut, "/agent/threads/:uuid/project", SidecarBodyRequired, 1<<10, "application/json"),
+	newCurrentSidecarRoutePolicy("agent.thread-project-clear", http.MethodDelete, "/agent/threads/:uuid/project", SidecarBodyForbidden, 0),
 	newCurrentSidecarRoutePolicy("agent.thread-cloud-sync", http.MethodPut, "/agent/threads/:uuid/cloud-sync", SidecarBodyRequired, maxThreadCloudSyncBodyBytes, "application/json"),
 	newCurrentSidecarRoutePolicy("settings.model-catalog.get", http.MethodGet, "/settings/model-catalog", SidecarBodyForbidden, 0),
 
@@ -267,6 +269,8 @@ func newCurrentSidecarRoutePolicy(
 		bodyTooLargeError = "mind feed body too large"
 	case "agent.thread-cloud-sync":
 		bodyTooLargeError = "cloud sync request body too large"
+	case "agent.thread-project-set":
+		bodyTooLargeError = "project body too large"
 	}
 	return SidecarRoutePolicy{
 		ID:         id,
@@ -500,6 +504,10 @@ func (s *Server) sidecarHandler(routeID string) (gin.HandlerFunc, bool) {
 		return s.handleExportThread, true
 	case "agent.search":
 		return s.handleSearchMessages, true
+	case "agent.thread-project-set":
+		return s.handleSetThreadProject, true
+	case "agent.thread-project-clear":
+		return s.handleClearThreadProject, true
 	case "agent.thread-pin":
 		return s.handlePinThread, true
 	case "agent.thread-unpin":

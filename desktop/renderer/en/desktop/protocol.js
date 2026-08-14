@@ -157,6 +157,9 @@ function parseThread(value) {
     // A local view preference; anything but literal true means unpinned, so
     // an older sidecar that omits the field degrades to the old behaviour.
     pinned: value.pinned === true,
+    // A local view preference for grouping. Empty = unaffiliated. An older
+    // sidecar that omits the field degrades to ungrouped.
+    project: optionalString(value.project),
   };
 }
 

@@ -2027,20 +2027,33 @@ async function testThreadGroupingAndSearch() {
   // Array.from because these crossed a VM realm boundary: same contents,
   // different Array prototype, and deepStrictEqual cares.
   const ids = (bucket) => Array.from(bucket).map((t) => t.uuid).sort();
+  // The shape is { pinned, projects, ungrouped: { today, week, older } }.
+  // These threads have no project assignment, so they all land in the
+  // ungrouped date buckets — the project grouping is exercised by its own test.
   assert.deepEqual(
-    ids(groups.today),
+    ids(groups.ungrouped.today),
     ["t-future", "t-today"],
     "today holds the same calendar day, and a future timestamp stays there rather than forming its own bucket",
   );
   assert.deepEqual(
-    ids(groups.week),
+    ids(groups.ungrouped.week),
     ["t-lastnight", "t-week"],
     "late last night belongs to the previous week bucket by calendar day, not to today by elapsed hours",
   );
   assert.deepEqual(
-    ids(groups.older),
+    ids(groups.ungrouped.older),
     ["t-broken", "t-old"],
     "an unparseable timestamp is kept in Older; dropping it would hide a real conversation",
+  );
+  assert.deepEqual(
+    Array.from(groups.pinned),
+    [],
+    "no pinned threads in the fixture",
+  );
+  assert.deepEqual(
+    Object.keys(groups.projects),
+    [],
+    "no project assignments in the fixture — projects is empty",
   );
 
   // Group headings appear only for buckets that have something in them.
@@ -5971,6 +5984,162 @@ async function testPinnedThreadsLeadTheSidebar() {
   await settle();
   assert.deepEqual(unpinCalls, ["old-thread"]);
   assert.deepEqual(groupLabels(), ["Today", "Older"], "unpinning restores the calendar");
+}
+
+// --- Project grouping -------------------------------------------------------
+//
+// Threads with a project assignment render under their own collapsible section,
+// between Pinned and the date groups. The "Move to project" button opens an
+// inline editor (window.prompt is not honoured by WKWebView), and committing
+// calls the bridge method that owns the assignment.
+async function testProjectGroupingAndMoveAction() {
+  // Two threads share a project, one has a different project, one has none.
+  // Built from LOCAL date components so the calendar grouping of the
+  // unaffiliated thread is stable regardless of the machine's timezone.
+  const local = (y, m, d) => new Date(y, m - 1, d, 9, 0, 0).toISOString();
+  let projectFor = (uuid) => {
+    if (uuid === "p-deck-a" || uuid === "p-deck-b") return "Q3 Deck";
+    if (uuid === "p-budget") return "Budget";
+    return "";
+  };
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        const rows = [
+          { ...thread("p-deck-a", "Slide 1"), updated_at: local(2026, 8, 8), project: projectFor("p-deck-a") },
+          { ...thread("p-deck-b", "Slide 2"), updated_at: local(2026, 8, 7), project: projectFor("p-deck-b") },
+          { ...thread("p-budget", "Numbers"), updated_at: local(2026, 8, 6), project: projectFor("p-budget") },
+          { ...thread("p-loose", "Scratch"), updated_at: local(2026, 8, 8), project: projectFor("p-loose") },
+        ];
+        return response({ items: rows });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const { desktopBridge } = localModeBridge({ localRoute: true });
+  const setCalls = [];
+  const clearCalls = [];
+  desktopBridge.agent.setThreadProject = async (uuid, key) => {
+    setCalls.push([uuid, key]);
+    projectFor = (id) => (id === uuid ? key : projectFor(id));
+    return typedSuccess({ thread_uuid: uuid, project: key });
+  };
+  desktopBridge.agent.clearThreadProject = async (uuid) => {
+    clearCalls.push(uuid);
+    projectFor = (id) => (id === uuid ? "" : projectFor(id));
+    return typedSuccess({ thread_uuid: uuid, project: "" });
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  const list = document.byId.get("thread-list");
+
+  // Section headings: "Q3 Deck" and "Budget" appear as project groups, then
+  // "Today" for the unaffiliated thread. No "Pinned" — no pins in the fixture.
+  const headings = walk(list, (n) => n.classList?.contains("thread-group"))
+    .map((n) => n.textContent);
+  assert.ok(
+    headings.includes("▾Q3 Deck") && headings.includes("▾Budget"),
+    "project threads render under their project key, with the collapse indicator",
+  );
+  assert.ok(
+    headings.includes("Today"),
+    "a thread without a project still falls through to the date groups",
+  );
+  assert.ok(
+    !headings.includes("Pinned"),
+    "no pinned threads, no Pinned heading",
+  );
+
+  // The project heading is collapsible. Clicking it hides its threads but not
+  // the threads of other projects or the date groups.
+  const deckHeading = walk(
+    list,
+    (n) => n.classList?.contains("thread-project-group") && n.textContent.includes("Q3 Deck"),
+  )[0];
+  assert.ok(deckHeading, "the Q3 Deck project has a clickable heading");
+  deckHeading.click();
+  const deckItems = walk(
+    list,
+    (n) => n.dataset?.threadUuid === "p-deck-a" || n.dataset?.threadUuid === "p-deck-b",
+  );
+  assert.equal(
+    deckItems.every((n) => n.hidden),
+    true,
+    "collapsing a project hides its threads",
+  );
+  assert.equal(
+    deckHeading.textContent,
+    "▸Q3 Deck",
+    "the indicator flips to collapsed",
+  );
+  // Expand again.
+  deckHeading.click();
+  assert.equal(
+    walk(list, (n) => n.dataset?.threadUuid === "p-deck-a")[0].hidden,
+    false,
+    "expanding restores the threads",
+  );
+
+  // The "Move to project" button opens an inline editor. Typing a name and
+  // pressing Enter calls setThreadProject on the bridge.
+  const looseItem = walk(
+    list,
+    (n) => n.dataset?.threadUuid === "p-loose",
+  )[0];
+  const projectButton = walk(
+    looseItem,
+    (n) => n.classList?.contains("thread-project"),
+  )[0];
+  assert.ok(projectButton, "every row offers a Project button");
+  projectButton.click();
+  const input = looseItem.querySelector
+    ? looseItem.querySelector(".thread-project-input")
+    : walk(looseItem, (n) => n.classList?.contains("thread-project-input"))[0];
+  assert.ok(input, "clicking Project opens an inline input");
+  input.value = "Onboarding";
+  input.dispatch("keydown", { key: "Enter" });
+  await settle();
+  await settle();
+  assert.deepEqual(
+    setCalls,
+    [["p-loose", "Onboarding"]],
+    "Enter in the editor commits via setThreadProject",
+  );
+
+  // Clearing the project: open the editor on the now-grouped thread, empty the
+  // field, Enter. Empty string routes to clearThreadProject, not setThreadProject.
+  // After reload the thread reappears under the date groups.
+  const onboardingHeading = walk(
+    list,
+    (n) => n.classList?.contains("thread-project-group") && n.textContent.includes("Onboarding"),
+  )[0];
+  assert.ok(onboardingHeading, "the thread moved into its new project section");
+  const movedItem = walk(
+    list,
+    (n) => n.dataset?.threadUuid === "p-loose",
+  )[0];
+  const movedButton = walk(
+    movedItem,
+    (n) => n.classList?.contains("thread-project"),
+  )[0];
+  movedButton.click();
+  const movedInput = movedItem.querySelector
+    ? movedItem.querySelector(".thread-project-input")
+    : walk(movedItem, (n) => n.classList?.contains("thread-project-input"))[0];
+  movedInput.value = "";
+  movedInput.dispatch("keydown", { key: "Enter" });
+  await settle();
+  await settle();
+  assert.deepEqual(
+    clearCalls,
+    ["p-loose"],
+    "an empty value clears the project assignment rather than setting empty",
+  );
 }
 
 async function testExportThreadWritesAndReveals() {
@@ -9952,6 +10121,7 @@ await testPaletteOpensWithoutThreads();
 await testColumnFolds();
 await testSidebarSearchIconOpensThePalette();
 await testPinnedThreadsLeadTheSidebar();
+await testProjectGroupingAndMoveAction();
 await testModesParseFailureNamesTheSkew();
 await testLocalIdentityIsNamedWithoutAnyModel();
 await testConnectedAccountIsShownAsABindingOnTheLocalIdentity();

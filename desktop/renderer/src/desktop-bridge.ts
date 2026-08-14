@@ -723,6 +723,13 @@ export interface DesktopBridge {
     unpinThread: (
       threadUUID: string
     ) => Promise<DesktopBridgeResult<{ pinned: boolean }>>;
+    setThreadProject: (
+      threadUUID: string,
+      projectKey: string
+    ) => Promise<DesktopBridgeResult<{ project_key: string }>>;
+    clearThreadProject: (
+      threadUUID: string
+    ) => Promise<DesktopBridgeResult<{ cleared: boolean }>>;
     setThreadCloudSync: (
       threadUUID: string,
       state: "paused" | "synced"
@@ -1093,6 +1100,12 @@ const ROUTES = {
     "json",
     "application/json"
   ),
+  agentThreadProjectSet: defineTypedRoute(
+    "agent.setThreadProject", "agent.thread-project-set", "PUT", "/agent/threads/:uuid/project", "json", "application/json"
+  ),
+  agentThreadProjectClear: defineTypedRoute(
+    "agent.clearThreadProject", "agent.thread-project-clear", "DELETE", "/agent/threads/:uuid/project", "none", null
+  ),
   agentSetThreadCloudSync: defineTypedRoute(
     "agent.setThreadCloudSync",
     "agent.thread-cloud-sync",
@@ -1289,6 +1302,16 @@ export function createDesktopBridge(
         const uuid = validateCanonicalV4UUID(threadUUID, "unpinThread threadUUID");
         const path = ROUTES.agentUnpinThread.path.replace(":uuid", encodeURIComponent(uuid));
         return execute<{ pinned: boolean }>(deps, ROUTES.agentUnpinThread, path);
+      },
+      setThreadProject: async (threadUUID, projectKey) => {
+        const uuid = validateCanonicalV4UUID(threadUUID, "setThreadProject threadUUID");
+        const path = ROUTES.agentThreadProjectSet.path.replace(":uuid", encodeURIComponent(uuid));
+        return execute<{ project_key: string }>(deps, ROUTES.agentThreadProjectSet, path, { project_key: projectKey });
+      },
+      clearThreadProject: async (threadUUID) => {
+        const uuid = validateCanonicalV4UUID(threadUUID, "clearThreadProject threadUUID");
+        const path = ROUTES.agentThreadProjectClear.path.replace(":uuid", encodeURIComponent(uuid));
+        return execute<{ cleared: boolean }>(deps, ROUTES.agentThreadProjectClear, path);
       },
       setThreadCloudSync: async (threadUUID, state) => {
         const uuid = validateCanonicalV4UUID(

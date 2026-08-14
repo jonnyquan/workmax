@@ -24,7 +24,7 @@ func TestApplyRunsMessageCreatedOrderIndexMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	want := []string{"0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014"}
+	want := []string{"0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015"}
 	if len(applied) != len(want) {
 		t.Fatalf("applied: got %v, want %v", applied, want)
 	}
@@ -173,6 +173,20 @@ func TestApplyRunsMessageCreatedOrderIndexMigration(t *testing.T) {
 	// cannot tell an answer's minds apart.
 	if provenanceColumns != 3 {
 		t.Fatalf("provenance columns = %d, want 3", provenanceColumns)
+	}
+
+	// 0015: thread projects — a local view preference table, same shape as pin.
+	var projectTableCount int
+	if err := db.Raw(`
+		SELECT COUNT(*)
+		  FROM sqlite_master
+		 WHERE type = 'table'
+		   AND name = 'w_desktop_thread_project'
+	`).Row().Scan(&projectTableCount); err != nil {
+		t.Fatalf("scan project table: %v", err)
+	}
+	if projectTableCount != 1 {
+		t.Fatalf("project table count = %d, want 1", projectTableCount)
 	}
 
 	if err := db.Exec(`

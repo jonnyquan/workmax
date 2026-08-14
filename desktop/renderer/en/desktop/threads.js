@@ -57,20 +57,43 @@ export function localCalendarDay(date) {
   return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000;
 }
 
-const THREAD_GROUPS = [
-  { key: "pinned", label: "Pinned" },
+// The date-based groups, used for threads that have neither a pin nor a
+// project. Pinned threads and project threads are split out separately (below),
+// so what remains is "the rest" — and the rest are still grouped by local
+// calendar day, because the case that makes the difference is a conversation
+// from late last night read at 1am: "3 hours ago" is true and useless,
+// "Yesterday" is what someone is looking for.
+const UNGROUPED_GROUPS = [
   { key: "today", label: "Today" },
   { key: "week", label: "Previous 7 days" },
   { key: "older", label: "Older" },
 ];
 
+const PINNED_GROUP_LABEL = "Pinned";
+
 export function groupThreads(threads, now) {
   const today = localCalendarDay(now);
-  const groups = { pinned: [], today: [], week: [], older: [] };
+  const pinned = [];
+  const projects = {};
+  const ungrouped = { today: [], week: [], older: [] };
   for (const thread of threads) {
     if (thread.pinned) {
-      // A pin overrides the calendar: that is what pinning means.
-      groups.pinned.push(thread);
+      // A pin overrides everything — the calendar AND a project assignment.
+      // That is what pinning means: this conversation leads the list, full
+      // stop, and its project membership is paused until it is unpinned.
+      pinned.push(thread);
+      continue;
+    }
+    const projectKey = typeof thread.project === "string" ? thread.project.trim() : "";
+    if (projectKey) {
+      // Insertion order is preserved on plain objects for string keys, so the
+      // first thread to mention a project defines where that project's section
+      // appears — which is the server's sort order, already decided, not
+      // re-sorted here.
+      if (!Object.prototype.hasOwnProperty.call(projects, projectKey)) {
+        projects[projectKey] = [];
+      }
+      projects[projectKey].push(thread);
       continue;
     }
     const updated = new Date(thread.updated_at);
@@ -81,15 +104,15 @@ export function groupThreads(threads, now) {
       // because grouping should not be the thing that breaks if that parser
       // ever softens — and because a thread with no readable date is still a
       // thread the user has.
-      groups.older.push(thread);
+      ungrouped.older.push(thread);
       continue;
     }
     const ageInDays = today - localCalendarDay(updated);
-    if (ageInDays <= 0) groups.today.push(thread);
-    else if (ageInDays <= 7) groups.week.push(thread);
-    else groups.older.push(thread);
+    if (ageInDays <= 0) ungrouped.today.push(thread);
+    else if (ageInDays <= 7) ungrouped.week.push(thread);
+    else ungrouped.older.push(thread);
   }
-  return groups;
+  return { pinned, projects, ungrouped };
 }
 
 // Matches on the title only. Message bodies live in SQLite and are not loaded
@@ -121,6 +144,88 @@ async function toggleThreadPin(thread) {
   // sidebar should show exactly what the sidecar would answer, not a local
   // approximation of it.
   await loadThreads();
+}
+
+// Project assignment. Like pin, the sidecar owns the sort: a thread that moves
+// into a project changes where it appears in the list, and the sidebar should
+// show what the sidecar would answer rather than a local guess at the new
+// layout. Empty string clears the assignment.
+async function commitThreadProject(thread, projectKey) {
+  const agent = window.desktopBridge?.agent;
+  const trimmed = (projectKey || "").trim();
+  const method = trimmed ? agent?.setThreadProject : agent?.clearThreadProject;
+  if (typeof method !== "function") return;
+  try {
+    const result = parseDesktopBridgeResult(
+      trimmed
+        ? await method.call(agent, thread.uuid, trimmed)
+        : await method.call(agent, thread.uuid),
+      "thread project result"
+    );
+    if (!result.ok) {
+      const raw = isRecord(result.error) ? result.error.error : result.error;
+      throw new Error(sanitizeErrorMessage(raw) || "Could not set the project");
+    }
+  } catch (error) {
+    setStatus(String(error.message || error), "error");
+    return;
+  }
+  await loadThreads();
+}
+
+// The inline editor for "Move to project". window.prompt would be the simplest
+// input a browser can offer, but WKWebView (the only webview this app ships in)
+// does not honour it: the call returns null without blocking or showing any
+// UI, so the user clicks "Project" and nothing happens. An inline field on the
+// row itself is the reliable path, and the only one a test harness can drive
+// without a real prompt implementation.
+function openProjectEditor(thread, item) {
+  if (item.querySelector?.(".thread-project-editor")) return;
+  const editor = document.createElement("div");
+  editor.className = "thread-project-editor";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "thread-project-input";
+  input.value = thread.project || "";
+  input.setAttribute("placeholder", "Project name");
+  input.setAttribute(
+    "aria-label",
+    `Project for ${thread.name || "Untitled thread"}`
+  );
+  // A flag, not a DOM probe: blur fires again when the editor is torn down
+  // (Enter or Escape), and without it the second blur would double-commit or
+  // double-cancel. document.body.contains would do the same job in a real
+  // browser but is absent from the test harness's fake DOM.
+  let settled = false;
+  const commit = () => {
+    if (settled) return;
+    settled = true;
+    void commitThreadProject(thread, input.value);
+    editor.remove();
+  };
+  const cancel = () => {
+    if (settled) return;
+    settled = true;
+    editor.remove();
+  };
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancel();
+    }
+  });
+  input.addEventListener("blur", () => {
+    // Blur without Enter is the user clicking away — treat it as cancel, not
+    // commit, so a stray click does not assign a half-typed name.
+    cancel();
+  });
+  editor.appendChild(input);
+  item.appendChild(editor);
+  input.focus();
+  input.select?.();
 }
 
 // The sync switch: "does this conversation leave my machine?"
@@ -253,6 +358,22 @@ function renderThreadButton(thread) {
     void toggleThreadPin(thread);
   });
   item.appendChild(pin);
+  // "Move to project": same shape and position pattern as pin. The editor opens
+  // inline rather than via window.prompt — see openProjectEditor for why.
+  if (typeof window.desktopBridge?.agent?.setThreadProject === "function") {
+    const project = document.createElement("button");
+    project.type = "button";
+    project.className = "thread-project reveal-on-hover";
+    project.textContent = "Project";
+    project.setAttribute(
+      "aria-label",
+      `Set project for ${thread.name || "Untitled thread"}`
+    );
+    project.addEventListener("click", () => {
+      openProjectEditor(thread, item);
+    });
+    item.appendChild(project);
+  }
   if (threadSyncSwitchable(thread)) {
     const paused = thread.cloud_sync_state === "paused";
     const sync = document.createElement("button");
@@ -302,6 +423,25 @@ function renderThreadButton(thread) {
 // that an armed Delete does not lie in wait for a later stray click.
 export const DELETE_ARM_MS = 4000;
 
+// Collapses or expands a project section. Walks forward through the list's
+// children from the heading until the next group heading, hiding each thread
+// item in between. The indicator is passed in by the heading builder so the
+// toggle does not need querySelector — the test harness's fake element does
+// not implement it, and the reference is already in scope where the heading is
+// built.
+function toggleProjectGroup(heading, indicator) {
+  const collapsed = heading.classList.toggle("thread-project-collapsed");
+  if (indicator) indicator.textContent = collapsed ? "▸" : "▾";
+  heading.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  let node = heading.nextSibling;
+  while (node && !(node.classList?.contains("thread-group"))) {
+    if (node.classList?.contains("thread-item")) {
+      node.hidden = collapsed;
+    }
+    node = node.nextSibling;
+  }
+}
+
 // The rail lists every cached conversation, always. It used to also be the
 // result surface for a filter typed into the rail's own search field, which is
 // why it had a second empty state ("No conversations match …"); searching
@@ -318,8 +458,55 @@ export function renderThreads() {
   }
 
   const groups = groupThreads(state.threads, new Date());
-  for (const group of THREAD_GROUPS) {
-    const bucket = groups[group.key];
+
+  // Pinned leads. A pin overrides project and calendar alike.
+  if (groups.pinned.length > 0) {
+    const heading = document.createElement("li");
+    heading.className = "thread-group";
+    heading.textContent = PINNED_GROUP_LABEL;
+    threadList.appendChild(heading);
+    for (const thread of groups.pinned) {
+      threadList.appendChild(renderThreadButton(thread));
+    }
+  }
+
+  // Projects: each project key gets its own collapsible section, in the order
+  // the keys were first seen (insertion order of the plain object, which is the
+  // server's sort order already applied to the list).
+  for (const [projectKey, bucket] of Object.entries(groups.projects)) {
+    if (bucket.length === 0) continue;
+    const heading = document.createElement("li");
+    heading.className = "thread-group thread-project-group";
+    const indicator = document.createElement("span");
+    indicator.className = "thread-project-toggle";
+    indicator.setAttribute("aria-hidden", "true");
+    indicator.textContent = "▾"; // ▾ expanded
+    const label = document.createElement("span");
+    label.className = "thread-project-label";
+    label.textContent = projectKey;
+    heading.append(indicator, label);
+    heading.setAttribute("role", "button");
+    heading.setAttribute("tabindex", "0");
+    heading.setAttribute("aria-expanded", "true");
+    heading.addEventListener("click", () => {
+      toggleProjectGroup(heading, indicator);
+    });
+    heading.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        toggleProjectGroup(heading, indicator);
+      }
+    });
+    threadList.appendChild(heading);
+    for (const thread of bucket) {
+      threadList.appendChild(renderThreadButton(thread));
+    }
+  }
+
+  // Ungrouped: threads with neither a pin nor a project, grouped by local
+  // calendar day.
+  for (const group of UNGROUPED_GROUPS) {
+    const bucket = groups.ungrouped[group.key];
     if (bucket.length === 0) continue;
     const heading = document.createElement("li");
     heading.className = "thread-group";

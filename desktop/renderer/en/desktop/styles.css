@@ -949,6 +949,33 @@ textarea::placeholder {
   padding-top: var(--sp-1);
 }
 
+/* A project section heading is interactive, not just a label: it collapses and
+   expands its threads. The toggle indicator sits before the name; the heading
+   carries the same uppercase weight as the date groups so the two read as one
+   system. The cursor is left to the global control policy ([role="button"] gets
+   cursor:default from the one rule that owns it), not re-declared here. */
+.thread-project-group {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.thread-project-toggle {
+  display: inline-block;
+  font-size: var(--fs-micro);
+  line-height: 1;
+}
+
+.thread-project-label {
+  /* textContent from the group rule already uppercases this via the parent. */
+}
+
+/* The cursor tells the whole row is clickable; the hover tint is the same one
+   a thread-button gets. */
+.thread-project-group:hover {
+  color: hsl(var(--foreground));
+}
+
 .thread-item {
   position: relative;
   width: 100%;
@@ -1027,7 +1054,8 @@ textarea::placeholder {
    and keyboard focus work regardless: opacity hides, it does not disable. */
 .thread-delete,
 .thread-pin,
-.thread-sync {
+.thread-sync,
+.thread-project {
   position: absolute;
   top: 6px;
   right: 6px;
@@ -1054,6 +1082,55 @@ textarea::placeholder {
    only see by hovering is a fact the user does not have. */
 .thread-item:has(.thread-sync) .thread-pin {
   right: 74px;
+}
+
+/* The project button sits to the LEFT of pin, so it stacks behind pin's shift
+   rules: whatever pushes pin outward also pushes project one more step. Delete
+   and sync are mutually exclusive (local vs synced), so the two :has rules
+   never combine. */
+.thread-project {
+  right: 66px;
+}
+
+.thread-item:has(.thread-delete) .thread-project {
+  right: 122px;
+}
+
+.thread-item:has(.thread-sync) .thread-project {
+  right: 134px;
+}
+
+/* The inline "Move to project" editor. Overlays the whole row so the field is
+   wide enough to type a name — the buttons underneath are hidden, not
+   disabled, and reappear when the editor commits or cancels. */
+.thread-project-editor {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  background: hsl(var(--card));
+  border-radius: var(--r-control);
+  box-shadow: 0 0 0 1px hsl(var(--border));
+}
+
+.thread-project-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-1);
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--r-control);
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-size: var(--fs-small);
+}
+
+.thread-project-input:focus {
+  border-color: hsl(var(--primary) / 0.5);
+  outline: none;
 }
 
 .thread-sync.paused {

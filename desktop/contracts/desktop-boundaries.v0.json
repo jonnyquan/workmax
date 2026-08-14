@@ -135,6 +135,14 @@
         "routeId": "agent.thread-pin"
       },
       {
+        "bridgeMethod": "agent.setThreadProject",
+        "routeId": "agent.thread-project-set"
+      },
+      {
+        "bridgeMethod": "agent.clearThreadProject",
+        "routeId": "agent.thread-project-clear"
+      },
+      {
         "bridgeMethod": "agent.unpinThread",
         "routeId": "agent.thread-unpin"
       },
@@ -646,6 +654,33 @@
       "id": "agent.thread-pin",
       "method": "POST",
       "path": "/agent/threads/:uuid/pin",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "forbidden",
+        "contentTypes": [],
+        "maxBodyBytes": 0
+      }
+    },
+    {
+      "id": "agent.thread-project-set",
+      "method": "PUT",
+      "path": "/agent/threads/:uuid/project",
+      "credential": "local-token",
+      "requestPolicy": {
+        "origin": "absent",
+        "body": "required",
+        "contentTypes": [
+          "application/json"
+        ],
+        "maxBodyBytes": 1024,
+        "bodyTooLargeError": "project body too large"
+      }
+    },
+    {
+      "id": "agent.thread-project-clear",
+      "method": "DELETE",
+      "path": "/agent/threads/:uuid/project",
       "credential": "local-token",
       "requestPolicy": {
         "origin": "absent",

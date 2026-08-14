@@ -46,6 +46,13 @@ func openHistoryTestDB(t testing.TB) *gorm.DB {
 		pinned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (uid, thread_uuid)
 	)`)
+	exec(`CREATE TABLE w_desktop_thread_project (
+		uid INTEGER NOT NULL,
+		thread_uuid TEXT NOT NULL,
+		project_key TEXT NOT NULL DEFAULT '',
+		assigned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (uid, thread_uuid)
+	)`)
 	exec(`CREATE TABLE w_workagent_message (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		uid INTEGER NOT NULL DEFAULT 0,
