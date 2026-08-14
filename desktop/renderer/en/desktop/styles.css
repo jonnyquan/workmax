@@ -841,8 +841,7 @@ textarea::placeholder {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border-right: 1px solid hsl(var(--border));
-  background: hsl(var(--background));
+  background: hsl(var(--muted) / 0.4);
 }
 
 /* One row: the product, and nothing else. The search and fold icons that used
@@ -2539,7 +2538,7 @@ body:has(#thread-panel[hidden]) #context-panel-button {
    there are no rules between messages, because a rule between every turn is a
    ledger, not a conversation. */
 .message.user:not(:first-child) {
-  margin-top: var(--sp-6);
+  margin-top: var(--sp-7);
 }
 
 /* Who said it. Sentence case, not a shouted uppercase label: the transcript
@@ -2606,11 +2605,11 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 }
 
 .message.user .bubble {
-  margin-left: auto;
-  /* The question is marked as the reader's own by a muted background, not by
-     the brand colour. The answer should be the visual lead, and a brand-tinted
-     question would compete with it. */
-  background: hsl(var(--muted));
+  /* Pure text, same as the answer — the conversation is a document. The
+     question is distinguished by weight, not by a container. */
+  background: transparent;
+  padding: 0;
+  font-weight: var(--fw-medium);
 }
 
 /* Waiting for the first token. The three dots occupy the empty bubble so the
@@ -3821,4 +3820,12 @@ button.composer-chip:hover {
   border-radius: var(--r-pill);
   background: hsl(var(--primary));
   transform: translateY(-50%);
+}
+
+/* The conversation is a document, not a chat. Role labels (You, WorkMax)
+   make every exchange announce its speaker, which a reader who IS the speaker
+   does not need — Codex shows none. Hidden here rather than removed from the
+   DOM so the timestamps they carry survive for a future hover state. */
+.message-role {
+  display: none;
 }
