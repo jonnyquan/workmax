@@ -121,7 +121,11 @@ func UIHandlerWithOpener(renderer fs.FS, capability string, sidecarPort int, sid
 	inner.Handle(base+uiOpenExternalPath, newOpenExternalHandler(open))
 	inner.Handle(base+"/", securityHeaders(withAppearance(
 		base, renderer, sidecarPort, sidecarToken,
-		http.StripPrefix(base, http.FileServer(http.FS(renderer))),
+		// no-store on every renderer asset, not just the document: a dev run
+		// serves the working tree, and WKWebView fills in a missing policy
+		// with a Last-Modified heuristic that kept serving yesterday's
+		// modules next to today's index.html — one page, two vintages.
+		noStore(http.StripPrefix(base, http.FileServer(http.FS(renderer)))),
 	)))
 
 	outer := http.NewServeMux()
@@ -196,6 +200,20 @@ func securityHeaders(next http.Handler) http.Handler {
 		// The renderer is a single-window app shell; there is no legitimate
 		// reason for it to be framed or to expose device APIs.
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// noStore keeps the webview from answering asset requests from its HTTP
+// cache. http.FileServer sends no Cache-Control at all, and a missing policy
+// lets WKWebView apply a Last-Modified freshness heuristic — measured on this
+// repo, it kept serving a stale composer.js beside a fresh index.html after a
+// dev rebuild, one page drawn from two vintages of the renderer. Everything
+// here is a loopback fetch of a file measured in kilobytes; caching buys
+// nothing and costs exactly that.
+func noStore(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
 }
