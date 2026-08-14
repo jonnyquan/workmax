@@ -3704,7 +3704,7 @@ if (threadNextButton) {
 
 // ---- Rail sections: Chats / Schedule / Plugins ----
 const RAIL_VIEWS = [
-  ["chats", "#rail-nav-chats", "#rail-view-chats"],
+  ["projects", "#rail-nav-projects", "#rail-view-projects"],
   ["schedule", "#rail-nav-schedule", "#rail-view-schedule"],
   ["plugins", "#rail-nav-plugins", "#rail-view-plugins"],
 ];

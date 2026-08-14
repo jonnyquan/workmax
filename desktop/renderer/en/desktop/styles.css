@@ -3835,25 +3835,33 @@ button.composer-chip:hover {
 }
 
 /* --- Rail chrome, Codex's shape ------------------------------------------------
-   A prominent New chat button, an inline search, and a quiet subnav. The
-   button is the one primary action in the column; the search narrows the
-   list under it live. */
-.rail-new {
+   Destinations stacked VERTICALLY: New chat as the primary action first,
+   then Projects / Schedule / Plugins as quiet full-width rows. The list
+   under the active view fills the remaining height, which is what keeps the
+   identity row pinned to the rail's foot. */
+.rail-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3) var(--sp-1);
+}
+
+.rail-nav-new {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  margin: 0 var(--sp-3);
   height: var(--h-control);
-  padding: 0 var(--sp-3);
+  padding: 0 var(--sp-2);
   border: none;
   border-radius: var(--r-control);
   background: hsl(var(--primary));
   color: hsl(var(--primary-foreground));
   font-size: var(--fs-base);
   font-weight: var(--fw-medium);
+  justify-content: flex-start;
 }
 
-.rail-new:hover:not(:disabled) {
+.rail-nav-new:hover:not(:disabled) {
   background: hsl(var(--primary) / 0.9);
 }
 
@@ -3863,11 +3871,33 @@ button.composer-chip:hover {
   line-height: 1;
 }
 
+.rail-nav-item {
+  justify-content: flex-start;
+  height: var(--h-control);
+  padding: 0 var(--sp-2);
+  border: none;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+}
+
+.rail-nav-item:hover {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+.rail-nav-item.active {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
 .rail-search {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  margin: var(--sp-2) var(--sp-3) 0;
+  margin: var(--sp-1) var(--sp-3);
   padding: 0 var(--sp-2);
   height: var(--h-control);
   border-radius: var(--r-control);
@@ -3905,28 +3935,13 @@ button.composer-chip:hover {
   box-shadow: 0 0 0 1px hsl(var(--ring) / 0.5);
 }
 
-.rail-subnav {
+/* A view fills the rail's remaining height so the identity row stays pinned
+   to the bottom — the wrapper flexes and the list inside it scrolls. */
+.rail-view-grow {
   display: flex;
-  gap: var(--sp-3);
-  padding: var(--sp-2) var(--sp-3) var(--sp-1);
-}
-
-.rail-subnav-item {
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  font-size: var(--fs-small);
-  font-weight: var(--fw-medium);
-  height: auto;
-}
-
-.rail-subnav-item:hover {
-  color: hsl(var(--foreground));
-}
-
-.rail-subnav-item.active {
-  color: hsl(var(--foreground));
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 /* The relative time at a row's right end — muted, tabular, one glance. */

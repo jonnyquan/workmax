@@ -562,14 +562,19 @@
              answer) already offers Retry on the status line, which calls the
              same refresh(). An unlabelled glyph for a job nobody has is how
              a toolbar starts collecting them. -->
-        <!-- Codex's rail chrome, adopted whole: a prominent New chat button,
-             then an inline search over the conversations, then the list.
-             Schedule and Plugins are quiet destinations under the search —
-             present, not shouting. -->
-        <button id="new-thread-button" class="rail-new" type="button" disabled>
-          <span class="rail-new-icon" aria-hidden="true">+</span>
-          New chat
-        </button>
+        <!-- The rail's destinations, stacked vertically the way Codex stacks
+             them: New chat first (the primary action), then Projects — the
+             conversations, grouped — then Schedule and Plugins. The list
+             itself lives under the view these switch between. -->
+        <nav class="rail-nav" aria-label="Sidebar sections">
+          <button id="new-thread-button" class="rail-nav-new" type="button" disabled>
+            <span class="rail-new-icon" aria-hidden="true">+</span>
+            New chat
+          </button>
+          <button id="rail-nav-projects" class="rail-nav-item" type="button" aria-current="page">Projects</button>
+          <button id="rail-nav-schedule" class="rail-nav-item" type="button">Schedule</button>
+          <button id="rail-nav-plugins" class="rail-nav-item" type="button">Plugins</button>
+        </nav>
 
         <div class="rail-search">
           <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
@@ -586,13 +591,7 @@
           />
         </div>
 
-        <nav class="rail-subnav" aria-label="Sidebar sections">
-          <button id="rail-nav-chats" class="rail-subnav-item" type="button" aria-current="page">Chats</button>
-          <button id="rail-nav-schedule" class="rail-subnav-item" type="button">Schedule</button>
-          <button id="rail-nav-plugins" class="rail-subnav-item" type="button">Plugins</button>
-        </nav>
-
-        <div id="rail-view-chats">
+        <div id="rail-view-projects" class="rail-view rail-view-grow">
 
         <form
           id="new-thread-form"
@@ -631,12 +630,12 @@
         <ol id="thread-list" class="thread-list" aria-label="Cached threads"></ol>
         </div>
 
-        <div id="rail-view-schedule" class="rail-view" hidden>
+        <div id="rail-view-schedule" class="rail-view rail-view-grow" hidden>
           <p class="rail-empty">No scheduled tasks yet.</p>
           <p class="rail-empty-note">Automations you schedule will run here, unattended, and queue their results for review.</p>
         </div>
 
-        <div id="rail-view-plugins" class="rail-view" hidden>
+        <div id="rail-view-plugins" class="rail-view rail-view-grow" hidden>
           <p class="rail-empty">No plugins installed.</p>
           <p class="rail-empty-note">Skills and connectors extend what the agent can reach. They will be listed here.</p>
         </div>
