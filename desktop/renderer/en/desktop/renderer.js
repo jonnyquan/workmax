@@ -399,6 +399,7 @@ export const state = {
   allowedModes: [],
   selectedMode: "",
   modelLabel: "",
+  toolMode: "ask",
   skillsLoading: false,
   skillsDegraded: false,
   agentAvailable: false,
@@ -1358,6 +1359,7 @@ export function renderComposerChips() {
   }
   renderMindChip();
   renderModelChip();
+  renderToolModeChip();
 }
 
 // The model the next turn will use — readable at a glance and one click from
@@ -1375,6 +1377,25 @@ function renderModelChip() {
   chip.textContent = label;
   chip.title = "Model: " + label + ". Click to change.";
   chip.setAttribute("aria-label", "Model: " + label + ". Open settings");
+  chip.hidden = false;
+}
+
+// The permission level: Ask (approval cards) or Auto (silent allow).
+// Session-scoped — the most consequential control in the composer, and the
+// one Codex and Claude both make prominent. A model hidden in settings is
+// bad; a permission level hidden in settings is worse.
+function renderToolModeChip() {
+  const chip = document.querySelector("#tool-mode-chip");
+  if (!chip) return;
+  if (!canSendTurn()) {
+    chip.hidden = true;
+    return;
+  }
+  chip.textContent = state.toolMode === "auto" ? "Auto" : "Ask";
+  chip.title = state.toolMode === "auto"
+    ? "Auto: tool calls are approved without asking. Click to require approval."
+    : "Ask: each tool call asks before running. Click to auto-approve.";
+  chip.setAttribute("aria-pressed", state.toolMode === "auto" ? "true" : "false");
   chip.hidden = false;
 }
 
@@ -3445,6 +3466,13 @@ if (mindPanel) {
     event.stopPropagation?.();
     toggleRightPanel("mind");
     if (mindButton) mindButton.focus();
+  });
+}
+const toolModeChipEl = document.querySelector("#tool-mode-chip");
+if (toolModeChipEl) {
+  toolModeChipEl.addEventListener("click", () => {
+    state.toolMode = state.toolMode === "auto" ? "ask" : "auto";
+    renderToolModeChip();
   });
 }
 const modelChipEl = document.querySelector("#model-chip");

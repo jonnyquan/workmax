@@ -3722,3 +3722,11 @@ button.composer-chip:hover {
 .diff-line-meta {
   color: hsl(var(--code-surface-foreground) / 0.4);
 }
+
+.tool-mode-chip {
+  font-weight: var(--fw-medium);
+}
+.tool-mode-chip[aria-pressed="true"] {
+  color: hsl(var(--primary));
+  background: hsl(var(--primary) / 0.1);
+}

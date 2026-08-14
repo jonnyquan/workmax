@@ -717,6 +717,30 @@ function buildApprovalCard(wrapper, entry) {
 }
 
 export function presentApprovalRequest(activeTurn, event) {
+  // Auto mode: the reader chose to let the agent work without per-call
+  // approval. Answer immediately with allow_session — the broadest grant
+  // that still scopes to this conversation — and skip the card entirely.
+  // The grant lives in the ApprovalBroker for the session, so the next call
+  // to the same tool will not even ask.
+  if (state.toolMode === "auto") {
+    const agent = desktopAgentApprovalBridge();
+    if (agent && activeTurn.turnID) {
+      void agent.approveTurnTool(activeTurn.turnID, {
+        approval_id: event.id,
+        decision: "allow_session",
+      }).then((result) => {
+        if (!result?.ok) {
+          // Auto failed — fall back to showing the card so the user can decide.
+          presentApprovalCard(activeTurn, event);
+        }
+      }).catch(() => presentApprovalCard(activeTurn, event));
+      return;
+    }
+  }
+  presentApprovalCard(activeTurn, event);
+}
+
+function presentApprovalCard(activeTurn, event) {
   const wrapper = activeTurn.assistantBubble?.parentNode;
   if (!wrapper) return;
   if (!activeTurn.approvalCards) activeTurn.approvalCards = new Map();
