@@ -443,6 +443,31 @@
             <path d="M6.25 2.75v10.5" />
           </svg>
         </button>
+        <!-- Back / forward through the conversations, the way a browser
+             navigates history: the pair sits beside the rail's fold, where
+             navigation controls live in this window. -->
+        <button
+          id="thread-prev-button"
+          class="ghost icon-button"
+          type="button"
+          aria-label="Previous conversation"
+          title="Previous conversation"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M9.5 3.5 5 8l4.5 4.5" />
+          </svg>
+        </button>
+        <button
+          id="thread-next-button"
+          class="ghost icon-button"
+          type="button"
+          aria-label="Next conversation"
+          title="Next conversation"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M6.5 3.5 11 8l-4.5 4.5" />
+          </svg>
+        </button>
         <button
           id="sidebar-search-button"
           class="ghost icon-button"
@@ -537,6 +562,17 @@
              answer) already offers Retry on the status line, which calls the
              same refresh(). An unlabelled glyph for a job nobody has is how
              a toolbar starts collecting them. -->
+        <!-- The rail's three destinations. Chats is the working surface;
+             Schedule and Plugins are where those features land, and the
+             sections say the honest thing (empty) rather than hiding the
+             destination. -->
+        <nav class="rail-nav" aria-label="Sidebar sections">
+          <button id="rail-nav-chats" class="rail-nav-item" type="button" aria-current="page">Chats</button>
+          <button id="rail-nav-schedule" class="rail-nav-item" type="button">Schedule</button>
+          <button id="rail-nav-plugins" class="rail-nav-item" type="button">Plugins</button>
+        </nav>
+
+        <div id="rail-view-chats">
         <div class="thread-toolbar">
           <span class="rail-label">Conversations</span>
           <button id="new-thread-button" type="button" disabled>New</button>
@@ -577,6 +613,17 @@
         </form>
 
         <ol id="thread-list" class="thread-list" aria-label="Cached threads"></ol>
+        </div>
+
+        <div id="rail-view-schedule" class="rail-view" hidden>
+          <p class="rail-empty">No scheduled tasks yet.</p>
+          <p class="rail-empty-note">Automations you schedule will run here, unattended, and queue their results for review.</p>
+        </div>
+
+        <div id="rail-view-plugins" class="rail-view" hidden>
+          <p class="rail-empty">No plugins installed.</p>
+          <p class="rail-empty-note">Skills and connectors extend what the agent can reach. They will be listed here.</p>
+        </div>
 
         <div class="sidebar-foot">
           <!-- One line of app state. It is dismissible when it is an error,
@@ -626,6 +673,13 @@
               </span>
               <span class="local-account-chevron" aria-hidden="true">›</span>
             </button>
+            <!-- The account menu pops UP from the identity row, the way every
+                 bottom-anchored menu does. -->
+            <div id="account-menu" class="account-menu" role="menu" hidden>
+              <button id="account-menu-settings" class="account-menu-item" type="button" role="menuitem">Settings…</button>
+              <button id="account-menu-appearance" class="account-menu-item" type="button" role="menuitem">Appearance…</button>
+              <button id="account-menu-about" class="account-menu-item" type="button" role="menuitem">About WorkMax</button>
+            </div>
             <button
               id="settings-button"
               class="ghost icon-button"

@@ -251,8 +251,12 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   const brandAt = rendererHTML.indexOf('class="brand"');
   const toolbarAt = rendererHTML.indexOf('class="thread-toolbar"');
   assert.ok(brandAt > 0 && toolbarAt > brandAt, "the brand row still heads the rail");
+  // The BRAND ROW carries no controls (search and the fold live in the title
+  // bar). The rail-nav between brand and toolbar is a legitimate section
+  // switcher, so the slice checked here is the brand row alone.
+  const brandEnd = rendererHTML.indexOf("</div>", brandAt);
   assert.doesNotMatch(
-    rendererHTML.slice(brandAt, toolbarAt),
+    rendererHTML.slice(brandAt, brandEnd),
     /<button/u,
     "the rail's head carries no controls",
   );
@@ -439,7 +443,10 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   }
   assert.match(rendererHTML, /id="content-topbar" class="content-topbar reveal-on-hover-host"/u);
   assert.match(rendererHTML, /id="rename-thread-button" class="ghost reveal-on-hover"/u);
-  assert.match(rendererSource, /item\.className = "thread-item reveal-on-hover-host"/u);
+  // Rows are built with one of two class strings: plain, or indented inside a
+  // project. The pattern accepts both.
+  assert.match(rendererSource, /item\.className = inProject/u);
+  assert.match(rendererSource, /"thread-item reveal-on-hover-host"/u);
   assert.match(rendererSource, /wrapper\.className = `message \$\{role\} reveal-on-hover-host`/u);
   // An armed Delete is waiting for a second click and must not vanish when the
   // pointer leaves the row it is on — it uses the mechanism's own escape hatch
@@ -877,21 +884,28 @@ class FakeDocument {
 
   // Document-level listeners, for global keyboard shortcuts. dispatchKey is
   // the test's way of typing at the app rather than at a specific element.
+  // A SET of handlers per type, because a real document can carry any number
+  // of listeners and the renderer legitimately registers more than one — the
+  // single-handler map used to silently replace the palette's ⌘K with
+  // whichever listener was registered last.
   addEventListener(type, handler) {
-    this.listeners.set(type, handler);
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+    this.listeners.get(type).add(handler);
   }
 
   dispatchKey(init) {
-    const handler = this.listeners.get("keydown");
-    if (!handler) return;
-    handler({
+    const handlers = this.listeners.get("keydown");
+    if (!handlers) return;
+    const event = {
       key: init.key,
       metaKey: init.metaKey ?? false,
       ctrlKey: init.ctrlKey ?? false,
       repeat: init.repeat ?? false,
       preventDefault: init.preventDefault ?? (() => {}),
+      stopPropagation: init.stopPropagation ?? (() => {}),
       target: init.target ?? null,
-    });
+    };
+    for (const handler of [...handlers]) handler(event);
   }
 
   querySelector(selector) {
@@ -1046,6 +1060,13 @@ function message(uuid, userText, aiText, streamingState = "complete", provenance
 async function settle() {
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
+}
+
+// The identity row pops the account menu now; "open account settings" from a
+// test is two clicks. Every call site below means the settings destination.
+function openAccountSettingsViaMenu(document) {
+  document.byId.get("local-account-row").click();
+  document.byId.get("account-menu-settings").click();
 }
 
 function walk(node, predicate, out = []) {
@@ -4941,12 +4962,25 @@ async function testLocalAccountSwitcherSwitchesAndReloads() {
     "the identities open on demand, not by default",
   );
 
+  // Clicking the identity row now pops the account menu UP from the row —
+  // Settings is one of its items, so the click that gets there is two-step.
   row.click();
   await settle();
+  const menu = document.byId.get("account-menu");
+  assert.equal(menu.hidden, false, "clicking the identity row opens the account menu");
+  assert.equal(
+    row.getAttribute("aria-expanded"),
+    "true",
+    "and the row says so",
+  );
+  // The menu's Settings item opens the dialog on Account.
+  document.byId.get("account-menu-settings").click();
+  await settle();
+  assert.equal(menu.hidden, true, "choosing an item closes the menu");
   assert.equal(
     document.byId.get("settings-overlay").hidden,
     false,
-    "clicking the identity row opens Settings",
+    "the menu's Settings item opens Settings",
   );
   assert.equal(
     document.byId.get("settings-panel-account").hidden,
@@ -5036,9 +5070,11 @@ async function testSettingsSectionsAreOneAtATime() {
     }
   };
 
-  document.byId.get("local-account-row").click();
+  openAccountSettingsViaMenu(document);
   await settle();
-  assert.equal(document.byId.get("settings-overlay").hidden, false, "the row opens settings");
+  document.byId.get("account-menu-settings").click();
+  await settle();
+  assert.equal(document.byId.get("settings-overlay").hidden, false, "the row (via its menu) opens settings");
   onlyVisible("account");
   assert.equal(
     navItems.account.focused,
@@ -5065,7 +5101,9 @@ async function testSettingsSectionsAreOneAtATime() {
   document.dispatchKey({ key: "Escape" });
   await settle();
   assert.equal(document.byId.get("settings-overlay").hidden, true, "Escape closes the dialog");
-  document.byId.get("local-account-row").click();
+  openAccountSettingsViaMenu(document);
+  await settle();
+  document.byId.get("account-menu-settings").click();
   await settle();
   onlyVisible("account");
 }
@@ -5101,7 +5139,7 @@ async function testModelSectionLoadsWhenReachedFromTheNav() {
   const { document } = await runRenderer(bridge, desktopBridge);
   await settle();
 
-  document.byId.get("local-account-row").click();
+  openAccountSettingsViaMenu(document);
   await settle();
   assert.equal(
     document.byId.get("model-base-url").value,
@@ -5141,7 +5179,7 @@ async function testLocalAccountCreateDoesNotSwitch() {
   const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
 
-  document.byId.get("local-account-row").click();
+  openAccountSettingsViaMenu(document);
   await settle();
   document.byId.get("local-account-name-input").value = "  Ming  ";
   document.byId.get("local-account-create-form").submit();
@@ -5183,7 +5221,7 @@ async function testLocalAccountRenameIsALabelChange() {
   const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
 
-  document.byId.get("local-account-row").click();
+  openAccountSettingsViaMenu(document);
   await settle();
   const renameButtons = walk(
     document.byId.get("local-account-list"),
@@ -5242,7 +5280,7 @@ async function testLocalAccountDeleteIsArmedAndScoped() {
   const { document, ns } = await runRenderer(bridge, desktopBridge);
   await settle();
 
-  document.byId.get("local-account-row").click();
+  openAccountSettingsViaMenu(document);
   await settle();
   const deleteButtons = walk(
     document.byId.get("local-account-list"),
@@ -5994,14 +6032,17 @@ async function testPinnedThreadsLeadTheSidebar() {
 // calls the bridge method that owns the assignment.
 async function testProjectGroupingAndMoveAction() {
   // Two threads share a project, one has a different project, one has none.
-  // Built from LOCAL date components so the calendar grouping of the
-  // unaffiliated thread is stable regardless of the machine's timezone.
+  // The unaffiliated thread's timestamp is "today" relative to the real clock,
+  // because the renderer groups against new Date() — a fixed past date would
+  // drift into "Previous 7 days" or "Older" as the test is run later.
+  const todayISO = new Date().toISOString();
   const local = (y, m, d) => new Date(y, m - 1, d, 9, 0, 0).toISOString();
-  let projectFor = (uuid) => {
-    if (uuid === "p-deck-a" || uuid === "p-deck-b") return "Q3 Deck";
-    if (uuid === "p-budget") return "Budget";
-    return "";
-  };
+  const projects = new Map([
+    ["p-deck-a", "Q3 Deck"],
+    ["p-deck-b", "Q3 Deck"],
+    ["p-budget", "Budget"],
+    ["p-loose", ""],
+  ]);
   const bridge = {
     async fetch(pathname) {
       if (pathname === "/auth/status") {
@@ -6009,10 +6050,10 @@ async function testProjectGroupingAndMoveAction() {
       }
       if (pathname === "/agent/threads?include_paused=true") {
         const rows = [
-          { ...thread("p-deck-a", "Slide 1"), updated_at: local(2026, 8, 8), project: projectFor("p-deck-a") },
-          { ...thread("p-deck-b", "Slide 2"), updated_at: local(2026, 8, 7), project: projectFor("p-deck-b") },
-          { ...thread("p-budget", "Numbers"), updated_at: local(2026, 8, 6), project: projectFor("p-budget") },
-          { ...thread("p-loose", "Scratch"), updated_at: local(2026, 8, 8), project: projectFor("p-loose") },
+          { ...thread("p-deck-a", "Slide 1"), updated_at: local(2026, 8, 8), project: projects.get("p-deck-a") },
+          { ...thread("p-deck-b", "Slide 2"), updated_at: local(2026, 8, 7), project: projects.get("p-deck-b") },
+          { ...thread("p-budget", "Numbers"), updated_at: local(2026, 8, 6), project: projects.get("p-budget") },
+          { ...thread("p-loose", "Scratch"), updated_at: todayISO, project: projects.get("p-loose") },
         ];
         return response({ items: rows });
       }
@@ -6025,12 +6066,12 @@ async function testProjectGroupingAndMoveAction() {
   const clearCalls = [];
   desktopBridge.agent.setThreadProject = async (uuid, key) => {
     setCalls.push([uuid, key]);
-    projectFor = (id) => (id === uuid ? key : projectFor(id));
+    projects.set(uuid, key);
     return typedSuccess({ thread_uuid: uuid, project: key });
   };
   desktopBridge.agent.clearThreadProject = async (uuid) => {
     clearCalls.push(uuid);
-    projectFor = (id) => (id === uuid ? "" : projectFor(id));
+    projects.set(uuid, "");
     return typedSuccess({ thread_uuid: uuid, project: "" });
   };
   const { document } = await runRenderer(bridge, desktopBridge);
@@ -6249,7 +6290,7 @@ async function testLocalIdentityIsNamedWithoutAnyModel() {
     "nothing about the identity is on screen until it is asked for",
   );
 
-  document.byId.get("local-account-row").click();
+  openAccountSettingsViaMenu(document);
   await settle();
   assert.match(
     document.byId.get("local-account-binding-state").textContent,
@@ -6331,7 +6372,7 @@ async function testConnectedAccountIsShownAsABindingOnTheLocalIdentity() {
     "Connected to WorkMax",
     "bound is a state of this identity, and the row is where that state is stated",
   );
-  document.byId.get("local-account-row").click();
+  openAccountSettingsViaMenu(document);
   await settle();
   assert.match(
     document.byId.get("local-account-binding-state").textContent,

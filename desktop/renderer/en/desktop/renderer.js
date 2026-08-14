@@ -3326,11 +3326,6 @@ turnRecoveryResumeButton.addEventListener("click", () => {
 turnRecoveryDismissButton.addEventListener("click", () => {
   void dismissRecoverableTurn();
 });
-if (localAccountRow) {
-  localAccountRow.addEventListener("click", () => {
-    openLocalAccountSettings();
-  });
-}
 if (localAccountCreateForm) {
   localAccountCreateForm.addEventListener("submit", (event) => {
     void submitCreateLocalAccount(event);
@@ -3671,6 +3666,108 @@ export function toggleRightPanel(name) {
   // that put it away is in the title bar and already has focus.
   if (mindPanel) mindPanel.focus();
 }
+
+// --- Conversation back / forward ------------------------------------------------
+//
+// The pair of chevrons in the title bar walks the conversation list the way a
+// browser walks history. Order is the rail's own (pinned first, then recency),
+// read from state.threads rather than the DOM so it works with the rail folded
+// away — the whole point of having the buttons in the title bar.
+const threadPrevButton = document.querySelector("#thread-prev-button");
+const threadNextButton = document.querySelector("#thread-next-button");
+
+function stepThread(direction) {
+  const threads = state.threads;
+  if (threads.length === 0) return;
+  const index = threads.findIndex(
+    (candidate) => candidate.uuid === state.selectedThreadUUID
+  );
+  // Nothing selected: direction -1 lands on the newest, +1 on the oldest.
+  const next =
+    index === -1
+      ? direction < 0
+        ? 0
+        : threads.length - 1
+      : Math.min(threads.length - 1, Math.max(0, index + direction));
+  const target = threads[next];
+  if (!target || target.uuid === state.selectedThreadUUID) return;
+  import("./transcript.js").then(({ selectThread }) => selectThread(target));
+}
+
+if (threadPrevButton) {
+  threadPrevButton.addEventListener("click", () => stepThread(-1));
+}
+if (threadNextButton) {
+  threadNextButton.addEventListener("click", () => stepThread(1));
+}
+
+// ---- Rail sections: Chats / Schedule / Plugins ----
+const RAIL_VIEWS = [
+  ["chats", "#rail-nav-chats", "#rail-view-chats"],
+  ["schedule", "#rail-nav-schedule", "#rail-view-schedule"],
+  ["plugins", "#rail-nav-plugins", "#rail-view-plugins"],
+];
+
+function showRailView(name) {
+  for (const [view, navSel, viewSel] of RAIL_VIEWS) {
+    const nav = document.querySelector(navSel);
+    const panel = document.querySelector(viewSel);
+    if (!nav || !panel) continue;
+    const active = view === name;
+    nav.classList.toggle("active", active);
+    if (active) nav.setAttribute("aria-current", "page");
+    else nav.removeAttribute("aria-current");
+    panel.hidden = !active;
+  }
+}
+
+for (const [view, navSel] of RAIL_VIEWS) {
+  const nav = document.querySelector(navSel);
+  if (nav) nav.addEventListener("click", () => showRailView(view));
+}
+
+// ---- The account menu, popping up from the identity row ----
+const accountMenu = document.querySelector("#account-menu");
+
+function closeAccountMenu() {
+  if (!accountMenu) return;
+  accountMenu.hidden = true;
+  const row = document.querySelector("#local-account-row");
+  if (row) row.setAttribute("aria-expanded", "false");
+}
+
+if (localAccountRow) {
+  localAccountRow.addEventListener("click", () => {
+    if (!accountMenu) {
+      openLocalAccountSettings();
+      return;
+    }
+    const open = accountMenu.hidden;
+    accountMenu.hidden = !open;
+    localAccountRow.setAttribute("aria-expanded", String(open));
+  });
+}
+// Every item closes the menu and then does its one thing — written as
+// per-item handlers rather than delegation because each destination is
+// different and the menu's own job ends at "close".
+for (const [id, act] of [
+  ["account-menu-settings", () => openLocalAccountSettings()],
+  ["account-menu-appearance", () => openSettingsPanel("appearance")],
+  ["account-menu-about", () => openSettingsPanel("about")],
+]) {
+  const item = document.querySelector(`#${id}`);
+  if (!item) continue;
+  item.addEventListener("click", () => {
+    closeAccountMenu();
+    act();
+  });
+}
+// Escape closes it without touching anything else the key does.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !accountMenu || accountMenu.hidden) return;
+  event.stopPropagation();
+  closeAccountMenu();
+});
 
 if (sidebarCollapseButton) {
   sidebarCollapseButton.addEventListener("click", () => toggleSidebar());

@@ -321,9 +321,13 @@ async function deleteThread(thread) {
   setStatus("Conversation deleted from this machine.");
 }
 
-function renderThreadButton(thread) {
+function renderThreadButton(thread, inProject = false) {
   const item = document.createElement("li");
-  item.className = "thread-item reveal-on-hover-host";
+  // Inside a project the row indents: the project header is the parent, the
+  // threads are its children, and the indentation is what says so.
+  item.className = inProject
+    ? "thread-item thread-in-project reveal-on-hover-host"
+    : "thread-item reveal-on-hover-host";
   item.dataset.threadUuid = thread.uuid;
   const button = document.createElement("button");
   button.type = "button";
@@ -501,7 +505,7 @@ export function renderThreads() {
     });
     threadList.appendChild(heading);
     for (const thread of bucket) {
-      threadList.appendChild(renderThreadButton(thread));
+      threadList.appendChild(renderThreadButton(thread, true));
     }
   }
 

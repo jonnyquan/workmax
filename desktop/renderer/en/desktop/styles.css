@@ -660,6 +660,10 @@ textarea::placeholder {
 
 .titlebar button {
   --wails-draggable: no-drag;
+  /* Explicitly centred in the 46px strip, beside the traffic lights: without
+     this, a button whose natural height differs from its neighbours sits a
+     half-pixel off the lights' optical line. */
+  align-self: center;
 }
 
 .titlebar-leading,
@@ -1202,6 +1206,7 @@ textarea::placeholder {
    They were 4px apart, close enough that the chevron and the gear read as one
    cluster of glyphs belonging to whichever you noticed first. */
 .identity-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -3827,4 +3832,96 @@ button.composer-chip:hover {
    DOM so the timestamps they carry survive for a future hover state. */
 .message-role {
   display: none;
+}
+
+/* --- Rail section nav (Chats / Schedule / Plugins) --------------------------
+   Three destinations, one visible at a time. Quiet pills, not tabs: this is
+   a wayfinding row, not a control surface. */
+.rail-nav {
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3) var(--sp-2);
+}
+
+.rail-nav-item {
+  flex: 1;
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-2);
+  border: none;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
+}
+
+.rail-nav-item:hover {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+.rail-nav-item.active {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+.rail-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-3);
+}
+
+.rail-empty {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+}
+
+.rail-empty-note {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+  line-height: var(--lh-ui);
+}
+
+/* A thread inside a project indents: the project header is the parent, the
+   rows are its children, and the indentation is what says so. */
+.thread-in-project .thread-button {
+  margin-left: var(--sp-3);
+  width: calc(100% - var(--sp-3));
+}
+
+/* --- The account menu --------------------------------------------------------
+   Pops UP from the identity row at the rail's foot — the only direction a
+   bottom-anchored menu can go. Same card grammar as every floating surface. */
+.account-menu {
+  position: absolute;
+  bottom: calc(100% + var(--sp-1));
+  left: var(--sp-2);
+  right: var(--sp-2);
+  z-index: 30;
+  display: grid;
+  padding: var(--sp-1);
+  border-radius: var(--r-surface);
+  background: hsl(var(--card));
+  box-shadow: 0 0 0 1px hsl(var(--border)), 0 8px 24px hsl(0 0% 8% / 0.16);
+}
+
+.account-menu-item {
+  justify-content: start;
+  height: var(--h-control);
+  padding: 0 var(--sp-2);
+  border: none;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: hsl(var(--foreground));
+  font-size: var(--fs-base);
+  font-weight: var(--fw-normal);
+  text-align: left;
+}
+
+.account-menu-item:hover {
+  background: hsl(var(--muted));
 }
