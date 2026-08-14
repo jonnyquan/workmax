@@ -476,17 +476,6 @@ function toggleProjectGroup(heading, indicator) {
 // why it had a second empty state ("No conversations match …"); searching
 // happens in the palette now, and a list that quietly shortens itself while
 // another window has focus is not something this column should do.
-// The rail's own search: what is typed here narrows the list below it, live,
-// the way Codex's does. It does not open the palette and it does not search
-// message bodies — those are the palette's jobs; this is a filter over the
-// conversations you can see.
-let railQuery = "";
-
-export function setRailSearch(query) {
-  railQuery = typeof query === "string" ? query.trim().toLowerCase() : "";
-  renderThreads();
-}
-
 export function renderThreads() {
   threadList.textContent = "";
   if (state.threads.length === 0) {
@@ -496,16 +485,7 @@ export function renderThreads() {
     renderEmptyState();
     return;
   }
-  const visible = railQuery
-    ? state.threads.filter((thread) => threadMatchesQuery(thread, railQuery))
-    : state.threads;
-  if (visible.length === 0) {
-    const item = document.createElement("li");
-    item.appendChild(renderNotice("No conversations match."));
-    threadList.appendChild(item);
-    return;
-  }
-  const groups = groupThreads(visible, new Date());
+  const groups = groupThreads(state.threads, new Date());
 
   // Pinned leads. A pin overrides project and calendar alike.
   if (groups.pinned.length > 0) {

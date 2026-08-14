@@ -2119,9 +2119,10 @@ async function testThreadGroupingAndSearch() {
 // complete. Pinned here because the cheapest way to "fix" a palette that is
 // missing something is to put a small search back in the rail.
 {
-  // An inline search in the rail is the deliberate design now (Codex's
-  // chrome). The OLD panel id stays banned — the dead panel must not return.
-  assert.match(rendererHTML, /id="thread-search"/u);
+  // No search field in the rail: the title bar's palette entry is the one
+  // search (conversations, messages, actions), and a second field beside it
+  // would be two doors into the same room.
+  assert.doesNotMatch(rendererHTML, /id="thread-search"/u);
   assert.doesNotMatch(rendererHTML, /id=["']thread-search-panel["']/u);
   assert.doesNotMatch(rendererHTML, /id=["']content-match-panel["']/u);
   assert.doesNotMatch(rendererSource, /threadSearchInput|threadQuery/u);

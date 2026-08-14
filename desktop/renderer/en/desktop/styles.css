@@ -3893,48 +3893,6 @@ button.composer-chip:hover {
   color: hsl(var(--foreground));
 }
 
-.rail-search {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  margin: var(--sp-1) var(--sp-3);
-  padding: 0 var(--sp-2);
-  height: var(--h-control);
-  border-radius: var(--r-control);
-  background: hsl(var(--muted));
-  color: hsl(var(--muted-foreground));
-}
-
-.rail-search svg {
-  flex: none;
-  width: 14px;
-  height: 14px;
-}
-
-.rail-search input {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  border: none;
-  background: transparent;
-  color: hsl(var(--foreground));
-  font: inherit;
-  font-size: var(--fs-base);
-}
-
-.rail-search input::placeholder {
-  color: hsl(var(--muted-foreground));
-}
-
-.rail-search input:focus {
-  outline: none;
-}
-
-.rail-search:focus-within {
-  background: hsl(var(--card));
-  box-shadow: 0 0 0 1px hsl(var(--ring) / 0.5);
-}
-
 /* A view fills the rail's remaining height so the identity row stays pinned
    to the bottom — the wrapper flexes and the list inside it scrolls. */
 .rail-view-grow {

@@ -179,7 +179,6 @@ import {
   closeQuickSwitcher,
   openQuickSwitcher,
   renderThreads,
-  setRailSearch,
   updateThreadRunning,
 } from "./threads.js";
 import {
@@ -3720,13 +3719,6 @@ function showRailView(name) {
     else nav.removeAttribute("aria-current");
     panel.hidden = !active;
   }
-}
-
-const railSearchInput = document.querySelector("#thread-search");
-if (railSearchInput) {
-  railSearchInput.addEventListener("input", () => {
-    setRailSearch(railSearchInput.value);
-  });
 }
 
 for (const [view, navSel] of RAIL_VIEWS) {
