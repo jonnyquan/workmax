@@ -30,6 +30,7 @@ import {
 import { scrollMessagesToEnd } from "./transcript.js";
 import { removeRecoverableTurn } from "./composer.js";
 import {
+  maybeSettleReasoning,
   paintReasoningCaption,
   presentApprovalRequest,
   recordReasoningDelta,
@@ -554,6 +555,7 @@ export function handleParsedTurnEvent(activeTurn, event) {
   // not show ahead of the words that preceded it — drain first.
   if (event.type !== "text_delta" && event.type !== "reasoning_delta") {
     drainStreamBatch();
+    maybeSettleReasoning(activeTurn);
   }
 
   switch (event.type) {
@@ -567,6 +569,7 @@ export function handleParsedTurnEvent(activeTurn, event) {
       // the paint itself waits for the frame.
       activeTurn.assistantText += event.delta;
       activeTurn.assistantTextBytes += deltaBytes;
+      maybeSettleReasoning(activeTurn);
       clearPendingIndicator(activeTurn);
       // Schedule first: it re-keys the buffer to this turn before the append.
       scheduleStreamFlush(activeTurn);

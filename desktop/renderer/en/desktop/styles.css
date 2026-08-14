@@ -2269,7 +2269,7 @@ button.mind-button[data-mind-activity] {
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
-  padding: var(--sp-3) var(--sp-4) var(--sp-3) var(--sp-5);
+  padding: var(--sp-2) var(--sp-4) var(--sp-2) var(--sp-5);
 }
 
 /* Nothing open: the strip is empty, so it takes no height and the welcome
@@ -2297,11 +2297,36 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   text-align: center;
 }
 
-/* One sentence and one action. The old empty screen opened with a decorative
-   glyph, a pill reading "PPT AGENT" and a paragraph — three pieces of chrome
-   in front of the only question the screen actually asks. */
+/* Home is a work surface, not a lobby: the greeting sits above the same
+   composer that lives at the bottom of a conversation. ChatGPT, Claude and
+   Codex all do this — you land and you type. data-surface is written by
+   updateComposerState from the same fact #thread-panel[hidden] already
+   states, so the two cannot disagree. */
+.content[data-surface="home"] {
+  justify-content: center;
+}
+
+.content[data-surface="home"] > .empty-state {
+  flex: 0 1 auto;
+  padding-bottom: var(--sp-2);
+}
+
+.content[data-surface="home"] > .composer {
+  margin-top: 0;
+  margin-bottom: var(--sp-4);
+}
+
+.content:not([data-surface="home"]) > .starter-prompts {
+  display: none;
+}
+
+/* One sentence. The old empty screen opened with a decorative glyph, a pill
+   reading "PPT AGENT" and a paragraph — three pieces of chrome in front of
+   the only question the screen actually asks. Serif, the same bet the
+   transcript headings make, so the home question and the answer share a voice. */
 .empty-state h2 {
   margin-bottom: var(--sp-2);
+  font-family: var(--font-serif);
   font-size: var(--fs-display);
   font-weight: var(--fw-strong);
   letter-spacing: -0.02em;
@@ -2360,10 +2385,11 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 
 .starter-prompts {
   display: grid;
+  flex: none;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--sp-2);
-  width: min(720px, 100%);
-  margin-top: var(--sp-5);
+  width: min(720px, calc(100% - var(--sp-6) * 2));
+  margin: 0 auto var(--sp-6);
 }
 
 .starter-card {
@@ -2411,14 +2437,13 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   min-width: 0;
 }
 
-/* Title, metadata and the two things you do to a conversation, on one line.
-   The metadata used to be a second line under the title; at 12px muted beside
-   it, it reads as the same sentence and costs no height. The controls stay
-   quiet until the strip is hovered, because they are things you do to a
-   conversation occasionally and never the reason you opened it. */
+/* The name, and the two things you do to it. ChatGPT / Claude / Codex print
+   the conversation's name and stop — a skill, a count and a clock beside it
+   is a dashboard, not a chat header. Rename and Export stay quiet until the
+   strip is hovered. */
 .thread-title-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--sp-2);
   min-width: 0;
 }
@@ -2427,8 +2452,8 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  font-size: var(--fs-title);
-  font-weight: var(--fw-strong);
+  font-size: var(--fs-read);
+  font-weight: var(--fw-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2442,13 +2467,7 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 }
 
 #thread-meta {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: hsl(var(--muted-foreground));
-  font-size: var(--fs-small);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: none;
 }
 
 /* Renaming replaces the line it is renaming: the title hides, the form takes
@@ -3236,8 +3255,17 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   transform: translateX(-50%);
 }
 
-/* The whole panel is a drop target while a file hovers over it. */
-.thread-panel.drop-target::after {
+/* The whole panel is a drop target while a file hovers over it. Home
+   uses the same mark on the greeting and the composer, so a drop on the
+   blank screen is the same gesture as a drop on an open conversation. */
+.empty-state,
+.composer {
+  position: relative;
+}
+
+.thread-panel.drop-target::after,
+.composer.drop-target::after,
+.empty-state.drop-target::after {
   content: "Drop files to attach";
   position: absolute;
   inset: 0;
@@ -3269,16 +3297,24 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   box-shadow: 0 0 0 1px hsl(var(--ring) / 0.5);
 }
 
-.composer-toolbar,
 .composer-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--sp-2);
   color: hsl(var(--muted-foreground));
   font-size: var(--fs-micro);
 }
 
-.composer-toolbar select {
+.composer-leading {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.composer-leading select {
   width: auto;
   max-width: 180px;
   height: var(--h-control-sm);
@@ -3331,15 +3367,19 @@ button.composer-chip:hover {
   white-space: nowrap;
 }
 
+#composer-status:empty {
+  display: none;
+}
+
 .composer-input {
   display: block;
-  margin: var(--sp-2) 0;
+  margin: 0 0 var(--sp-2);
 }
 
 .composer-input textarea {
   display: block;
   width: 100%;
-  min-height: 64px;
+  min-height: calc(var(--fs-read) * var(--lh-read));
   max-height: 220px;
   padding: 0;
   resize: vertical;
@@ -3354,15 +3394,6 @@ button.composer-chip:hover {
 
 .composer-input textarea:disabled {
   opacity: 0.55;
-}
-
-.composer-actions {
-  justify-content: flex-end;
-}
-
-.composer-hint {
-  margin-right: auto;
-  font-variant-numeric: tabular-nums;
 }
 
 /* Nears-the-limit capacity note; absent until it matters. */

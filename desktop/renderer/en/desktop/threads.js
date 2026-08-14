@@ -28,7 +28,8 @@ import {
 import { formatMessageTime, renderNotice, selectThread } from "./transcript.js";
 import {
   canOpenNewThread,
-  openNewThreadForm,
+  canSendTurn,
+  handleNewChat,
   renderEmptyState,
   updateComposerState,
 } from "./composer.js";
@@ -573,12 +574,12 @@ function quickSwitcherCommands(query) {
   // Enter would silently no-op is a dead end wearing a label. (Found live:
   // during boot, before skills load, the weaker gate offered a New thread
   // that went nowhere.)
-  if (canOpenNewThread()) {
+  if (canOpenNewThread() || (state.selectedThreadUUID && canSendTurn())) {
     commands.push({
       kind: "command",
-      label: "New thread",
+      label: "New chat",
       hint: "Start a conversation",
-      run: () => openNewThreadForm(),
+      run: () => handleNewChat(),
     });
   }
   if (current) {

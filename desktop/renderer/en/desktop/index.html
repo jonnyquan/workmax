@@ -580,7 +580,7 @@
               type="text"
               autocomplete="off"
               maxlength="200"
-              value="Untitled presentation"
+              value="New chat"
               required
             />
           </label>
@@ -676,13 +676,12 @@
         </div>
       </aside>
 
-      <section class="content" aria-live="polite">
-        <!-- The main column's one strip of chrome. Everything that used to be
-             a two-line <header> inside the thread panel is here on one line —
-             the name, its metadata, the two things you do to it, and the run's
-             state. The three window-level controls that used to share it (fold
-             the rail, bring it back, fold the workspace column) live in the
-             title bar now, next to the traffic lights.
+      <section id="main-stage" class="content" data-surface="home" aria-live="polite">
+        <!-- The chat column's one strip of chrome. ChatGPT, Claude and Codex
+             put the conversation's name here and nothing else — not the
+             skill, not a message count, not the last-updated clock. Those
+             facts ride the title's tooltip. The run's state still sits at
+             the far right, and only while a run is actually doing something.
 
              It occupies no height at all when it has nothing to say. That is a
              CSS consequence of #thread-panel[hidden] rather than a hidden=
@@ -694,7 +693,7 @@
           <div class="thread-header-copy">
             <div id="thread-title-row" class="thread-title-row">
               <h2 id="thread-title"></h2>
-              <p id="thread-meta"></p>
+              <p id="thread-meta" hidden></p>
               <button id="rename-thread-button" class="ghost reveal-on-hover" type="button" hidden>Rename</button>
               <button id="export-thread-button" class="ghost reveal-on-hover" type="button" hidden>Export</button>
             </div>
@@ -711,11 +710,11 @@
               <button id="rename-thread-cancel" class="ghost" type="button">Cancel</button>
             </form>
           </div>
-          <span id="turn-state" class="turn-state">Ready</span>
+          <span id="turn-state" class="turn-state" hidden></span>
         </div>
         <div id="empty-state" class="empty-state">
-          <h2 id="empty-title">Continue from local history</h2>
-          <p id="empty-description">Pick a conversation, or start a new one.</p>
+          <h2 id="empty-title">What should we make today?</h2>
+          <p id="empty-description" hidden>Pick a conversation, or start a new one.</p>
           <div id="onboarding-paths" class="onboarding-paths" hidden>
             <button id="onboarding-signin" class="onboarding-card" type="button">
               <strong>Connect a WorkMax account</strong>
@@ -726,8 +725,11 @@
               <span>Point WorkMax at an endpoint on this machine. Nothing leaves it.</span>
             </button>
           </div>
-          <div id="starter-prompts" class="starter-prompts" hidden></div>
-          <button id="empty-new-thread-button" class="primary empty-action" type="button" disabled>New thread</button>
+          <!-- Visible only before a model exists: starting a conversation is
+               still workbench work, but once a model is configured the
+               composer below is the way in — a second "New thread" button
+               next to a text box is the lobby this screen used to be. -->
+          <button id="empty-new-thread-button" class="primary empty-action" type="button" hidden disabled>New conversation</button>
         </div>
         <div id="thread-panel" class="thread-panel" hidden>
           <!-- No <header> here any more: the name, its metadata and the run
@@ -758,45 +760,66 @@
               <button id="turn-recovery-resume-button" class="primary" type="button">Resume</button>
             </div>
           </section>
-          <form id="chat-form" class="composer" novalidate>
-            <div class="composer-toolbar">
-              <label id="agent-mode-label" class="sr-only" for="agent-mode">Skill</label>
-              <select id="agent-mode" aria-label="Agent skill" disabled>
-                <option value="">Loading...</option>
-              </select>
-              <span id="mode-chip" class="composer-chip mode-chip" hidden></span>
-              <span id="runtime-chip" class="composer-chip" hidden></span>
-              <button id="model-chip" class="composer-chip model-chip" type="button" hidden></button>
-              <span id="account-chip" class="composer-chip" hidden></span>
-              <!-- Which mind will answer. A button rather than a label,
-                   because it names something you can change and the panel that
-                   changes it is one click away — a chip that states a governing
-                   fact and offers no way to act on it makes the reader hunt. -->
-              <button id="mind-chip" class="composer-chip mind-chip" type="button" hidden></button>
-              <button id="tool-mode-chip" class="composer-chip tool-mode-chip" type="button" hidden>Ask</button>
-              <span id="composer-status">Select a synced thread to continue.</span>
-            </div>
+        </div>
+          <!-- The composer is a sibling of the thread panel, not a child of
+               it. Home is a work surface: the greeting and this box sit
+               together, and the first send creates the conversation. A
+               composer locked inside #thread-panel[hidden] cannot do that. -->
+          <form id="chat-form" class="composer" hidden novalidate>
             <label class="composer-input" for="chat-input">
               <span class="sr-only">Message WorkMax Agent</span>
               <textarea
                 id="chat-input"
-                rows="3"
+                rows="1"
                 maxlength="65536"
-                placeholder="Describe the presentation you want to create or refine..."
+                placeholder="Ask anything…"
                 disabled
               ></textarea>
             </label>
             <div id="attachment-chips" class="attachment-chips" hidden></div>
+            <!-- One row under the words, the way ChatGPT / Claude / Codex
+                 lay out a composer: what will answer on the left, attach
+                 and send on the right. A toolbar above the box was a second
+                 chrome strip for facts that belong next to the send. -->
             <div class="composer-actions">
+              <div class="composer-leading">
+                <label id="agent-mode-label" class="sr-only" for="agent-mode">Skill</label>
+                <select id="agent-mode" aria-label="Agent skill" disabled>
+                  <option value="">Loading...</option>
+                </select>
+                <span id="mode-chip" class="composer-chip mode-chip" hidden></span>
+                <span id="runtime-chip" class="composer-chip" hidden></span>
+                <button id="model-chip" class="composer-chip model-chip" type="button" hidden></button>
+                <span id="account-chip" class="composer-chip" hidden></span>
+                <button id="mind-chip" class="composer-chip mind-chip" type="button" hidden></button>
+                <button id="tool-mode-chip" class="composer-chip tool-mode-chip" type="button" hidden>Ask</button>
+                <span id="composer-status"></span>
+              </div>
               <input id="file-input" type="file" multiple hidden />
-              <button id="attach-button" class="ghost icon-button" type="button" aria-label="Attach files">+</button>
-              <span class="composer-hint">⌘↵ to send</span>
+              <button
+                id="attach-button"
+                class="ghost icon-button"
+                type="button"
+                aria-label="Attach files"
+                title="Attach files"
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                  <path d="M10.2 4.6v5.6a2.2 2.2 0 0 1-4.4 0V4.4a1.4 1.4 0 0 1 2.8 0v5.4a.6.6 0 0 1-1.2 0V5.2" />
+                </svg>
+              </button>
               <span id="composer-capacity" hidden></span>
               <button id="stop-button" class="ghost" type="button" hidden>Stop</button>
-              <button id="send-button" class="primary send-round" type="submit" aria-label="Send" disabled>↑</button>
+              <button
+                id="send-button"
+                class="primary send-round"
+                type="submit"
+                aria-label="Send"
+                title="Send (⌘↵)"
+                disabled
+              >↑</button>
             </div>
           </form>
-        </div>
+          <div id="starter-prompts" class="starter-prompts" hidden></div>
       </section>
 
       <!-- The right column, and the two panels that take turns in it.

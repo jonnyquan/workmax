@@ -491,7 +491,40 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   assert.doesNotMatch(rendererCSS, /\.thread-panel header/u);
   const topbarAt = rendererHTML.indexOf('id="content-topbar"');
   const panelAt = rendererHTML.indexOf('id="thread-panel"');
+  const formAt = rendererHTML.indexOf('id="chat-form"');
+  const emptyAt = rendererHTML.indexOf('id="empty-state"');
   assert.ok(topbarAt > 0 && panelAt > topbarAt, "the chrome strip precedes the thread panel");
+  assert.ok(
+    emptyAt > 0 && formAt > panelAt && panelAt > emptyAt,
+    "the composer is a sibling of the thread panel so it can sit on the home screen",
+  );
+  assert.match(
+    rendererCSS,
+    /\.content\[data-surface="home"\]\s*\{/u,
+    "home is a distinct surface so the greeting and composer can sit as one cluster",
+  );
+  const composerHTML = rendererHTML.slice(formAt);
+  const inputAt = composerHTML.indexOf('id="chat-input"');
+  const attachAt = composerHTML.indexOf('id="attach-button"');
+  const modelChipAt = composerHTML.indexOf('id="model-chip"');
+  assert.ok(
+    inputAt > 0 && attachAt > inputAt,
+    "the words come first; attach and send sit under them",
+  );
+  assert.ok(
+    modelChipAt > inputAt,
+    "model and Ask live on the send row, not on a toolbar above the box",
+  );
+  assert.doesNotMatch(
+    rendererHTML,
+    /class="composer-toolbar"/u,
+    "a second chrome strip above the box is the old composer",
+  );
+  assert.match(
+    composerHTML.slice(attachAt, attachAt + 400),
+    /<svg\b/u,
+    "attach is a paperclip, not a plus that already means New chat",
+  );
   const topbarHTML = rendererHTML.slice(topbarAt, panelAt);
   for (const id of [
     "thread-title-row",
@@ -617,6 +650,7 @@ for (const id of [
   "empty-title",
   "empty-description",
   "empty-new-thread-button",
+  "main-stage",
   "chat-form",
   "agent-mode",
   "composer-status",
@@ -1222,6 +1256,17 @@ async function testAuthenticatedCacheRead() {
   assert.equal(calls.at(-1), "/agent/threads/thread%20one/messages");
   assert.equal(document.byId.get("empty-state").hidden, true);
   assert.equal(document.byId.get("thread-panel").hidden, false);
+  assert.equal(document.byId.get("thread-title").textContent, "Storyboard draft");
+  assert.equal(
+    document.byId.get("thread-meta").hidden,
+    true,
+    "the chat header is the name — skill, count and clock stay off the strip",
+  );
+  assert.match(
+    document.byId.get("thread-title").title,
+    /2 messages/,
+    "the facts the strip used to print ride the title's tooltip",
+  );
   assert.match(document.byId.get("message-list").textContent, /make a shot list/);
   assert.match(document.byId.get("message-list").textContent, /cached assistant answer/);
   {
@@ -3449,11 +3494,13 @@ async function testTurnStatePillCarriesItsTone() {
   await settle();
 
   const pill = document.byId.get("turn-state");
+  assert.equal(pill.hidden, true, "idle is the absence of a pill, not a Ready badge");
   const input = document.byId.get("chat-input");
   input.value = "go";
   input.dispatch("input");
   document.byId.get("chat-form").submit();
   await settle();
+  assert.equal(pill.hidden, false, "a running turn must show its state");
   assert.equal(pill.classList.contains("is-busy"), true, "Working must read busy");
 
   emit({ type: "text_delta", delta: "ok" });
@@ -3862,6 +3909,11 @@ async function testToolApprovalCardsAndReasoningCaption() {
   emit({ type: "approval_request", id: "ap-2", name: "Bash", target: "" });
   emit({ type: "approval_request", id: "ap-3", name: "Edit", target: "b.md" });
   await settle();
+  // The first non-reasoning fact folds the live subtitle. Waiting for `done`
+  // left "Thinking…" sitting next to the work it had already finished.
+  const earlyToggles = walk(reasoningStrip, (n) => n.classList?.contains("reasoning-toggle"));
+  assert.equal(earlyToggles.length, 1, "reasoning must fold as soon as the turn leaves thought");
+  assert.match(earlyToggles[0].textContent, /Thought · Consider the outline\./u);
   const cards = walk(document.byId.get("message-list"), (n) => n.classList?.contains("approval-card"));
   assert.equal(cards.length, 3, "one card per approval id — a duplicated frame must not stack");
   assert.match(cards[0].textContent, /Agent requests to run Write · a\.md/u);
@@ -4312,9 +4364,9 @@ async function testDenialFoldsIntoTheRowItAnswers() {
 }
 
 // A first-time user faces an empty screen and a text box. The starter cards
-// are the bridge: one click opens the create flow, and once the thread exists
-// the card's prompt is waiting in the composer — sending stays the user's
-// decision.
+// are suggestion chips: one click plants the prompt in the home composer.
+// Sending stays the user's decision — a card that auto-sent would be a
+// trap, and a card that opened a name form would be the old lobby.
 async function testStarterPromptLandsInTheComposer() {
   const createCalls = [];
   const bridge = {
@@ -4358,33 +4410,32 @@ async function testStarterPromptLandsInTheComposer() {
   await settle();
   assert.equal(
     document.byId.get("new-thread-form").hidden,
-    false,
-    "a starter opens the same create flow the button does",
+    true,
+    "a starter must not open the name form — the composer is already there",
   );
-
-  document.byId.get("new-thread-form").submit();
-  await settle();
-  assert.equal(createCalls.length, 1, "the thread must be created");
+  assert.equal(createCalls.length, 0, "a starter must not create a thread until the user sends");
   assert.match(
     document.byId.get("chat-input").value,
-    /product launch deck/i,
-    "the card's prompt must be waiting in the composer of the thread it created",
+    /plan the next step/i,
+    "the card's prompt must be waiting in the home composer",
+  );
+  assert.equal(
+    document.byId.get("chat-input").disabled,
+    false,
+    "the home composer must be ready to send the planted prompt",
   );
 
-  // The stash is single-use. The composer keeps its draft across selection
-  // on purpose (a misclick must not eat typed words), so prove the stash is
-  // spent by erasing the box and showing the next create does NOT refill it.
+  // The words belong to the box, not to a one-shot stash. Clearing them and
+  // clicking New chat (already home) must not resurrect the starter.
   document.byId.get("chat-input").value = "";
   document.byId.get("chat-input").dispatch("input");
   document.byId.get("new-thread-button").click();
   await settle();
-  document.byId.get("new-thread-form").submit();
-  await settle();
-  assert.equal(createCalls.length, 2);
+  assert.equal(createCalls.length, 0);
   assert.equal(
     document.byId.get("chat-input").value,
     "",
-    "the starter's prompt is consumed by the thread it created; a plain New must not resurrect it",
+    "clearing the home composer and clicking New chat must not resurrect the starter",
   );
 }
 
@@ -4423,20 +4474,17 @@ async function testCancelledStarterDropsItsPrompt() {
   );
   cards[0].click();
   await settle();
-  document.byId.get("new-thread-cancel-button").click();
-  await settle();
-
-  // Via the empty-state button, deliberately: the sidebar's New clears the
-  // stash itself, so only this path would expose a stash that survived the
-  // cancel.
-  document.byId.get("empty-new-thread-button").click();
+  assert.match(document.byId.get("chat-input").value, /files I attach/i);
+  document.byId.get("chat-input").value = "";
+  document.byId.get("chat-input").dispatch("input");
+  ns.openNewThreadForm();
   await settle();
   document.byId.get("new-thread-form").submit();
   await settle();
   assert.equal(
     document.byId.get("chat-input").value,
     "",
-    "cancelling the starter's form must drop its prompt",
+    "a named create after clearing a starter must not resurrect the prompt",
   );
 }
 
@@ -5340,14 +5388,14 @@ async function testComposerChipsNameRuntimeAndIdentity() {
   await settle();
 
   const runtime = document.byId.get("runtime-chip");
-  assert.equal(runtime.hidden, false, "a usable composer must say where the turn runs");
-  assert.match(runtime.textContent, /Local · chat/, "chat-only local mode is named as such");
+  assert.equal(runtime.hidden, true, "where the binary lives is a footnote, not a chip");
   const accountChip = document.byId.get("account-chip");
-  assert.equal(accountChip.hidden, false, "local-only sessions name the identity at the composer");
-  assert.equal(accountChip.textContent, "Ming");
+  assert.equal(accountChip.hidden, true, "identity already sits in the rail");
   const modeChip = document.byId.get("mode-chip");
-  assert.equal(modeChip.hidden, false, "a single skill is shown as a chip, not a one-option selector");
-  assert.equal(modeChip.textContent, "PPT");
+  assert.equal(modeChip.hidden, true, "a one-option skill is not a choice");
+  const toolMode = document.byId.get("tool-mode-chip");
+  assert.equal(toolMode.hidden, false, "Ask / Auto stays — it changes what the next turn is allowed to do");
+  assert.equal(toolMode.textContent, "Ask");
 }
 
 // Export: the conversation leaves as a Markdown file in the thread's own
@@ -5525,7 +5573,7 @@ async function testSignedOutLocalCanCreateThread() {
   // than replacing it.
   context.crypto.randomUUID = () => newUUID;
 
-  document.byId.get("empty-new-thread-button").click();
+  ns.openNewThreadForm();
   await settle();
   assert.equal(document.byId.get("new-thread-form").hidden, false, "the form opens signed-out");
   const nameInput = document.byId.get("new-thread-name");
@@ -6473,8 +6521,8 @@ async function testSignedOutLocalRouteCanDriveTheAgent() {
   );
   assert.match(
     document.byId.get("composer-status").textContent,
-    /local model, chat only/i,
-    "the composer must say where the turn runs AND that no tools are wired — the dispatch falls back silently, the composer must not",
+    /chat only/i,
+    "the composer must say tools are not wired — the dispatch falls back silently, the composer must not",
   );
 
   // And a turn actually goes out.
@@ -8408,9 +8456,10 @@ async function testCreatesThreadOnceAndFocusesComposer() {
 
   const { context, document, ns } = await runRenderer(bridge, desktopBridge);
   assert.equal(document.byId.get("empty-title").textContent, "What should we make today?");
-  assert.equal(document.byId.get("empty-new-thread-button").hidden, false);
-  assert.equal(document.byId.get("empty-new-thread-button").disabled, false);
-  document.byId.get("empty-new-thread-button").click();
+  assert.equal(document.byId.get("empty-new-thread-button").hidden, true, "the composer is the door once a model exists");
+  assert.equal(document.byId.get("chat-form").hidden, false, "the home composer must be on the empty screen");
+  assert.equal(document.byId.get("chat-input").disabled, false, "the home composer must accept a first prompt");
+  ns.openNewThreadForm();
   assert.equal(document.byId.get("new-thread-form").hidden, false);
   assert.equal(document.byId.get("new-thread-name").focused, true);
   assert.equal(document.byId.get("new-thread-name").selected, true);
@@ -8440,6 +8489,185 @@ async function testCreatesThreadOnceAndFocusesComposer() {
   assert.equal(document.byId.get("chat-input").value, "");
   assert.equal(ns.state.selectedThreadUUID, newUUID);
   assert.equal(ns.state.createDraft, null);
+}
+
+// Home is a work surface: type, send, the conversation is created from the
+// prompt. No name form. The first sentence is the row's title. This is the
+// path ChatGPT / Claude / Codex all teach, and the path the empty screen
+// now offers.
+async function testHomeSendCreatesThenStartsTurn() {
+  const createCalls = [];
+  const startCalls = [];
+  const newUUID = "00000000-0000-4000-8000-000000000001";
+  const prompt = "Turn my Q3 numbers into an 8-slide business review.";
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") return response({ items: [] });
+      if (pathname === `/agent/threads/${newUUID}/messages`) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      async createThread(input) {
+        createCalls.push({
+          threadUUID: input.threadUUID,
+          name: input.name,
+          agentMode: input.agentMode,
+        });
+        return typedSuccess(
+          { state: "ready", created: true, thread: createdThread(input.threadUUID, input.name, input.agentMode) },
+          201
+        );
+      },
+      startTurn(input) {
+        startCalls.push({ threadUUID: input.threadUUID, userText: input.userText });
+        return { turnID: "home-turn-1" };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
+  assert.equal(document.byId.get("thread-panel").hidden, true);
+  assert.equal(document.byId.get("chat-form").hidden, false);
+  assert.equal(document.byId.get("chat-input").disabled, false);
+  assert.equal(
+    document.byId.get("chat-input").focused,
+    true,
+    "a ready home focuses the box — landing should be a place you type",
+  );
+  assert.equal(document.byId.get("empty-new-thread-button").hidden, true);
+
+  document.byId.get("chat-input").value = prompt;
+  document.byId.get("chat-input").dispatch("input");
+  assert.equal(document.byId.get("send-button").disabled, false);
+  document.byId.get("chat-form").submit();
+  await settle();
+  await settle();
+
+  assert.deepEqual(createCalls, [
+    { threadUUID: newUUID, name: prompt, agentMode: "ppt" },
+  ]);
+  assert.deepEqual(startCalls, [
+    { threadUUID: newUUID, userText: prompt },
+  ]);
+  assert.equal(document.byId.get("new-thread-form").hidden, true);
+  assert.equal(document.byId.get("thread-panel").hidden, false);
+  assert.match(document.byId.get("thread-list").textContent, /Q3 numbers/);
+  assert.equal(document.byId.get("thread-title").textContent, prompt);
+  assert.equal(ns.state.selectedThreadUUID, newUUID);
+  assert.equal(document.byId.get("chat-input").value, "");
+}
+
+// A file on the blank screen is how ChatGPT and Claude start a conversation
+// that already has a source. The thread is created from the typed prompt
+// (or the file name if the box is empty), then the upload lands on it.
+async function testHomeAttachCreatesThenUploads() {
+  const createCalls = [];
+  const uploads = [];
+  const newUUID = "00000000-0000-4000-8000-000000000001";
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") return response({ items: [] });
+      if (pathname === `/agent/threads/${newUUID}/messages`) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile(uuid, file) {
+        uploads.push({ uuid, name: file.name });
+        return typedSuccess({ file_id: 88, file_name: file.name, mime_type: "application/pdf", file_type: "pdf", file_size: file.size });
+      },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      async createThread(input) {
+        createCalls.push({ threadUUID: input.threadUUID, name: input.name });
+        return typedSuccess(
+          { state: "ready", created: true, thread: createdThread(input.threadUUID, input.name, input.agentMode) },
+          201
+        );
+      },
+      startTurn() { throw new Error("attaching must not send a prompt"); },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
+  assert.equal(document.byId.get("attach-button").disabled, false, "home can attach");
+  document.byId.get("chat-input").value = "Summarise this";
+  document.byId.get("chat-input").dispatch("input");
+
+  const input = document.byId.get("file-input");
+  input.files = [{ name: "report.pdf", size: 2048 }];
+  input.dispatch("change");
+  await settle();
+  await settle();
+
+  assert.deepEqual(createCalls, [{ threadUUID: newUUID, name: "Summarise this" }]);
+  assert.deepEqual(uploads, [{ uuid: newUUID, name: "report.pdf" }]);
+  assert.equal(document.byId.get("thread-panel").hidden, false);
+  assert.equal(ns.state.selectedThreadUUID, newUUID);
+  assert.equal(
+    document.byId.get("chat-input").value,
+    "Summarise this",
+    "attaching must not eat the prompt the file is for",
+  );
+  assert.match(document.byId.get("attachment-chips").textContent, /report\.pdf/);
+}
+
+async function testHomeDropNamesTheConversationFromTheFile() {
+  const createCalls = [];
+  const uploads = [];
+  const newUUID = "00000000-0000-4000-8000-000000000001";
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-08-06T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") return response({ items: [] });
+      if (pathname === `/agent/threads/${newUUID}/messages`) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile(uuid, file) {
+        uploads.push(file.name);
+        return typedSuccess({ file_id: 89, file_name: file.name, mime_type: "text/plain", file_type: "text", file_size: file.size });
+      },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      async createThread(input) {
+        createCalls.push(input.name);
+        return typedSuccess(
+          { state: "ready", created: true, thread: createdThread(input.threadUUID, input.name, input.agentMode) },
+          201
+        );
+      },
+      startTurn() { throw new Error("a drop must not send"); },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
+  const home = document.byId.get("empty-state");
+  home.dispatch("dragover", { dataTransfer: { files: [] } });
+  assert.equal(home.classList.contains("drop-target"), true, "the blank screen is a drop target");
+  home.dispatch("drop", { dataTransfer: { files: [{ name: "notes.txt", size: 40 }] } });
+  await settle();
+  await settle();
+  assert.deepEqual(createCalls, ["notes"]);
+  assert.deepEqual(uploads, ["notes.txt"]);
+  assert.equal(ns.state.selectedThreadUUID, newUUID);
+  assert.match(document.byId.get("thread-title").textContent, /^notes$/);
 }
 
 async function testCreateRetriesKeepUUIDAndAcceptCurrentReplayRow() {
@@ -8517,7 +8745,7 @@ async function testCreateRetriesKeepUUIDAndAcceptCurrentReplayRow() {
   };
 
   const { context, document, ns } = await runRenderer(bridge, desktopBridge);
-  document.byId.get("new-thread-button").click();
+  ns.openNewThreadForm();
   document.byId.get("new-thread-name").value = "Original draft title";
   document.byId.get("new-thread-name").dispatch("input");
   document.byId.get("new-thread-form").submit();
@@ -8637,7 +8865,7 @@ async function testPermanentCreateFailuresDoNotOfferSameIdentityRetry() {
     };
 
     const { context, document, ns } = await runRenderer(bridge, desktopBridge);
-    document.byId.get("new-thread-button").click();
+    ns.openNewThreadForm();
     document.byId.get("new-thread-form").submit();
     await settle();
 
@@ -8714,7 +8942,7 @@ async function testPausedCreateReplayRequiresExplicitCancel() {
   };
 
   const { context, document, ns } = await runRenderer(bridge, desktopBridge);
-  document.byId.get("new-thread-button").click();
+  ns.openNewThreadForm();
   document.byId.get("new-thread-form").submit();
   await settle();
 
@@ -8775,7 +9003,7 @@ async function testCreateEscapeFencesLateCompletion() {
   };
 
   const { context, document, ns } = await runRenderer(bridge, desktopBridge);
-  document.byId.get("new-thread-button").click();
+  ns.openNewThreadForm();
   document.byId.get("new-thread-form").submit();
   document.byId.get("new-thread-form").dispatch("keydown", { key: "Escape" });
   assert.equal(document.byId.get("new-thread-form").hidden, true);
@@ -8839,7 +9067,7 @@ async function testCreateSessionChangedUsesUnifiedRecovery() {
   };
 
   const { context, document, ns } = await runRenderer(bridge, desktopBridge);
-  document.byId.get("new-thread-button").click();
+  ns.openNewThreadForm();
   document.byId.get("new-thread-form").submit();
   await settle();
   await settle();
@@ -8900,7 +9128,7 @@ async function testCreateRejectsForeignUUIDAndMode() {
     };
 
     const { context, document, ns } = await runRenderer(bridge, desktopBridge);
-    document.byId.get("new-thread-button").click();
+    ns.openNewThreadForm();
     document.byId.get("new-thread-form").submit();
     await settle();
     assert.equal(ns.state.selectedThreadUUID, null);
@@ -9149,7 +9377,11 @@ async function testWorkLogFoldsRunsOfLooking() {
   // thing and says it in one realm.
   const shape = (entries) =>
     entries
-      .map((entry) => (entry.run ? `${entry.name}×${entry.run.length}` : entry.step.name))
+      .map((entry) =>
+        entry.run
+          ? `${entry.mixed ? "Look" : entry.name}×${entry.run.length}`
+          : entry.step.name
+      )
       .join(", ");
 
   assert.equal(
@@ -9171,8 +9403,8 @@ async function testWorkLogFoldsRunsOfLooking() {
     "Read×2, Write, Read×2",
   );
 
-  // Two different looking tools are two different acts, and a row can only
-  // carry one verb — without this a Grep would be counted under "Read".
+  // Consecutive looking is one act even when the verb changes. A mixed
+  // run cannot wear a single verb, so the shape marks it Look.
   assert.equal(
     shape(foldWorkLogRuns([
       read("a.md"),
@@ -9180,7 +9412,7 @@ async function testWorkLogFoldsRunsOfLooking() {
       { name: "Grep", target: "todo", done: true },
       { name: "Grep", target: "fixme", done: true },
     ])),
-    "Read×2, Grep×2",
+    "Look×4",
   );
 
   // Writes never fold, however many of them there are.
@@ -9232,6 +9464,14 @@ async function testWorkLogFoldsRunsOfLooking() {
     harness.emit({ type: "tool_use", name: "Read", target });
     harness.emit({ type: "tool_result", name: "Read", target, isError: false });
   }
+  await settle();
+  const liveFold = walk(document.byId.get("message-list"), (n) => n.classList?.contains("worklog-step"))[0];
+  assert.match(liveFold.textContent, /a\.md, b\.md/u, "a same-tool fold names the files it looked at");
+  assert.match(liveFold.textContent, /\+2 more/u);
+  harness.emit({ type: "tool_use", name: "Grep", target: "todo" });
+  harness.emit({ type: "tool_result", name: "Grep", target: "todo", isError: false });
+  harness.emit({ type: "tool_use", name: "Grep", target: "fixme" });
+  harness.emit({ type: "tool_result", name: "Grep", target: "fixme", isError: false });
   harness.emit({ type: "tool_use", name: "Write", target: "out.md" });
   harness.emit({ type: "tool_result", name: "Write", target: "out.md", isError: false });
   harness.emit({ type: "text_delta", delta: "Done." });
@@ -9239,15 +9479,14 @@ async function testWorkLogFoldsRunsOfLooking() {
 
   const rows = () =>
     walk(document.byId.get("message-list"), (n) => n.classList?.contains("worklog-step"));
-  assert.equal(rows().length, 2, "eight reads and a write are two rows, not nine");
+  assert.equal(rows().length, 2, "a look-around and a write are two rows, not eleven");
   const folded = rows()[0];
-  assert.match(folded.textContent, /Read/u);
-  assert.match(folded.textContent, /a\.md, b\.md/u, "a folded row names the files it looked at");
-  // Six named, and the remainder COUNTED rather than dropped: a fold that
-  // quietly loses rows reads as "that is all of it", which is the one thing a
-  // work log must never imply.
-  assert.match(folded.textContent, /\+2 more/u);
-  assert.doesNotMatch(folded.textContent, /g\.md/u);
+  assert.match(
+    folded.textContent,
+    /Read 8 · Grep 2/u,
+    "mixed looking counts by verb rather than wearing the first verb's name",
+  );
+  assert.doesNotMatch(folded.textContent, /a\.md/u, "a mixed fold does not list files");
   assert.match(rows()[1].textContent, /Write.*out\.md/su, "the write keeps its own row");
 }
 
@@ -10193,6 +10432,9 @@ await testRecoverableTurnDismissIsExplicitAndIdempotent();
 await testRecoverableErrorResultIsSanitized();
 await testMalformedRecoverableTurnDoesNotLeakOrRender();
 await testCreatesThreadOnceAndFocusesComposer();
+await testHomeSendCreatesThenStartsTurn();
+await testHomeAttachCreatesThenUploads();
+await testHomeDropNamesTheConversationFromTheFile();
 await testCreateRetriesKeepUUIDAndAcceptCurrentReplayRow();
 await testPermanentCreateFailuresDoNotOfferSameIdentityRetry();
 await testPausedCreateReplayRequiresExplicitCancel();

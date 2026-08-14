@@ -346,7 +346,7 @@ export function stashComposerDraft() {
   }
 }
 
-export function selectThread(thread) {
+export function selectThread(thread, options = {}) {
   if (state.activeTurn && thread.uuid === state.selectedThreadUUID) {
     return;
   }
@@ -367,13 +367,25 @@ export function selectThread(thread) {
   if (state.activeTurn) {
     invalidateActiveTurn(true);
   }
-  stashComposerDraft();
+  if (!state.selectedThreadUUID) {
+    state.homeDraft = chatInput.value;
+  } else {
+    stashComposerDraft();
+  }
   fences.selection.bump();
   state.selectedThreadUUID = thread.uuid;
-  // Restore this thread's stashed draft, or a clean box. Before the map the
-  // outgoing thread's words simply stayed in the composer — leaking into the
-  // next thread, and overwritten the moment anything typed there.
-  chatInput.value = state.composerDrafts.get(thread.uuid) ?? "";
+  // Home create (skipLoad) keeps the words that were already in the box —
+  // they belong to this new conversation. Every other selection restores
+  // that thread's stash, or a clean box.
+  if (options.skipLoad) {
+    chatInput.value = state.homeDraft || "";
+    if (chatInput.value.trim() !== "") {
+      state.composerDrafts.set(thread.uuid, chatInput.value);
+    }
+    state.homeDraft = "";
+  } else {
+    chatInput.value = state.composerDrafts.get(thread.uuid) ?? "";
+  }
   // The context panel follows the selection: its sources belong to a thread,
   // not to the session.
   void loadThreadSources(thread.uuid);
@@ -392,6 +404,13 @@ export function selectThread(thread) {
   updateComposerState();
   setTurnState(selectedRecoverableTurn() ? "Interrupted" : "Ready");
   messageList.textContent = "";
+  // A home send creates the thread and immediately paints the optimistic
+  // turn. Loading the empty snapshot afterwards would wipe that paint.
+  if (options.skipLoad) {
+    snapshot = [];
+    mountedFrom = 0;
+    return;
+  }
   messageList.appendChild(renderNotice("Loading cached messages..."));
   void loadMessagesForSelection(thread, context).catch((error) => {
     void handleScopedError(error, context);
@@ -600,6 +619,16 @@ export function formatTurnDuration(ms) {
 // setTurnState is the one place the pill's text and colour change together.
 // The class is derived from the label so the two can never disagree.
 export function setTurnState(label, detail = "") {
+  // Idle is the absence of a pill. "Ready" said nothing a title bar does not
+  // already say, and every major agent client leaves the chrome quiet until
+  // a run is actually doing something.
+  if (label === "Ready") {
+    turnState.hidden = true;
+    turnState.textContent = "";
+    turnState.className = "turn-state";
+    return;
+  }
+  turnState.hidden = false;
   turnState.textContent = detail ? `${label} · ${detail}` : label;
   const tone =
     label === "Working" || label === "Resuming" || label === "Stopping"
@@ -630,8 +659,16 @@ export function updateSelectedThreadHeading() {
     (candidate) => candidate.uuid === state.selectedThreadUUID
   );
   if (!thread) return;
-  threadTitle.textContent = thread.name || "Untitled thread";
-  threadMeta.textContent = `${thread.agent_mode || "agent"} · ${thread.message_count || 0} messages · ${formatMessageTime(thread.updated_at) || formatDate(thread.updated_at)}`;
+  const name = thread.name || "Untitled thread";
+  const meta = `${thread.agent_mode || "agent"} · ${thread.message_count || 0} messages · ${formatMessageTime(thread.updated_at) || formatDate(thread.updated_at)}`;
+  threadTitle.textContent = name;
+  // The name is the chrome. Skill, count and clock are a tooltip — printing
+  // them beside the title is the dashboard line every competitor dropped.
+  threadTitle.title = meta;
+  if (threadMeta) {
+    threadMeta.textContent = meta;
+    threadMeta.hidden = true;
+  }
   // Rename lives where the title is read, and only where the sidecar would
   // accept it: a synced thread's name belongs to the cloud copy, which the
   // sync worker would restore over any local edit.

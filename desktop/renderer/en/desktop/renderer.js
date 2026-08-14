@@ -157,12 +157,16 @@ import {
 import {
   attachDroppedFiles,
   buildStarterCards,
+  handleAttachmentDragLeave,
+  handleAttachmentDrop,
+  handleAttachmentDragOver,
   canSendTurn,
   cancelNewThreadDraft,
   hasAttemptedCreateDraft,
   isLocalIdentity,
   isLocalOnlySession,
-  openNewThreadForm,
+  createThreadForHomeSend,
+  handleNewChat,
   removeRecoverableTurn,
   renderAttachments,
   renderEmptyState,
@@ -172,7 +176,6 @@ import {
   updateComposerState,
   updateNewThreadState,
   updateRecoveryState,
-  uploadThreadFile,
 } from "./composer.js";
 import {
   DELETE_ARM_MS,
@@ -423,9 +426,15 @@ export const state = {
   // again; only a session change (a different signed-in account) clears it.
   // In-memory on purpose: drafts do not outlive the window.
   composerDrafts: new Map(),
+  // The unsent home composer. Distinct from per-thread drafts because home
+  // is not a thread: New chat from a conversation must restore what was
+  // being typed on the blank screen, and opening a conversation must not
+  // leak those words into it.
+  homeDraft: "",
   // A starter card's prompt, held while the new-thread form it opened is
   // completed. Consumed exactly once, into the composer of the thread it
-  // created; cancelling the form drops it.
+  // created; cancelling the form drops it. Home starters write the box
+  // directly and never set this.
   starterPrompt: null,
   // True when a turn sent right now would run on the locally configured model.
   // That is the one condition under which the sidecar serves an unauthenticated
@@ -1331,33 +1340,17 @@ function renderLocalAccountBinding() {
   }
 }
 
-// The context chips above the input, Codex-style: where the turn will run
-// and who it will run as. Facts the dispatch already knows, surfaced where
-// the typing happens instead of buried in Models/settings.
+// The composer row names what the next turn will do, not who you are or
+// where the binary lives. ChatGPT / Claude / Codex keep this to model +
+// permission; identity already sits in the rail, and Local/Cloud is a
+// footnote on the model chip. The extra chips stay in the markup so a
+// second skill or a mind override can earn its pixel back without a
+// layout change — they just stay hidden until they distinguish something.
 export function renderComposerChips() {
   const runtime = document.querySelector("#runtime-chip");
   const accountChip = document.querySelector("#account-chip");
-  if (runtime) {
-    if (!canSendTurn()) {
-      runtime.hidden = true;
-    } else if (state.localRoute) {
-      runtime.textContent = state.toolLoop ? "⌂ Local · tools" : "⌂ Local · chat";
-      runtime.hidden = false;
-    } else {
-      runtime.textContent = "☁ Cloud";
-      runtime.hidden = false;
-    }
-  }
-  if (accountChip) {
-    const account = isLocalIdentity() ? activeLocalAccount() : null;
-    // See defaultLocalAccountLabel: the placeholder name is not worth a chip.
-    if (account && account.name !== defaultLocalAccountLabel) {
-      accountChip.textContent = account.name;
-      accountChip.hidden = false;
-    } else {
-      accountChip.hidden = true;
-    }
-  }
+  if (runtime) runtime.hidden = true;
+  if (accountChip) accountChip.hidden = true;
   renderMindChip();
   renderModelChip();
   renderToolModeChip();
@@ -1376,8 +1369,11 @@ function renderModelChip() {
     return;
   }
   chip.textContent = label;
-  chip.title = "Model: " + label + ". Click to change.";
-  chip.setAttribute("aria-label", "Model: " + label + ". Open settings");
+  const where = state.localRoute
+    ? (state.toolLoop ? "local, with tools" : "local")
+    : "cloud";
+  chip.title = "Model: " + label + " (" + where + "). Click to change.";
+  chip.setAttribute("aria-label", "Model: " + label + " (" + where + "). Open settings");
   chip.hidden = false;
 }
 
@@ -1977,10 +1973,11 @@ function clearWorkbenchForSessionChange() {
   state.createFormOpen = false;
   state.creatingThread = false;
   state.createDraft = null;
-  newThreadName.value = "Untitled presentation";
+  newThreadName.value = "New chat";
   setCreateFeedback("");
   fences.selection.bump();
   state.selectedThreadUUID = null;
+  state.homeDraft = "";
   state.threads = [];
   state.skills = [];
   state.allowedModes = [];
@@ -2073,11 +2070,29 @@ export function submitChat(event) {
   if (state.activeTurn) {
     return;
   }
+  const userText = chatInput.value.trim();
+  if (!isValidChatText(userText)) {
+    updateComposerState();
+    return;
+  }
+  if (!state.selectedThreadUUID) {
+    void submitHomeChat(userText);
+    return;
+  }
+  startChatTurn(userText);
+}
+
+async function submitHomeChat(userText) {
+  const created = await createThreadForHomeSend(userText);
+  if (!created) return;
+  startChatTurn(userText);
+}
+
+function startChatTurn(userText) {
   const agent = desktopAgentBridge();
   const thread = state.threads.find(
     (candidate) => candidate.uuid === state.selectedThreadUUID
   );
-  const userText = chatInput.value.trim();
   if (
     !canSendTurn() ||
     !agent ||
@@ -2119,6 +2134,7 @@ export function submitChat(event) {
   };
   state.activeTurn = activeTurn;
   chatInput.value = "";
+  if (chatInput.style) chatInput.style.height = "auto";
   // The draft was consumed by this turn; a stale stash would resurrect an
   // already-sent prompt on the next switch back to this thread.
   state.composerDrafts.delete(thread.uuid);
@@ -3028,12 +3044,16 @@ export async function refresh() {
   state.createFormOpen = false;
   state.creatingThread = false;
   state.createDraft = null;
-  newThreadName.value = "Untitled presentation";
+  newThreadName.value = "New chat";
   setCreateFeedback("");
   // A refresh empties the composer but must not lose its words: stash the
   // draft so re-selecting the thread restores it. Only a session change
   // (clearWorkbenchForSessionChange) drops drafts outright.
-  stashComposerDraft();
+  if (state.selectedThreadUUID) {
+    stashComposerDraft();
+  } else {
+    state.homeDraft = chatInput.value;
+  }
   fences.selection.bump();
   state.selectedThreadUUID = null;
   state.skills = [];
@@ -3041,7 +3061,7 @@ export async function refresh() {
   state.selectedMode = "";
   state.skillsLoading = false;
   state.skillsDegraded = false;
-  chatInput.value = "";
+  chatInput.value = state.homeDraft || "";
   messageList.textContent = "";
   renderSkillOptions();
   emptyState.hidden = false;
@@ -3216,12 +3236,10 @@ loginCancelButton.addEventListener("click", () => {
   void cancelLogin();
 });
 newThreadButton.addEventListener("click", () => {
-  // A plain "New" is not a starter flow; a stale stash would surprise.
-  state.starterPrompt = null;
-  openNewThreadForm();
+  handleNewChat();
 });
 emptyNewThreadButton.addEventListener("click", () => {
-  openNewThreadForm();
+  handleNewChat();
 });
 newThreadForm.addEventListener("submit", (event) => {
   void submitNewThread(event);
@@ -3253,26 +3271,21 @@ attachButton.addEventListener("click", () => {
 fileInput.addEventListener("change", () => {
   const files = Array.from(fileInput.files || []);
   fileInput.value = "";
-  for (const file of files) {
-    uploadThreadFile(file);
-  }
+  attachDroppedFiles(files);
 });
 
-threadPanel.addEventListener("dragover", (event) => {
-  if (!event.dataTransfer) return;
-  event.preventDefault();
-  if (state.selectedThreadUUID) {
-    threadPanel.classList.add("drop-target");
-  }
-});
-threadPanel.addEventListener("dragleave", () => {
-  threadPanel.classList.remove("drop-target");
-});
-threadPanel.addEventListener("drop", (event) => {
-  event.preventDefault();
-  threadPanel.classList.remove("drop-target");
-  attachDroppedFiles(event.dataTransfer?.files);
-});
+for (const surface of [threadPanel, chatForm, emptyState]) {
+  if (!surface) continue;
+  surface.addEventListener("dragover", (event) => {
+    handleAttachmentDragOver(event, surface);
+  });
+  surface.addEventListener("dragleave", () => {
+    handleAttachmentDragLeave(surface);
+  });
+  surface.addEventListener("drop", (event) => {
+    handleAttachmentDrop(event, surface);
+  });
+}
 chatInput.addEventListener("paste", (event) => {
   const files = event.clipboardData?.files;
   if (files && files.length > 0) {

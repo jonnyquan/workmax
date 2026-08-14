@@ -281,24 +281,21 @@ function foldable(step) {
   );
 }
 
-// Consecutive runs of the same foldable tool become one row. Consecutive
-// matters: reads separated by a write are two separate acts of looking, and
-// merging across the write would put them in an order that never happened.
+// Consecutive foldable steps are one look-around, even when the verb
+// changes. Read then Grep then Glob is still looking; a write in the
+// middle is not. Mixed runs count by verb ("Read 3 · Grep 2") because a
+// single verb cannot name two acts. A run of one tool still names files —
+// that is what the reader is scanning for.
 export function foldWorkLogRuns(steps) {
   const out = [];
   for (const step of steps) {
     const last = out[out.length - 1];
-    if (
-      last &&
-      last.run &&
-      last.name === step.name &&
-      foldable(step) &&
-      foldable(last.run[last.run.length - 1])
-    ) {
+    if (last && last.run && foldable(step)) {
       last.run.push(step);
+      if (last.name !== step.name) last.mixed = true;
       continue;
     }
-    out.push(foldable(step) ? { name: step.name, run: [step] } : { step });
+    out.push(foldable(step) ? { name: step.name, run: [step], mixed: false } : { step });
   }
   // A run of one is a step. Folding it would spend a different row shape on
   // exactly the same information.
@@ -307,11 +304,33 @@ export function foldWorkLogRuns(steps) {
   );
 }
 
+function countFoldedTools(run) {
+  const counts = [];
+  const index = new Map();
+  for (const step of run) {
+    const at = index.get(step.name);
+    if (at === undefined) {
+      index.set(step.name, counts.length);
+      counts.push({ name: step.name, count: 1 });
+    } else {
+      counts[at].count += 1;
+    }
+  }
+  return counts;
+}
+
 function renderWorkLogFold(entry) {
   const row = document.createElement("li");
   row.className = "worklog-step done";
   const verb = document.createElement("span");
   verb.className = "worklog-verb";
+  if (entry.mixed) {
+    verb.textContent = countFoldedTools(entry.run)
+      .map((item) => `${item.name} ${item.count}`)
+      .join(" · ");
+    row.appendChild(verb);
+    return row;
+  }
   verb.textContent = entry.name;
   row.appendChild(verb);
 
@@ -506,6 +525,14 @@ export function recordReasoningDelta(activeTurn, delta) {
   if (total > MAX_TURN_TEXT_BYTES) return;
   activeTurn.reasoningText = (activeTurn.reasoningText || "") + delta;
   activeTurn.reasoningTextBytes = total;
+  if (activeTurn.reasoningSettled) {
+    const strip = activeTurn.reasoningStrip;
+    const detail = Array.from(strip?.children || []).find((child) =>
+      child.classList?.contains("reasoning-detail")
+    );
+    if (detail) detail.textContent = activeTurn.reasoningText;
+    return;
+  }
   // The caption repaints once per frame with the rest of the stream; per-delta
   // it would re-render a line nobody could read at that rate.
   scheduleStreamFlush(activeTurn);
@@ -513,6 +540,7 @@ export function recordReasoningDelta(activeTurn, delta) {
 }
 
 export function paintReasoningCaption(activeTurn) {
+  if (activeTurn.reasoningSettled) return;
   const strip = ensureReasoningStrip(activeTurn);
   if (!strip) return;
   const line = reasoningCaptionLine(activeTurn.reasoningText || "");
@@ -521,18 +549,35 @@ export function paintReasoningCaption(activeTurn) {
     : "Thinking…";
 }
 
+// The live subtitle folds as soon as the turn is no longer reasoning —
+// first tool, first approval, first answer token. Waiting for `done` left
+// "Thinking…" on screen next to the work it had already finished thinking
+// about. More reasoning after the fold updates the stored text (and an
+// open detail) but does not reopen the caption; a reader who closed it
+// has spoken.
+export function maybeSettleReasoning(activeTurn) {
+  if (!activeTurn || activeTurn.reasoningSettled) return;
+  if (!(activeTurn.reasoningText || "").trim()) return;
+  settleReasoningStrip(activeTurn);
+}
+
 // When the turn settles, the live caption folds into a "Thought" label whose
 // click reveals the full reasoning text. A turn that never sent reasoning has
 // no strip; a strip whose turn ends before any text is removed outright.
 function settleReasoningStrip(activeTurn) {
+  if (activeTurn.reasoningSettled) return;
   const strip = activeTurn.reasoningStrip;
-  if (!strip) return;
+  if (!strip) {
+    activeTurn.reasoningSettled = Boolean((activeTurn.reasoningText || "").trim());
+    return;
+  }
   const text = activeTurn.reasoningText || "";
   if (!text) {
     strip.remove();
     activeTurn.reasoningStrip = null;
     return;
   }
+  activeTurn.reasoningSettled = true;
   strip.textContent = "";
   strip.classList.add("settled");
   const toggle = document.createElement("button");
