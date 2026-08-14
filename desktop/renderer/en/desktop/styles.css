@@ -1234,8 +1234,8 @@ textarea::placeholder {
   display: grid;
   flex: none;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 27px;
+  height: 27px;
   border-radius: var(--r-pill);
   background: hsl(var(--primary));
   color: hsl(var(--primary-foreground));

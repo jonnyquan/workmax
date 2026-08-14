@@ -247,19 +247,14 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
       `${id} is a window-level control and belongs in the title bar`,
     );
   }
-  // The brand row is only the brand again: the icons that shared it moved up.
-  const brandAt = rendererHTML.indexOf('class="brand"');
+  // The brand row is gone: the rail heads with its vertical nav, Codex-style,
+  // and New chat is the first thing in the sidebar.
+  assert.doesNotMatch(rendererHTML, /class="brand"/u, "the rail carries no brand banner");
+  const sidebarAt = rendererHTML.indexOf('id="sidebar"');
   const newChatAt = rendererHTML.indexOf('id="new-thread-button"');
-  assert.ok(brandAt > 0 && newChatAt > brandAt, "the brand row still heads the rail");
-  // The BRAND ROW carries no controls (search and the fold live in the title
-  // bar). The rail-nav between brand and toolbar is a legitimate section
-  // switcher, so the slice checked here is the brand row alone.
-  const brandEnd = rendererHTML.indexOf("</div>", brandAt);
-  assert.doesNotMatch(
-    rendererHTML.slice(brandAt, brandEnd),
-    /<button/u,
-    "the rail's head carries no controls",
-  );
+  assert.ok(newChatAt > sidebarAt, "New chat is the first thing in the rail");
+  // The head that replaced the brand row is the nav itself, whose buttons
+  // are the point of it; nothing else to forbid.
   // The strip drags the window; the controls in it do not. The custom property
   // inherits, so the no-drag has to be declared on the buttons themselves.
   assert.match(
