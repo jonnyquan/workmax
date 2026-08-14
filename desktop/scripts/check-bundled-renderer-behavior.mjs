@@ -436,7 +436,7 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   ]) {
     assert.doesNotMatch(rendererCSS, gone, "no site keeps a private copy of reveal-on-hover");
   }
-  assert.match(rendererHTML, /id="content-topbar" class="content-topbar reveal-on-hover-host"/u);
+  assert.match(rendererHTML, /id="titlebar-center" class="titlebar-center reveal-on-hover-host"/u);
   assert.match(rendererHTML, /id="rename-thread-button" class="ghost reveal-on-hover"/u);
   // Rows are built with one of two class strings: plain, or indented inside a
   // project. The pattern accepts both.
@@ -472,28 +472,61 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   );
 }
 
-// --- The main column's chrome occupies nothing when it has nothing to say -----
+// --- The main column has no chrome of its own any more ------------------------
 //
-// Same technique, same reason: the welcome screen is centred in the whole
-// column, not in what is left under a bar drawn for a conversation that is not
-// open. The strip owes nobody a control in this state — every view control it
-// used to carry in it lives in the title bar now, which is always on screen.
+// The conversation's name and the run's state moved into the window's title
+// bar; the strip that used to headline this column is gone entirely, so the
+// welcome screen is centred in the whole column and the transcript starts
+// directly under the title bar.
 {
+  // The strip must not come back: neither the markup nor the CSS rule that
+  // used to collapse it.
+  assert.doesNotMatch(rendererHTML, /id="content-topbar"/u, "the middle column's chrome strip is gone");
+  assert.doesNotMatch(rendererCSS, /\.content-topbar/u, "its rules went with it");
+  // The header that used to live inside the thread panel is gone too.
+  assert.doesNotMatch(rendererCSS, /\.thread-panel header/u);
+  // The name lives in the title bar now, between the two switch clusters and
+  // before the trailing cluster that carries the run's state.
+  const titlebarAt = rendererHTML.indexOf('id="titlebar"');
+  const centerAt = rendererHTML.indexOf('id="titlebar-center"');
+  const trailingAt = rendererHTML.indexOf('class="titlebar-trailing"');
+  const shellAt = rendererHTML.indexOf('<main class="shell"');
+  assert.ok(titlebarAt > 0 && centerAt > titlebarAt, "the title cluster sits in the title bar");
+  assert.ok(
+    trailingAt > centerAt && shellAt > trailingAt,
+    "the cluster is centred between the leading and trailing switches",
+  );
+  const centerHTML = rendererHTML.slice(centerAt, trailingAt);
+  const trailingHTML = rendererHTML.slice(trailingAt, shellAt);
+  for (const id of [
+    "thread-title-row",
+    "thread-title",
+    "thread-meta",
+    "rename-thread-button",
+    "export-thread-button",
+    "rename-thread-form",
+  ]) {
+    assert.match(
+      centerHTML,
+      new RegExp(`id=["']${id}["']`, "u"),
+      `${id} lives in the title bar's centre`,
+    );
+  }
+  assert.match(
+    trailingHTML,
+    /id=["']turn-state["']/u,
+    "the run's state rides the trailing cluster, beside the switches",
+  );
+  // The rename field must opt out of the drag region, or a name edit moves
+  // the window instead of selecting the text.
   assert.match(
     rendererCSS,
-    /\.content:has\(#thread-panel\[hidden\]\)\s*\.content-topbar\s*\{\s*display:\s*none;/u,
-    "with nothing open the chrome strip must take no height at all",
+    /\.titlebar input\s*\{[^}]*--wails-draggable:\s*no-drag;/u,
+    "the rename field is not part of the window drag region",
   );
-  // The header that used to live inside the thread panel is gone: it was two
-  // lines (title over metadata) inside a column that had a two-line rail head
-  // above it. Both are one line now, and the parts of it live in the strip —
-  // which is what lets the strip disappear with them.
-  assert.doesNotMatch(rendererCSS, /\.thread-panel header/u);
-  const topbarAt = rendererHTML.indexOf('id="content-topbar"');
   const panelAt = rendererHTML.indexOf('id="thread-panel"');
   const formAt = rendererHTML.indexOf('id="chat-form"');
   const emptyAt = rendererHTML.indexOf('id="empty-state"');
-  assert.ok(topbarAt > 0 && panelAt > topbarAt, "the chrome strip precedes the thread panel");
   assert.ok(
     emptyAt > 0 && formAt > panelAt && panelAt > emptyAt,
     "the composer is a sibling of the thread panel so it can sit on the home screen",
@@ -525,22 +558,6 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
     /<svg\b/u,
     "attach is a paperclip, not a plus that already means New chat",
   );
-  const topbarHTML = rendererHTML.slice(topbarAt, panelAt);
-  for (const id of [
-    "thread-title-row",
-    "thread-title",
-    "thread-meta",
-    "rename-thread-button",
-    "export-thread-button",
-    "rename-thread-form",
-    "turn-state",
-  ]) {
-    assert.match(
-      topbarHTML,
-      new RegExp(`id=["']${id}["']`, "u"),
-      `${id} belongs to the main column's one line of chrome`,
-    );
-  }
 }
 
 // The conversation list keeps itself fresh: every mutation repaints it, and the

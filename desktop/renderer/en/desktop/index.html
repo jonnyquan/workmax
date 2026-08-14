@@ -482,6 +482,38 @@
           </svg>
         </button>
       </span>
+      <!-- The conversation's name, centred in the strip the way Codex and
+           every native document window centre theirs. The middle column used
+           to carry its own chrome strip for this; the strip is gone and the
+           name moved up, so the transcript starts directly under the title
+           bar instead of under a second bar that repeated what this one now
+           says.
+
+           Everything here keeps its id from that strip — the rename flow,
+           the export button and the heading writer all address the same
+           elements, only their parent changed. The empty stretch around the
+           name is drag region like the rest of the bar; the buttons and the
+           rename input opt out individually. -->
+      <span id="titlebar-center" class="titlebar-center reveal-on-hover-host">
+        <span id="thread-title-row" class="thread-title-row">
+          <h2 id="thread-title"></h2>
+          <p id="thread-meta" hidden></p>
+          <button id="rename-thread-button" class="ghost reveal-on-hover" type="button" hidden>Rename</button>
+          <button id="export-thread-button" class="ghost reveal-on-hover" type="button" hidden>Export</button>
+        </span>
+        <form id="rename-thread-form" class="rename-thread-form" hidden>
+          <input
+            id="rename-thread-input"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            maxlength="200"
+            aria-label="Conversation name"
+          />
+          <button id="rename-thread-save" class="primary" type="submit">Save</button>
+          <button id="rename-thread-cancel" class="ghost" type="button">Cancel</button>
+        </form>
+      </span>
       <span class="titlebar-trailing">
         <!-- The mind. It sits in the title bar because it belongs to the
              window, not to the conversation inside it: the mind outlives
@@ -534,6 +566,12 @@
             <path d="M9.75 2.75v10.5" />
           </svg>
         </button>
+        <!-- The run's state, at the far right of the strip and only while a
+             run is actually doing something — idle is the absence of a pill,
+             not a "Ready" badge. It sits after the switches because it names
+             a fact about the conversation, and the switches name facts about
+             the window. -->
+        <span id="turn-state" class="turn-state" hidden></span>
       </span>
     </header>
 
@@ -677,41 +715,10 @@
       </aside>
 
       <section id="main-stage" class="content" data-surface="home" aria-live="polite">
-        <!-- The chat column's one strip of chrome. ChatGPT, Claude and Codex
-             put the conversation's name here and nothing else — not the
-             skill, not a message count, not the last-updated clock. Those
-             facts ride the title's tooltip. The run's state still sits at
-             the far right, and only while a run is actually doing something.
-
-             It occupies no height at all when it has nothing to say. That is a
-             CSS consequence of #thread-panel[hidden] rather than a hidden=
-             toggle in JS, for the same reason the workspace column folds that
-             way: the five call sites that set the panel's visibility already
-             state the fact, and a sixth line beside each of them is drift
-             waiting to happen. -->
-        <div id="content-topbar" class="content-topbar reveal-on-hover-host">
-          <div class="thread-header-copy">
-            <div id="thread-title-row" class="thread-title-row">
-              <h2 id="thread-title"></h2>
-              <p id="thread-meta" hidden></p>
-              <button id="rename-thread-button" class="ghost reveal-on-hover" type="button" hidden>Rename</button>
-              <button id="export-thread-button" class="ghost reveal-on-hover" type="button" hidden>Export</button>
-            </div>
-            <form id="rename-thread-form" class="rename-thread-form" hidden>
-              <input
-                id="rename-thread-input"
-                type="text"
-                autocomplete="off"
-                spellcheck="false"
-                maxlength="200"
-                aria-label="Conversation name"
-              />
-              <button id="rename-thread-save" class="primary" type="submit">Save</button>
-              <button id="rename-thread-cancel" class="ghost" type="button">Cancel</button>
-            </form>
-          </div>
-          <span id="turn-state" class="turn-state" hidden></span>
-        </div>
+        <!-- No chrome strip of its own any more: the conversation's name and
+             the run's state both moved up into the window's title bar, so
+             this column starts with the work itself — the greeting on the
+             home surface, the transcript the moment a conversation opens. -->
         <div id="empty-state" class="empty-state">
           <h2 id="empty-title">What should we make today?</h2>
           <p id="empty-description" hidden>Pick a conversation, or start a new one.</p>
@@ -732,9 +739,9 @@
           <button id="empty-new-thread-button" class="primary empty-action" type="button" hidden disabled>New conversation</button>
         </div>
         <div id="thread-panel" class="thread-panel" hidden>
-          <!-- No <header> here any more: the name, its metadata and the run
-               state moved up into #content-topbar, which is one line for the
-               whole column instead of two lines inside this one. -->
+          <!-- No <header> here, and no strip above the column either: the
+               name lives in the window's title bar now, and the transcript
+               starts at the top edge of the window. -->
           <div id="message-viewport" class="message-viewport">
             <div id="message-list" class="message-list"></div>
             <button id="jump-latest" class="jump-latest" type="button" hidden>
@@ -839,12 +846,12 @@
       <!-- The workspace panel is the thread's materials ledger, not a second
            work log. Every section is present only when it has rows; the run
            narrates itself on the message it belongs to, and the one line
-           below is a live pointer at what the loop is on, not a summary. -->
-      <aside class="right-rail context-panel" id="context-panel">
-        <header class="context-header">
-          <h2 class="context-title">Workspace</h2>
-        </header>
+           below is a live pointer at what the loop is on, not a summary.
 
+           No header of its own: the column's switch already lives in the
+           title bar, and a "Workspace" banner above the content only added a
+           third strip of chrome under the other two. -->
+      <aside class="right-rail context-panel" id="context-panel">
         <p class="context-empty" id="context-empty-note" hidden>
           Files you attach and files the agent writes appear here.
         </p>

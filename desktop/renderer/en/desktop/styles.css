@@ -666,11 +666,31 @@ textarea::placeholder {
   align-self: center;
 }
 
+.titlebar input {
+  /* The rename field is the one non-button control in the strip; without
+     this it would inherit the drag region and a name-edit would move the
+     window instead of selecting the text. */
+  --wails-draggable: no-drag;
+}
+
 .titlebar-leading,
 .titlebar-trailing {
   display: flex;
   align-items: center;
   gap: 2px;
+}
+
+/* The conversation's name, centred between the two switch clusters. It is
+   the same element that used to headline the middle column's own chrome
+   strip; the strip is gone and only the name made the move. The title text
+   itself stays drag region — that is how a native document window's title
+   behaves — while the buttons and the rename field opt out above. */
+.titlebar-center {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
 }
 
 /* --- Shell -----------------------------------------------------------------
@@ -1840,8 +1860,7 @@ textarea::placeholder {
   padding: var(--sp-4) var(--sp-4) var(--sp-2);
 }
 
-/* The same line as .context-title, deliberately: whatever the column is
-   showing, its name is one weight and one size. */
+/* One weight and one size for a column's name, wherever it appears. */
 .mind-title {
   color: hsl(var(--foreground));
   font-size: var(--fs-base);
@@ -2259,31 +2278,11 @@ button.mind-button[data-mind-activity] {
 }
 
 /* --- The main column's chrome ----------------------------------------------
-   One line, and only the parts of it that have something to say. Which parts
-   those are is derived, not maintained: #thread-panel[hidden] already states
-   "nothing is open", and the collapse attribute already states "the rail is
-   away", so both facts are read here rather than mirrored into a class. */
-.content-topbar {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: var(--sp-2);
-  min-width: 0;
-  padding: var(--sp-2) var(--sp-4) var(--sp-2) var(--sp-5);
-}
-
-/* Nothing open: the strip is empty, so it takes no height and the welcome
-   screen is centred in the whole column rather than in what is left below a
-   bar. Unlike the old layout it owes nobody a control in this state — the
-   rail's fold and the workspace fold both live in the title bar now, which is
-   always on screen. */
-.content:has(#thread-panel[hidden]) .content-topbar {
-  display: none;
-}
-
-/* The workspace fold moved to the title bar with the other window-level
-   controls, so its "nothing to show" rule has to reach outside .content: the
-   button stands down whenever there is no run to project, wherever it sits. */
+   None of its own any more: the conversation's name and the run's state both
+   live in the window's title bar, and this column begins with the work. The
+   one derived rule that remains is the workspace fold's "nothing to show"
+   guard, which reaches outside .content because the button it governs sits
+   in the title bar. */
 body:has(#thread-panel[hidden]) #context-panel-button {
   display: none;
 }
@@ -2428,23 +2427,17 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   min-height: 0;
 }
 
-/* The name and everything attached to it. It is the only part of the strip
-   that flexes, so the title is what gives up room when the column is narrow —
-   the state pill and the two view controls are fixed-size and cannot usefully
-   shrink. */
-.thread-header-copy {
-  flex: 1;
-  min-width: 0;
-}
-
-/* The name, and the two things you do to it. ChatGPT / Claude / Codex print
-   the conversation's name and stop — a skill, a count and a clock beside it
-   is a dashboard, not a chat header. Rename and Export stay quiet until the
-   strip is hovered. */
+/* The name and the two things you do to it, living in the title bar's
+   centre. ChatGPT / Claude / Codex print the conversation's name and stop —
+   a skill, a count and a clock beside it is a dashboard, not a title. Rename
+   and Export stay quiet until the bar is hovered. A long name yields to the
+   ellipsis rather than to the switch clusters beside it. */
 .thread-title-row {
   display: flex;
+  flex: 0 1 auto;
   align-items: center;
   gap: var(--sp-2);
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -2452,7 +2445,7 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  font-size: var(--fs-read);
+  font-size: var(--fs-base);
   font-weight: var(--fw-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2471,8 +2464,8 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 }
 
 /* Renaming replaces the line it is renaming: the title hides, the form takes
-   the same row. A form that opened UNDER the title used to push the whole
-   transcript down by a row for as long as you were typing. */
+   the same row — in the title bar now, so an edit never moves the transcript
+   under it. */
 .rename-thread-form {
   display: flex;
   gap: var(--sp-2);
@@ -2548,7 +2541,9 @@ body:has(#thread-panel[hidden]) #context-panel-button {
      measure. */
   width: min(760px, 100%);
   margin: 0 auto;
-  padding: var(--sp-5) var(--sp-6) var(--sp-7);
+  /* Top air is measured from the title bar now — this column has no strip of
+     its own above the transcript any more. */
+  padding: var(--sp-6) var(--sp-6) var(--sp-7);
 }
 
 .message {
@@ -3498,20 +3493,10 @@ button.composer-chip:hover {
 
    Everything here is derived from state the renderer already holds or reads
    back from the sidecar — nothing is displayed that the desktop cannot
-   actually supply. */
-.context-header {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: var(--sp-4) var(--sp-4) var(--sp-2);
-}
+   actually supply.
 
-.context-title {
-  color: hsl(var(--foreground));
-  font-size: var(--fs-base);
-  font-weight: var(--fw-strong);
-}
-
+   No header row: the column's switch lives in the title bar, and the first
+   row of real content starts at the top padding the sections already own. */
 .context-section {
   padding: var(--sp-4) var(--sp-4) 0;
 }
@@ -3546,7 +3531,7 @@ button.composer-chip:hover {
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  margin: 0 var(--sp-4);
+  margin: var(--sp-4) var(--sp-4) 0;
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--r-control);
   background: hsl(var(--muted) / 0.6);
@@ -3718,7 +3703,9 @@ button.composer-chip:hover {
 /* The rail's entire empty state. One sentence, sitting where the first
    section would be. */
 .context-empty {
-  padding: 0 var(--sp-4);
+  /* sp-4 at the top keeps the first line on the same optically line the
+     sections start on, now that no header row sets it for them. */
+  padding: var(--sp-4) var(--sp-4) 0;
   color: hsl(var(--muted-foreground));
   font-size: var(--fs-small);
   line-height: var(--lh-ui);
@@ -3729,11 +3716,6 @@ button.composer-chip:hover {
   .message-list {
     padding-right: var(--sp-5);
     padding-left: var(--sp-5);
-  }
-
-  .content-topbar {
-    padding-right: var(--sp-3);
-    padding-left: var(--sp-4);
   }
 
   .composer,
