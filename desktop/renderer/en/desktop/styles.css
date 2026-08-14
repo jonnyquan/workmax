@@ -983,19 +983,16 @@ textarea::placeholder {
 
 .thread-button {
   display: grid;
-  /* The base button rule centres its content, which is right for a button
-     with a word in it and wrong for one holding a title over a metadata line.
-     Changing `display` did not undo it — `justify-content: center` centres the
-     grid's single column just as happily as it centred a flex row — so every
-     conversation title sat at a different left edge from the one above it,
-     ragged down the whole rail. Found by measuring the rendered rows, because
-     "slightly different indent per row" is exactly what an eye forgives and a
-     layout should not do. */
+  /* The base button rule centres its content; a row must stretch. Found by
+     measuring rendered rows once — every title sat at a different left edge. */
   justify-content: stretch;
-  gap: 2px;
+  grid-auto-flow: column;
+  justify-items: start;
+  align-items: center;
+  gap: var(--sp-2);
   width: 100%;
   height: auto;
-  padding: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
   border: 1px solid transparent;
   border-radius: var(--r-control);
   background: transparent;
@@ -1015,11 +1012,13 @@ textarea::placeholder {
 }
 
 .thread-button strong {
-  display: block;
   overflow: hidden;
+  min-width: 0;
   color: hsl(var(--foreground));
   font-size: var(--fs-base);
   font-weight: var(--fw-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1038,7 +1037,7 @@ textarea::placeholder {
 
 .thread-recovery-badge {
   display: inline-block;
-  margin-top: var(--sp-1);
+  flex: none;
   padding: 1px var(--sp-1);
   border-radius: var(--r-control);
   background: hsl(var(--warning) / 0.16);

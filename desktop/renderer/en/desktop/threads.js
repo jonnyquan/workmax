@@ -331,9 +331,11 @@ function renderThreadButton(thread) {
   button.classList.toggle("active", thread.uuid === state.selectedThreadUUID);
   const title = document.createElement("strong");
   title.textContent = thread.name || "Untitled thread";
-  const meta = document.createElement("p");
-  meta.textContent = `${thread.message_count || 0} messages · ${formatMessageTime(thread.updated_at) || formatDate(thread.updated_at)}`;
-  button.append(title, meta);
+  // One line per conversation, Codex-style. The date group headers already
+  // say when; the message count said little and doubled every row's height.
+  // The title carries the timestamp as its tooltip instead.
+  title.title = `${formatMessageTime(thread.updated_at) || formatDate(thread.updated_at)} · ${thread.message_count || 0} messages`;
+  button.appendChild(title);
   if (state.recoverableTurns.some((turn) => turn.thread_uuid === thread.uuid)) {
     const badge = document.createElement("span");
     badge.className = "thread-recovery-badge";
