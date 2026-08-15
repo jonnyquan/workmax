@@ -2488,6 +2488,12 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   height: var(--h-control-sm);
   display: inline-flex;
   align-items: center;
+  /* The pill lives in the title bar now, beside the switch cluster. A long
+     state ("Stopped locally · 4m 12s") must yield to the switches, not push
+     them out of the strip — so the text ellipsises rather than spreading. */
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
   padding: 0 var(--sp-2);
   border-radius: var(--r-pill);
   background: hsl(var(--muted));
@@ -2517,6 +2523,16 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 .turn-state.error {
   background: hsl(var(--destructive) / 0.12);
   color: hsl(var(--destructive));
+}
+
+/* The base rule sets display, which is exactly the property the hidden
+   attribute uses to hide an element — an author display defeats the UA's
+   [hidden] rule, so an idle pill used to paint as an empty muted box in the
+   strip. This has to come after the is-* rules to win on order at equal
+   specificity, and it has to exist at all because setTurnState's idle path
+   is hidden=true, not a class. */
+.turn-state[hidden] {
+  display: none;
 }
 
 @keyframes turn-busy-pulse {
