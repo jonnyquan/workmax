@@ -5,6 +5,8 @@ package desktop
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -118,5 +120,48 @@ func TestShutdownWaitsForCloseBeforeReturning(t *testing.T) {
 	case <-closed:
 	default:
 		t.Fatal("the embedder close never ran")
+	}
+}
+
+// resolveAgentBinary is the seam packaged L2 runtimes are found through: env
+// override, then <resources>/bin/<name>, then PATH. Each source must be able
+// to win on its own, and a bad env value must fall through rather than
+// silently disable the runtime the packaged binary would have served.
+func TestResolveAgentBinaryPrefersEnvThenResourcesThenPath(t *testing.T) {
+	dir := t.TempDir()
+
+	// A real executable for the env override and the packaged layout.
+	exe := filepath.Join(dir, "claude")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WORKMAX_TEST_AGENT_BIN", exe)
+	if got := resolveAgentBinary("WORKMAX_TEST_AGENT_BIN", dir, "claude"); got != exe {
+		t.Fatalf("env override: got %q, want %q", got, exe)
+	}
+
+	// A directory (or any non-executable) under the env var falls through to
+	// the packaged layout rather than disabling the runtime outright.
+	binDir := filepath.Join(dir, "res", "bin")
+	packaged := filepath.Join(binDir, "pi")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(packaged, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WORKMAX_TEST_AGENT_BIN", filepath.Join(dir, "absent"))
+	if got := resolveAgentBinary("WORKMAX_TEST_AGENT_BIN", binDir, "pi"); got != packaged {
+		t.Fatalf("packaged fallback: got %q, want %q", got, packaged)
+	}
+
+	// A non-executable file in the packaged slot is not usable either; with
+	// nothing on PATH under this name, the answer is "not present".
+	t.Setenv("WORKMAX_TEST_AGENT_BIN", "")
+	if err := os.Chmod(packaged, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveAgentBinary("WORKMAX_TEST_AGENT_BIN", binDir, "workmax-test-agent-no-such-name"); got != "" {
+		t.Fatalf("nothing usable: got %q, want \"\"", got)
 	}
 }

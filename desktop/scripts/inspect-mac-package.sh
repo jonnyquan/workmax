@@ -107,7 +107,10 @@ resources="$contents/Resources"
 
 # Everything that may sit at the top of Resources. Anything else is either a
 # packaging accident or something that was never reviewed for distribution.
-allowed_resource_entries=("renderer" "icon.icns" "LICENSE" "THIRD_PARTY_NOTICES.md" "third-party-licenses")
+# "bin" holds the L2 agent binaries (claude CLI, pi), staged explicitly by
+# build-mac.sh's WORKMAX_DESKTOP_AGENT_BIN_DIR — its executables are checked
+# below the way the renderer's files are checked above.
+allowed_resource_entries=("renderer" "icon.icns" "LICENSE" "THIRD_PARTY_NOTICES.md" "third-party-licenses" "bin")
 while IFS= read -r entry; do
   name="$(basename "$entry")"
   allowed=0
@@ -116,6 +119,16 @@ while IFS= read -r entry; do
   done
   [ "$allowed" = "1" ] || fail "unexpected entry in Contents/Resources: $name"
 done < <(find "$resources" -mindepth 1 -maxdepth 1)
+
+# A bin directory, when present, holds only executables. A non-executable
+# entry here is a staging mistake the sidecar would skip at runtime, which
+# would read as "the tool loop is broken" on a shipped build.
+if [ -d "$resources/bin" ]; then
+  while IFS= read -r entry; do
+    [ -f "$entry" ] || fail "unexpected non-file in Contents/Resources/bin: $(basename "$entry")"
+    [ -x "$entry" ] || fail "non-executable staged in Contents/Resources/bin: $(basename "$entry")"
+  done < <(find "$resources/bin" -mindepth 1 -maxdepth 1)
+fi
 
 if [ "$require_renderer" -eq 1 ]; then
   renderer="$resources/renderer/en/desktop"

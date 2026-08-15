@@ -76,6 +76,7 @@ func main() {
 
 	boot, err := desktop.Bootstrap(desktop.BootstrapConfig{
 		ResourcesDir: resolveResourcesDir(),
+		AgentBinDir:  resolvePackagedBinDir(),
 		// D3 (login-transaction moves off HTTP onto a Wails binding) lands in
 		// W2 together with LoginAPI. Until then the routes stay registered so
 		// the renderer shim can reach them exactly as the Electron build does.
@@ -306,6 +307,24 @@ func resolveResourcesDir() string {
 		}
 	}
 	return ""
+}
+
+// resolvePackagedBinDir locates the staged L2 agent executables. Unlike the
+// knowledge resources, presence is the only question — there is no download
+// path that could be hijacked by a wrong answer — so the bundle's bin wins
+// whenever the app is packaged with one. An empty result (dev runs, bundles
+// without agents) leaves the env-var and PATH resolution the sidecar has
+// always had.
+func resolvePackagedBinDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Clean(filepath.Join(filepath.Dir(exe), "..", "Resources", "bin"))
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return ""
+	}
+	return dir
 }
 
 // runKillCheck executes W1 kill check ①. It replays the same SSE turn twice —

@@ -103,6 +103,28 @@ cp "$ICON_SRC" "$contents/Resources/icon.icns"
 cp "$REPO_ROOT/LICENSE" "$contents/Resources/LICENSE"
 cp "$REPO_ROOT/THIRD_PARTY_NOTICES.md" "$contents/Resources/THIRD_PARTY_NOTICES.md"
 
+# L2 agent binaries (claude CLI, pi). Optional at this stage of the release:
+# the sidecar resolves them from Resources/bin when it boots
+# (resolveAgentBinary), so dropping executables here is all packaging takes.
+# WORKMAX_DESKTOP_AGENT_BIN_DIR names a directory of staged binaries; the
+# open-source tree deliberately ships none, for the same reason the knowledge
+# manifest ships empty — nothing is bundled that has not been pinned and
+# reviewed for this release.
+agent_bin_dir="${WORKMAX_DESKTOP_AGENT_BIN_DIR:-}"
+if [ -n "$agent_bin_dir" ]; then
+  [ -d "$agent_bin_dir" ] || fail "WORKMAX_DESKTOP_AGENT_BIN_DIR=$agent_bin_dir is not a directory"
+  found=0
+  mkdir -p "$contents/Resources/bin"
+  for bin in "$agent_bin_dir"/*; do
+    [ -f "$bin" ] || continue
+    [ -x "$bin" ] || fail "agent binary $bin is not executable"
+    cp "$bin" "$contents/Resources/bin/"
+    found=$((found + 1))
+  done
+  [ "$found" -gt 0 ] || fail "WORKMAX_DESKTOP_AGENT_BIN_DIR=$agent_bin_dir contains no binaries"
+  echo "==> bundled $found agent binary/binaries into Resources/bin"
+fi
+
 # LSMinimumSystemVersion 11.0 matches what the toolchain links against.
 # NSHighResolutionCapable because a webview app on a Retina display without it
 # renders blurry. LSApplicationCategoryType is required for distribution.

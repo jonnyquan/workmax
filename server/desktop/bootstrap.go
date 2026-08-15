@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	agentruntime "server/desktop/agentruntime"
 	"sync"
@@ -108,6 +109,14 @@ type BootstrapConfig struct {
 	// Ignored when the binary is built without cgo: RAG is off and the
 	// sidecar boots normally. See bootstrap_cgo.go.
 	ResourcesDir string
+
+	// AgentBinDir is where a packaged app stages its L2 agent executables
+	// (claude CLI, pi) — Contents/Resources/bin on macOS. Separate from
+	// ResourcesDir on purpose: that one stays empty on a bundle without
+	// knowledge assets so the downloader owns <dataDir>/resources, while
+	// agent binaries are only ever packaged, never downloaded.
+	// Empty → the L2 runtimes resolve from their env vars and PATH alone.
+	AgentBinDir string
 }
 
 // Boot is everything a caller needs to run and then tear down a desktop
@@ -164,6 +173,38 @@ type Boot struct {
 	shutdownMu   sync.Mutex
 	shutdownDone bool
 	shutdownErr  error
+}
+
+// resolveAgentBinary finds the executable an L2 runtime drives, most specific
+// source first:
+//
+//  1. The runtime's own env var (WORKMAX_CLAUDE_CLI_PATH / WORKMAX_PI_PATH) —
+//     the operator's own build or download, and the one place a bad path is
+//     worth a log line rather than silence.
+//  2. <agentBinDir>/<name> — the packaged layout (Contents/Resources/bin).
+//     This is the seam the app bundle fills: build scripts stage the binary
+//     there and a shipped app finds it with zero configuration.
+//  3. PATH — a developer's machine with the tool installed globally.
+//
+// Returns "" when nothing usable exists; the caller treats that as "this
+// protocol runs as L1 pure chat", which has always been the degradation.
+func resolveAgentBinary(envVar, agentBinDir, name string) string {
+	if p := os.Getenv(envVar); p != "" {
+		if info, err := os.Stat(p); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return p
+		}
+		log.Printf("local agent: %s=%q is not a usable executable; trying the packaged and PATH locations", envVar, p)
+	}
+	if agentBinDir != "" {
+		p := filepath.Join(agentBinDir, name)
+		if info, err := os.Stat(p); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return p
+		}
+	}
+	if p, err := exec.LookPath(name); err == nil {
+		return p
+	}
+	return ""
 }
 
 // Bootstrap runs the full sidecar wiring and binds the loopback HTTP server.
@@ -420,9 +461,12 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 	localInference.UseMind(activeMindPolicy(dbRes.DB))
 
 	// Local agent engine (L2): the tool loop, for anthropic_compatible local
-	// models. Gated on a claude CLI being named explicitly — L2d grows the
-	// packaged download; until then the operator points at a binary. No CLI
-	// simply means anthropic_compatible turns run as L1 pure chat.
+	// models. Both runtimes resolve their binary through resolveAgentBinary:
+	// an env override first (the operator's own build), then the packaged
+	// <resources>/bin layout, then PATH. No binary simply means that protocol
+	// runs as L1 pure chat — the same degradation both runtimes have always
+	// had, now with a packaging seam: drop the binary into Resources/bin and
+	// it is found with zero configuration.
 	var localAgent TurnRunner
 	// Interactive approvals stay behind a flag until the renderer's approval
 	// card ships: without the card, every write would sit on the 120s timeout
@@ -433,57 +477,48 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 		approvalBroker = agentruntime.NewApprovalBroker()
 		log.Printf("local agent: interactive tool approvals ON")
 	}
-	if cliPath := os.Getenv("WORKMAX_CLAUDE_CLI_PATH"); cliPath != "" {
-		if info, statErr := os.Stat(cliPath); statErr != nil || info.IsDir() {
-			log.Printf("local agent: WORKMAX_CLAUDE_CLI_PATH=%q is not a usable binary (%v); tool loop disabled", cliPath, statErr)
-		} else {
-			engine := localagent.NewEngine(
-				modelProfileReader(),
-				dbRes.DB,
-				localFiles,
-				knowledge.Hooks,
-				cliPath,
-				filepath.Join(dbRes.DataDir, "agent_workspace"),
-			)
-			if approvalBroker != nil {
-				engine.EnableApprovals(approvalBroker)
-			}
-			engine.UseMind(activeMindPolicy(dbRes.DB))
-			localAgent = engine
-			log.Printf("local agent: tool loop available (cli=%s)", cliPath)
+	if cliPath := resolveAgentBinary("WORKMAX_CLAUDE_CLI_PATH", cfg.AgentBinDir, "claude"); cliPath != "" {
+		engine := localagent.NewEngine(
+			modelProfileReader(),
+			dbRes.DB,
+			localFiles,
+			knowledge.Hooks,
+			cliPath,
+			filepath.Join(dbRes.DataDir, "agent_workspace"),
+		)
+		if approvalBroker != nil {
+			engine.EnableApprovals(approvalBroker)
 		}
+		engine.UseMind(activeMindPolicy(dbRes.DB))
+		localAgent = engine
+		log.Printf("local agent: tool loop available (cli=%s)", cliPath)
 	}
 
 	// Pi agent engine (L2, second runtime): the tool loop for
 	// openai_compatible local models, driven over `pi --mode rpc`. Same
-	// gating pattern as the claude block: an explicitly named binary until
-	// packaging lands; no binary simply means openai_compatible turns run
-	// as L1 pure chat.
+	// resolution order as the claude block; no binary simply means
+	// openai_compatible turns run as L1 pure chat.
 	var piAgent TurnRunner
-	if piPath := os.Getenv("WORKMAX_PI_PATH"); piPath != "" {
-		if info, statErr := os.Stat(piPath); statErr != nil || info.IsDir() {
-			log.Printf("pi agent: WORKMAX_PI_PATH=%q is not a usable binary (%v); pi tool loop disabled", piPath, statErr)
-		} else {
-			piEngine := localagent.NewEngineWithRuntime(
-				modelProfileReader(),
-				dbRes.DB,
-				localFiles,
-				knowledge.Hooks,
-				piagent.NewRuntime(piagent.Config{
-					BinPath:       piPath,
-					DataDir:       dbRes.DataDir,
-					WorkspaceRoot: filepath.Join(dbRes.DataDir, "agent_workspace"),
-				}),
-			)
-			if approvalBroker != nil {
-				// Same broker as the claude engine: one approval UI, one set
-				// of session/always grants, whichever runtime asks.
-				piEngine.EnableApprovals(approvalBroker)
-			}
-			piEngine.UseMind(activeMindPolicy(dbRes.DB))
-			piAgent = piEngine
-			log.Printf("pi agent: tool loop available (pi=%s)", piPath)
+	if piPath := resolveAgentBinary("WORKMAX_PI_PATH", cfg.AgentBinDir, "pi"); piPath != "" {
+		piEngine := localagent.NewEngineWithRuntime(
+			modelProfileReader(),
+			dbRes.DB,
+			localFiles,
+			knowledge.Hooks,
+			piagent.NewRuntime(piagent.Config{
+				BinPath:       piPath,
+				DataDir:       dbRes.DataDir,
+				WorkspaceRoot: filepath.Join(dbRes.DataDir, "agent_workspace"),
+			}),
+		)
+		if approvalBroker != nil {
+			// Same broker as the claude engine: one approval UI, one set
+			// of session/always grants, whichever runtime asks.
+			piEngine.EnableApprovals(approvalBroker)
 		}
+		piEngine.UseMind(activeMindPolicy(dbRes.DB))
+		piAgent = piEngine
+		log.Printf("pi agent: tool loop available (pi=%s)", piPath)
 	}
 
 	// 4. Build & bind the HTTP server.
