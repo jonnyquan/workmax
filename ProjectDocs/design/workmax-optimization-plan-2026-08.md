@@ -1,5 +1,15 @@
 # WorkMax 代码优化方案（2026-08）
 
+> **状态核验（2026-08-15）**：**Phase 0–4 已全部落地**（详见 memory
+> `workmax-optimization-plan` 的提交清单：P0=b46166f/3dbea34，P2=ca53727/5a28891，
+> P1=18eb8db，P3=fcbccf5/8c3d25a，P4=1714613/c7146a0）。实码抽查确认：packEncodings
+> 补零、vec0 v2 uid partition key、SSE 双前缀+IdleWatchdog、scheduleStreamFlush/
+> drainStreamBatch、RRF 融合、WORKMAX_EXPERIMENT_NO_RAG、bootstrap_knowledge.go 接线、
+> renderer 模块拆分、reasoning_delta 字幕。**尚余的发布线尾巴**：
+> - L2 真机 e2e 与 R4 二进制打包（Pi runtime 捆绑）
+> - RAG 资源托管与 manifest platforms 填充（发布流程）
+> - server 消息分页接口（前端已窗口化，接口未开）
+
 输入：三份代码摸底（server agent 链路 / knowledge 存储检索 / desktop 壳与渲染层）
 × Reasonix 借鉴清单（`reasonix-borrowables-2026-08.md`、`reasonix-frontend-borrowables-2026-08.md`，
 均已本地 git-exclude）。
