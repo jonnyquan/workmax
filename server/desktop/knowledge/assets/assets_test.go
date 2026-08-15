@@ -209,6 +209,34 @@ func TestPlanForReportsUnpinnedPlatformExplicitly(t *testing.T) {
 	}
 }
 
+// PlanForPlatform is how makemanifest validates a manifest for a platform
+// other than the machine it runs on — the release workstation builds
+// darwin/arm64 manifests from whatever it happens to be.
+func TestPlanForPlatformResolvesExplicitKey(t *testing.T) {
+	dir := t.TempDir()
+	// Pin for a platform this test binary almost certainly is not.
+	key := "planetary/rover"
+	if key == runtime.GOOS+"/"+runtime.GOARCH {
+		key = "planetary/rover2"
+	}
+	body := `{"schemaVersion":1,"platforms":{"` + key + `":[
+		{"name":"model","path":"knowledge/model.onnx","url":"https://example.invalid/rover","sha256":"` + digest([]byte("x")) + `","size":10}
+	]}}`
+	writeManifest(t, filepath.Join(dir, ManifestFileName), body)
+
+	// The explicit key resolves; the running platform finds nothing.
+	p, err := PlanForPlatform(dir, key)
+	if err != nil {
+		t.Fatalf("PlanForPlatform(%q): %v", key, err)
+	}
+	if len(p.Assets) != 1 || p.Platform != key {
+		t.Fatalf("plan = %+v, want the one rover asset under %q", p, key)
+	}
+	if _, err := PlanForPlatform(dir, runtime.GOOS+"/"+runtime.GOARCH); !errors.Is(err, ErrUnsupportedPlatform) {
+		t.Fatalf("running platform on a rover-only manifest = %v, want ErrUnsupportedPlatform", err)
+	}
+}
+
 func writeManifest(t *testing.T, path string, body string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

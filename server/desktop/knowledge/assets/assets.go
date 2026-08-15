@@ -152,7 +152,14 @@ type Plan struct {
 // a terminal, actionable state — not a transient failure to retry — and the
 // caller is expected to say so out loud rather than degrade silently.
 func PlanFor(dir string) (Plan, error) {
-	platform := runtime.GOOS + "/" + runtime.GOARCH
+	return PlanForPlatform(dir, runtime.GOOS+"/"+runtime.GOARCH)
+}
+
+// PlanForPlatform is PlanFor for an explicit os/arch key. It exists for the
+// tooling that builds manifests for other platforms than the machine it runs
+// on (cmd/makemanifest), and for tests that exercise several platforms from
+// one host.
+func PlanForPlatform(dir string, platform string) (Plan, error) {
 	raw, origin, err := loadManifest(dir)
 	if err != nil {
 		return Plan{Origin: origin, Platform: platform}, err

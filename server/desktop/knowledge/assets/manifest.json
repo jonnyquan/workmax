@@ -14,10 +14,16 @@
     "  <data dir>/knowledge_resources/manifest.json       (a user's own copy)",
     "",
     "RELEASE PROCESS TODO: to ship RAG on by default, host libonnxruntime, model.onnx",
-    "and tokenizer.json, then fill platforms with {name, path, url, sha256, size} per",
-    "os/arch key ('darwin/arm64', ...). Paths are relative to the resources dir and",
-    "must match knowledge.ResolveResourcesIn's layout: libonnxruntime.<ext> at the",
-    "root, knowledge/model.onnx and knowledge/tokenizer.json below it."
+    "and tokenizer.json under one versioned URL prefix, then generate the platforms",
+    "map with cmd/makemanifest (it hashes the local files and round-trips the result",
+    "through PlanFor before emitting it):",
+    "",
+    "  go run -tags desktop ./desktop/knowledge/assets/cmd/makemanifest \\",
+    "    -dir <resources dir> -base-url https://host/knowledge/v1 -platform darwin/arm64",
+    "",
+    "Then paste the platforms entry into this file and upload the three files,",
+    "unmodified, under the same prefix. A URL's bytes must never change after the",
+    "digest is pinned: a model swap ships as a new versioned directory."
   ],
   "platforms": {}
 }
