@@ -637,8 +637,13 @@ function setModelSettingsError(message) {
 // What each protocol actually gets the user — the first-run decision this
 // form exists for, answered where it is made rather than after a failed turn.
 const MODEL_PROTOCOL_HINTS = {
+  // Both protocols reach the tool loop now — they just reach it through
+  // different runtimes (pi for OpenAI-compatible endpoints, the Claude CLI
+  // for the Anthropic Messages API). This copy said "Chat only" for months
+  // after the pi runtime shipped, which is the worst kind of stale string:
+  // it talks a user out of a capability the build already has.
   openai_compatible: {
-    hint: "Works with Ollama, LM Studio, vLLM and similar. Chat only — the tool loop needs the Anthropic protocol.",
+    hint: "Works with Ollama, LM Studio, vLLM and similar. Enables the agent tool loop when the pi runtime is available.",
     placeholder: "http://127.0.0.1:11434/v1",
   },
   anthropic_compatible: {

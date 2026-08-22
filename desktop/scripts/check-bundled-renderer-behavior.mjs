@@ -3854,17 +3854,24 @@ async function testModelProtocolHintFollowsTheChoice() {
 
   protocol.value = "openai_compatible";
   protocol.dispatch("change");
-  assert.match(hint.textContent, /Chat only/i, "openai must say what it does not get");
+  assert.match(hint.textContent, /pi runtime/i, "openai reaches the tool loop through pi, and must say so");
   assert.match(baseURL.placeholder, /11434/, "and hint at the Ollama-shaped URL");
 
   protocol.value = "anthropic_compatible";
   protocol.dispatch("change");
-  assert.match(hint.textContent, /Enables the agent tool loop/i, "anthropic must say what it unlocks");
+  assert.match(hint.textContent, /Claude CLI/i, "anthropic reaches it through the Claude CLI");
   assert.doesNotMatch(
     hint.textContent,
-    /Chat only/i,
-    "the hint must actually switch — both texts mention the tool loop, so the assertion must key on what only one of them says",
+    /pi runtime/i,
+    "the hint must actually switch — both protocols reach the tool loop, so the assertion keys on WHICH runtime each names",
   );
+  // Neither protocol may claim the tool loop is out of reach: pi shipped, and
+  // a settings string that predates a capability talks users out of it.
+  for (const value of ["openai_compatible", "anthropic_compatible"]) {
+    protocol.value = value;
+    protocol.dispatch("change");
+    assert.doesNotMatch(hint.textContent, /chat only/i, `${value} must not deny a loop it can run`);
+  }
 }
 
 // The L2 tool loop's renderer surface: activity narrated while it runs,
