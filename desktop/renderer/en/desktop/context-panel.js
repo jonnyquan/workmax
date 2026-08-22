@@ -157,6 +157,14 @@ export function recordToolResult(entry, activeTurn) {
   }
 }
 
+// renderStoredWorkLog paints a persisted work log on a cached assistant
+// message — the same strip the live turn drew, rebuilt from the sidecar's
+// fold. live=false, so a long log arrives collapsed to its receipt.
+export function renderStoredWorkLog(wrapper, steps) {
+  if (!wrapper || !Array.isArray(steps) || steps.length === 0) return;
+  renderWorkLog(wrapper, steps, [], false);
+}
+
 // Past this many steps, a finished log collapses to its summary — the
 // Codex idiom: the work is a receipt once it is done, a narration only while
 // it is happening.

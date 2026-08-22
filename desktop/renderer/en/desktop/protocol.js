@@ -193,10 +193,35 @@ function parseMessage(value) {
     agent_model: boundedString(value.agent_model, 80),
     agent_mind: boundedString(value.agent_mind, 64),
     streaming_state: value.streaming_state,
+    // The turn's folded work log, replayed from the sidecar's cache so a
+    // reopened conversation still shows what the agent did. Optional by
+    // construction: rows from before the column carry none, and a malformed
+    // array degrades to "no work log", never to a failed message list.
+    tool_steps: parseToolSteps(value.tool_steps),
     // Validated above; carried so the transcript can date its rows.
     created_at: optionalString(value.created_at),
     updated_at: optionalString(value.updated_at),
   };
+}
+
+function parseToolSteps(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const item of value) {
+    if (out.length >= 200) break;
+    if (!isRecord(item)) return [];
+    const name = boundedString(item.name, 64);
+    if (!name) return [];
+    out.push({
+      name,
+      target: boundedString(item.target, 200),
+      denied: item.denied === true,
+      reason: boundedString(item.reason, 200),
+      done: item.done === true,
+      failed: item.failed === true,
+    });
+  }
+  return out;
 }
 
 export function parseMessages(value) {

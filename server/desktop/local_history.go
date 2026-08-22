@@ -3,6 +3,7 @@
 package desktop
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -40,8 +41,54 @@ type LocalMessageRow struct {
 	AgentModel     string    `json:"agent_model"`
 	AgentMind      string    `json:"agent_mind"`
 	StreamingState string    `json:"streaming_state"` // "streaming" | "complete" | "partial"
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	// ToolSteps is the turn's folded work log, replayed from the metadata
+	// column so a reopened conversation still shows what the agent did —
+	// the Codex idiom: the transcript is a work log, not a chat with a
+	// hidden engine room. Empty for rows written before the column was
+	// used, and for turns that ran no tools.
+	ToolSteps []LocalToolStep `json:"tool_steps,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+// LocalToolStep mirrors cloudproxy.CachedToolStep on the read side.
+type LocalToolStep struct {
+	Name   string `json:"name"`
+	Target string `json:"target,omitempty"`
+	Denied bool   `json:"denied,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	Done   bool   `json:"done,omitempty"`
+	Failed bool   `json:"failed,omitempty"`
+}
+
+// parseMessageToolSteps extracts the work log from a metadata blob. A blob
+// that is empty, malformed, or from some other writer yields no steps — a
+// missing work log is a degraded display, never a failed message list.
+func parseMessageToolSteps(metadata string) []LocalToolStep {
+	if metadata == "" {
+		return nil
+	}
+	var envelope struct {
+		ToolSteps []LocalToolStep `json:"tool_steps"`
+	}
+	if err := json.Unmarshal([]byte(metadata), &envelope); err != nil {
+		return nil
+	}
+	steps := envelope.ToolSteps
+	if len(steps) > 200 {
+		steps = steps[:200]
+	}
+	out := steps[:0]
+	for _, step := range steps {
+		if step.Name == "" {
+			continue
+		}
+		out = append(out, step)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // ListLocalThreads returns up to `limit` most-recent threads in the
@@ -181,6 +228,7 @@ func ListLocalMessages(db *gorm.DB, uid uint64, threadUUID string, limit int) ([
 		       COALESCE(agent_model, ''),
 		       COALESCE(agent_mind, ''),
 		       streaming_state,
+		       COALESCE(metadata, ''),
 		       created_at,
 		       updated_at
 		  FROM w_workagent_message
@@ -205,13 +253,14 @@ func ListLocalMessages(db *gorm.DB, uid uint64, threadUUID string, limit int) ([
 	out := make([]LocalMessageRow, 0, limit)
 	for rows.Next() {
 		var (
-			r                    LocalMessageRow
-			createdAt, updatedAt string
+			r                              LocalMessageRow
+			metadata, createdAt, updatedAt string
 		)
 		if err := rows.Scan(&r.UUID, &r.UserText, &r.AIText, &r.ChatMode,
-			&r.AgentEngine, &r.AgentModel, &r.AgentMind, &r.StreamingState, &createdAt, &updatedAt); err != nil {
+			&r.AgentEngine, &r.AgentModel, &r.AgentMind, &r.StreamingState, &metadata, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("list messages: scan: %w", err)
 		}
+		r.ToolSteps = parseMessageToolSteps(metadata)
 		r.CreatedAt = parseSQLiteTime(createdAt)
 		r.UpdatedAt = parseSQLiteTime(updatedAt)
 		out = append(out, r)

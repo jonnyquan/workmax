@@ -3,6 +3,7 @@
 package cloud_proxy
 
 import (
+	"encoding/json"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -68,6 +69,7 @@ type CacheWriter struct {
 
 	mu           sync.Mutex
 	row          *cacheRow // nil until first Enqueue triggers INSERT
+	toolSteps    []CachedToolStep
 	pendingText  strings.Builder
 	pendingHits  int       // events since last flush
 	lastFlushAt  time.Time // wall-clock of last flush; drives time-threshold trigger
@@ -211,6 +213,107 @@ func (w *CacheWriter) Enqueue(eventType, textFragment string) error {
 	return nil
 }
 
+// CachedToolStep is one folded tool call, stored on the message row so a
+// reopened conversation still shows its work log. The folding (a denial
+// lands on the step it settles, a result closes the oldest open call)
+// happens HERE, at record time, so the stored shape is exactly what the
+// renderer paints — replaying raw frames on read would mean a second copy
+// of the fold rules that drifts from the first.
+type CachedToolStep struct {
+	Name   string `json:"name"`
+	Target string `json:"target,omitempty"`
+	Denied bool   `json:"denied,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	Done   bool   `json:"done,omitempty"`
+	Failed bool   `json:"failed,omitempty"`
+}
+
+// maxCachedToolSteps mirrors the renderer's own cap: a pathological turn
+// must not grow an unbounded array into the metadata column.
+const maxCachedToolSteps = 200
+
+func (s *CachedToolStep) settled() bool { return s.Denied || s.Done }
+
+// RecordToolUse appends an open step.
+func (w *CacheWriter) RecordToolUse(name, target string) {
+	if w == nil || name == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.toolSteps) >= maxCachedToolSteps {
+		return
+	}
+	w.toolSteps = append(w.toolSteps, CachedToolStep{Name: name, Target: target})
+}
+
+// RecordToolDenied folds a denial into the open step it settles — the
+// sidecar announces a tool before the guard or the user refuses it, so the
+// denial is a second frame about a call the log already carries.
+//
+// A denial with no target settles the newest open call of that tool, the
+// same latitude RecordToolResult gives a result. pi's refusal path cannot
+// name the file it was about to touch (the frame it derives from carries
+// only the tool name), so requiring an exact target match dropped every pi
+// denial on the floor — measured live: the strip drew "Write blocked" while
+// the stored log kept an open Write forever.
+func (w *CacheWriter) RecordToolDenied(name, target, reason string) {
+	if w == nil || name == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for i := len(w.toolSteps) - 1; i >= 0; i-- {
+		step := &w.toolSteps[i]
+		if step.settled() || step.Name != name {
+			continue
+		}
+		if target != "" && step.Target != target {
+			continue
+		}
+		step.Denied = true
+		step.Reason = reason
+		return
+	}
+}
+
+// RecordToolResult settles the oldest open call of the tool. A result with
+// no target matches the oldest open step of that name (pi cannot name the
+// file it touched); a named target matches exactly.
+func (w *CacheWriter) RecordToolResult(name, target string, isError bool) {
+	if w == nil || name == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for i := range w.toolSteps {
+		step := &w.toolSteps[i]
+		if step.settled() || step.Name != name {
+			continue
+		}
+		if target != "" && step.Target != target {
+			continue
+		}
+		step.Done = true
+		step.Failed = isError
+		return
+	}
+}
+
+// toolStepsJSONLocked serialises the fold for the metadata column. Empty
+// slice → empty string, so rows without tool turns stay NULL-ish rather
+// than carrying "{}" noise. Caller must hold w.mu.
+func (w *CacheWriter) toolStepsJSONLocked() string {
+	if len(w.toolSteps) == 0 {
+		return ""
+	}
+	blob, err := json.Marshal(map[string]any{"tool_steps": w.toolSteps})
+	if err != nil {
+		return ""
+	}
+	return string(blob)
+}
+
 // Finalize stamps the row as complete (err == nil) or partial (err != nil),
 // flushes anything pending, and refuses further writes. Idempotent.
 //
@@ -241,9 +344,10 @@ func (w *CacheWriter) Finalize(err error) error {
 		`UPDATE w_workagent_message
 		    SET ai_text = ai_text || ?,
 		        streaming_state = ?,
+		        metadata = ?,
 		        updated_at = ?
 		  WHERE id = ?`,
-		w.pendingText.String(), state, now, w.row.ID,
+		w.pendingText.String(), state, w.toolStepsJSONLocked(), now, w.row.ID,
 	)
 	if res.Error != nil {
 		return fmt.Errorf("cache writer: finalize update: %w", res.Error)
@@ -283,7 +387,7 @@ func (w *CacheWriter) insertRowLocked() error {
 			}
 			res := w.db.Exec(`
 				UPDATE w_workagent_message
-				   SET user_text = ?, ai_text = '', chat_mode = ?,
+				   SET user_text = ?, ai_text = '', metadata = '', chat_mode = ?,
 				       agent_engine = ?, agent_model = ?, agent_mind = ?,
 				       streaming_state = ?, updated_at = ?
 				 WHERE id = ? AND uid = ? AND thread_id = ? AND message_idempotency_key = ?`,

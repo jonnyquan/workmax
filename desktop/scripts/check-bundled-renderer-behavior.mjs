@@ -1098,6 +1098,10 @@ function message(uuid, userText, aiText, streamingState = "complete", provenance
     agent_engine: provenance.engine ?? "",
     agent_model: provenance.model ?? "",
     agent_mind: provenance.mind ?? "",
+    // The turn's folded work log, as the sidecar stores and replays it.
+    // Absent on rows from before the column; an empty array here keeps the
+    // common fixture honest about that.
+    tool_steps: provenance.toolSteps ?? [],
     created_at: "2026-05-21T00:00:00Z",
     updated_at: "2026-05-21T00:00:00Z",
   };
@@ -1213,6 +1217,83 @@ async function testMissingBridge() {
     /must run inside WorkMax Desktop/
   );
   assert.equal(document.byId.get("status-card").classList.contains("error"), true);
+}
+
+// A conversation reopened days later still shows what the agent DID, not
+// only what it said. The sidecar folds tool frames into steps as they
+// arrive and stores the result on the message row; this is the read half —
+// the same strip the live turn drew, rebuilt from that fold.
+async function testStoredWorkLogSurvivesReopen() {
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        return response({ items: [thread("t-log", "Reopened work")] });
+      }
+      if (pathname === "/agent/threads/t-log/messages") {
+        return response({
+          items: [
+            message("m-1", "read the notes and write a summary", "Done — summary written.", "complete", {
+              toolSteps: [
+                { name: "Read", target: "notes.md", done: true },
+                { name: "Grep", target: "TODO", done: true },
+                { name: "Write", target: "out.txt", done: true },
+                { name: "Bash", target: "rm -rf /", denied: true, reason: "blocked by the path guard" },
+              ],
+            }),
+          ],
+        });
+      }
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn() { return { turnID: "unused" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  document.byId.get("thread-list").children
+    .find((node) => node.classList?.contains("thread-item"))
+    ?.children[0].click();
+  await settle();
+  await settle();
+
+  const stripOf = () => {
+    const found = walk(document.byId.get("message-list"), (n) =>
+      n.classList?.contains("message-worklog"));
+    assert.equal(found.length, 1, "the stored log hangs on the answer it belongs to");
+    return found[0];
+  };
+  // Past the collapse threshold a finished log arrives as its receipt, not
+  // as a narration — the live turn is the only thing worth watching unfold.
+  const collapsed = stripOf().textContent;
+  assert.match(collapsed, /4 steps/u, "a long stored log opens collapsed to its summary");
+  assert.match(collapsed, /1 blocked/u, "the denial is folded into the step it settles, and counted once");
+  assert.ok(
+    !collapsed.includes("notes.md"),
+    "collapsed means collapsed: the individual targets wait behind the toggle",
+  );
+
+  // And the receipt opens back into the steps it summarises.
+  const toggle = walk(stripOf(), (n) => n.classList?.contains("worklog-toggle"))[0];
+  assert.ok(toggle, "a collapsed log must offer the way back in");
+  toggle.click();
+  await settle();
+  const expanded = stripOf().textContent;
+  // Read then Grep is one act of looking, and the run folds to counts by
+  // verb — the same rule the live log applies, which is the point: the
+  // replay reuses the renderer, it does not reimplement it.
+  assert.match(expanded, /Read 1 · Grep 1/u, "a consecutive read run replays folded, as it drew live");
+  for (const fragment of ["Write", "out.txt", "Bash", "blocked"]) {
+    assert.ok(expanded.includes(fragment), `the replayed log names ${fragment}`);
+  }
 }
 
 async function testAuthenticatedCacheRead() {
@@ -10362,6 +10443,7 @@ await testShowEarlierPrependsWithoutRebuildingWhatIsMounted();
 await testShowEarlierHoldsTheScrollAnchorAndRetiresItselfAtTheTop();
 await testCompletedTurnReconcilesInPlaceInsideTheWindow();
 await testFencesInvalidateOnBumpAndCascadeFromSession();
+await testStoredWorkLogSurvivesReopen();
 await testAuthenticatedCacheRead();
 await testUnauthenticatedLogin();
 await testResumesAndCancelsPasswordLogin();

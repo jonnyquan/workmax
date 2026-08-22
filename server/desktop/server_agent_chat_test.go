@@ -77,6 +77,7 @@ func openServerTestDB(t *testing.T) *gorm.DB {
 		agent_model TEXT NOT NULL DEFAULT '',
 		agent_mind TEXT NOT NULL DEFAULT '',
 		streaming_state TEXT NOT NULL DEFAULT 'complete',
+		metadata TEXT,
 		created_at TEXT,
 		updated_at TEXT
 	)`).Error; err != nil {

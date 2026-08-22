@@ -59,6 +59,9 @@ func (b *SSEBridge) Emit(ev Event) error {
 			Data: mustJSON(map[string]string{"delta": ev.Delta}),
 		})
 	case EventToolUse:
+		if b.cache != nil {
+			b.cache.RecordToolUse(ev.Tool.Name, ev.Tool.Target)
+		}
 		payload := map[string]string{"name": ev.Tool.Name}
 		if ev.Tool.Target != "" {
 			payload["target"] = ev.Tool.Target
@@ -74,6 +77,9 @@ func (b *SSEBridge) Emit(ev Event) error {
 		// file tool missed its step and drew a second row — the exact double
 		// entry the fold exists to prevent, invisible to a renderer test that
 		// emits the frame it wished for rather than the one this bridge sends.
+		if b.cache != nil {
+			b.cache.RecordToolDenied(ev.Tool.Name, ev.Tool.Target, ev.Tool.Reason)
+		}
 		payload := map[string]string{"name": ev.Tool.Name, "reason": ev.Tool.Reason}
 		if ev.Tool.Target != "" {
 			payload["target"] = ev.Tool.Target
@@ -83,6 +89,9 @@ func (b *SSEBridge) Emit(ev Event) error {
 			Data: mustJSON(payload),
 		})
 	case EventToolResult:
+		if b.cache != nil {
+			b.cache.RecordToolResult(ev.Tool.Name, ev.Tool.Target, ev.Tool.IsError)
+		}
 		payload := map[string]string{"name": ev.Tool.Name}
 		if ev.Tool.Target != "" {
 			payload["target"] = ev.Tool.Target

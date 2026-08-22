@@ -3,6 +3,7 @@
 package cloud_proxy
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -57,6 +58,7 @@ func openCacheTestDB(t *testing.T) *gorm.DB {
 		agent_model TEXT NOT NULL DEFAULT '',
 		agent_mind TEXT NOT NULL DEFAULT '',
 		streaming_state TEXT NOT NULL DEFAULT 'complete',
+		metadata TEXT,
 		created_at TEXT,
 		updated_at TEXT
 	)`)
@@ -539,5 +541,62 @@ func TestCacheWriter_SetProvenanceAfterRowExists(t *testing.T) {
 	}
 	if engine != "local" || model != "specialist-model" || mind != "Payroll mind" {
 		t.Errorf("late provenance = engine=%q model=%q mind=%q; the UPDATE guard did not fire", engine, model, mind)
+	}
+}
+
+// The stored work log is the SAME fold the strip draws live, and the case
+// that proves it is the one a target-matching implementation gets wrong:
+// pi's refusal path cannot name the file it was about to touch, so a
+// denial arrives with a bare tool name. Measured live before this test
+// existed — the strip drew "Write blocked" while the stored log kept an
+// open Write step forever, and a reopened conversation showed a call that
+// looked like it had succeeded.
+func TestCacheWriter_ToolStepsFoldDenialsAndResults(t *testing.T) {
+	db := openCacheTestDB(t)
+	w, err := NewCacheWriter(db, CacheWriterParams{
+		UID: 7, ThreadID: 1, ThreadUUID: "t-1", UserText: "do the thing",
+	})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+
+	w.RecordToolUse("Read", "notes.md")
+	w.RecordToolResult("Read", "", false) // pi: result without a target
+	w.RecordToolUse("Write", "out.txt")
+	w.RecordToolDenied("Write", "", "outside the permitted surface") // pi: bare denial
+	w.RecordToolUse("Bash", "ls")
+	w.RecordToolResult("Bash", "ls", true) // failed, not refused
+
+	if err := w.Enqueue("text_delta", "done"); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if err := w.Finalize(nil); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	var metadata string
+	if err := db.Raw(
+		`SELECT COALESCE(metadata,'') FROM w_workagent_message WHERE thread_id = 1`,
+	).Row().Scan(&metadata); err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	var envelope struct {
+		ToolSteps []CachedToolStep `json:"tool_steps"`
+	}
+	if err := json.Unmarshal([]byte(metadata), &envelope); err != nil {
+		t.Fatalf("parse metadata %q: %v", metadata, err)
+	}
+	if len(envelope.ToolSteps) != 3 {
+		t.Fatalf("steps = %d, want 3 (one row per call, never one per frame): %+v",
+			len(envelope.ToolSteps), envelope.ToolSteps)
+	}
+	if got := envelope.ToolSteps[0]; !got.Done || got.Failed || got.Target != "notes.md" {
+		t.Errorf("read step = %+v, want done on notes.md", got)
+	}
+	if got := envelope.ToolSteps[1]; !got.Denied || got.Reason == "" || got.Target != "out.txt" {
+		t.Errorf("write step = %+v, want denied with its reason, keeping the target it was announced with", got)
+	}
+	if got := envelope.ToolSteps[2]; !got.Done || !got.Failed || got.Denied {
+		t.Errorf("bash step = %+v, want failed — tried and failed is not refused", got)
 	}
 }

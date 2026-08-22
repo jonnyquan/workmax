@@ -28,7 +28,7 @@ import {
   updateComposerState,
 } from "./composer.js";
 import { localCalendarDay, renderThreads } from "./threads.js";
-import { attachLastTurnLog, loadThreadSources, renderTaskContext } from "./context-panel.js";
+import { attachLastTurnLog, loadThreadSources, renderStoredWorkLog, renderTaskContext } from "./context-panel.js";
 import {
   chooseModeForThread,
   closeRenameForm,
@@ -195,15 +195,19 @@ function buildExchangeNodes(item, isLast) {
     options.engine = item.agent_engine;
     options.model = item.agent_model;
     options.mind = item.agent_mind;
-    nodes.push(
-      renderMessage(
-        "assistant",
-        item.ai_text || "Response interrupted before text was cached.",
-        item.streaming_state,
-        item.updated_at || item.created_at,
-        options
-      )
+    const node = renderMessage(
+      "assistant",
+      item.ai_text || "Response interrupted before text was cached.",
+      item.streaming_state,
+      item.updated_at || item.created_at,
+      options
     );
+    // The stored work log, so a reopened conversation still shows what the
+    // agent did — the strip the live turn drew, not a live-only privilege.
+    if (Array.isArray(item.tool_steps) && item.tool_steps.length > 0) {
+      renderStoredWorkLog(node, item.tool_steps);
+    }
+    nodes.push(node);
   }
   return nodes;
 }
