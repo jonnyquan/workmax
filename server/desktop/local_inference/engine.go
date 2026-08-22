@@ -18,6 +18,8 @@ import (
 	"gorm.io/gorm"
 
 	cloudproxy "server/desktop/cloud_proxy"
+
+	"server/desktop/i18n"
 )
 
 // 协议常量。MUST 与 desktop.LocalProtocolOpenAICompatible /
@@ -196,7 +198,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 		}
 		return emitProxyError(dst, cloudproxy.ProxyError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "无法读取本地模型配置",
+			Message:   i18n.T("local.config_unreadable"),
 			Retryable: false,
 			Details:   map[string]any{"reason": perr.Error()},
 		})
@@ -206,7 +208,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 		// 让用户去设置页填写 base_url / model_id。
 		return emitProxyError(dst, cloudproxy.ProxyError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "本地模型未配置，请在设置中填写 base_url 与 model_id",
+			Message:   i18n.T("local.not_configured"),
 			Retryable: false,
 		})
 	}
@@ -254,7 +256,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	if cerr != nil {
 		return emitProxyError(dst, cloudproxy.ProxyError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "本地推理缓存初始化失败",
+			Message:   i18n.T("local.cache_init_failed"),
 			Retryable: false,
 			Details:   map[string]any{"reason": cerr.Error()},
 		})
@@ -277,7 +279,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 		if lerr != nil {
 			return emitProxyError(dst, cloudproxy.ProxyError{
 				Kind:    cloudproxy.KindBadRequest,
-				Message: "附件加载失败",
+				Message: i18n.T("attachments.load_failed"),
 				Details: map[string]any{"reason": lerr.Error()},
 			})
 		}
@@ -313,13 +315,13 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 
 	body, berr := adapter.requestBody(modelID, history, userText, atts, persona)
 	if berr != nil {
-		_ = dst.WriteProxyError(cloudproxy.ProxyError{Kind: cloudproxy.KindBadRequest, Message: "本地推理请求构造失败"})
+		_ = dst.WriteProxyError(cloudproxy.ProxyError{Kind: cloudproxy.KindBadRequest, Message: i18n.T("local.request_build_failed")})
 		return berr
 	}
 	endpoint := adapter.endpoint(baseURL)
 	httpReq, herr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
 	if herr != nil {
-		_ = dst.WriteProxyError(cloudproxy.ProxyError{Kind: cloudproxy.KindBadRequest, Message: "本地推理请求构造失败"})
+		_ = dst.WriteProxyError(cloudproxy.ProxyError{Kind: cloudproxy.KindBadRequest, Message: i18n.T("local.request_build_failed")})
 		return herr
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -348,7 +350,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 			// spelling, not an outage — so name the URL we actually asked for.
 			// Without it the user reads "请求被拒绝" and has no way to tell
 			// whether we appended the path they expected.
-			pe.Message = "本地模型 endpoint 返回 404：请检查 base_url 是否正确"
+			pe.Message = i18n.T("local.not_found")
 			if pe.Details == nil {
 				pe.Details = map[string]any{}
 			}
@@ -700,7 +702,7 @@ func pipeLocalSSE(src io.Reader, adapter protocolAdapter, dst cloudproxy.SSEWrit
 		if frameSize > localMaxSSEFrameBytes {
 			_ = dst.WriteProxyError(cloudproxy.ProxyError{
 				Kind:      cloudproxy.KindServiceUnavailable,
-				Message:   "本地模型单帧响应过大",
+				Message:   i18n.T("local.frame_too_large"),
 				Retryable: false,
 			})
 			return errors.New("local inference: SSE frame exceeds size limit")
@@ -734,7 +736,7 @@ func pipeLocalSSE(src io.Reader, adapter protocolAdapter, dst cloudproxy.SSEWrit
 	// 走到 EOF 仍未见终端帧 = 截断（done 会在 flushFrame 内 return nil 提前退出）。
 	_ = dst.WriteProxyError(cloudproxy.ProxyError{
 		Kind:      cloudproxy.KindServiceUnavailable,
-		Message:   "本地模型连接中断，未收到完整响应",
+		Message:   i18n.T("local.stream_interrupted"),
 		Retryable: true,
 	})
 	return errors.New("local inference: stream truncated before terminal event")

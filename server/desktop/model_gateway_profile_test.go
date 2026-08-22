@@ -4,7 +4,6 @@ package desktop
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	agentruntime "server/desktop/agentruntime"
@@ -139,7 +138,7 @@ func TestProfileRefusesTheOfficialModelExplicitly(t *testing.T) {
 		fixture.bound = false
 
 		_, baseURL, _, _, err := fixture.reader.LocalInferenceProfile()
-		assertProfileRefusal(t, err, cloudproxy.KindAuthRequired, "连接 WorkMax 账号")
+		assertProfileRefusal(t, err, cloudproxy.KindAuthRequired, modelGatewayUnboundMessage())
 		if baseURL != "" {
 			t.Fatalf("a refusal must not hand back an endpoint: %q", baseURL)
 		}
@@ -150,7 +149,7 @@ func TestProfileRefusesTheOfficialModelExplicitly(t *testing.T) {
 		fixture.chooseOfficial(t, LocalProtocolAnthropicCompatible, "")
 
 		_, _, _, _, err := fixture.reader.LocalInferenceProfile()
-		assertProfileRefusal(t, err, cloudproxy.KindBadRequest, "尚未选择官方模型")
+		assertProfileRefusal(t, err, cloudproxy.KindBadRequest, modelGatewayNoModelMessage())
 	})
 
 	t.Run("gateway not addressable", func(t *testing.T) {
@@ -159,7 +158,7 @@ func TestProfileRefusesTheOfficialModelExplicitly(t *testing.T) {
 		fixture.gateway.SetPort(0)
 
 		_, _, _, _, err := fixture.reader.LocalInferenceProfile()
-		assertProfileRefusal(t, err, cloudproxy.KindServiceUnavailable, "网关未就绪")
+		assertProfileRefusal(t, err, cloudproxy.KindServiceUnavailable, modelGatewayUnavailableMessage())
 	})
 }
 
@@ -175,11 +174,14 @@ func assertProfileRefusal(t *testing.T, err error, kind cloudproxy.ProxyErrorKin
 	if pe.Kind != kind {
 		t.Fatalf("kind = %q, want %q", pe.Kind, kind)
 	}
-	if !strings.Contains(pe.Message, wantText) {
-		t.Fatalf("message = %q, want it to mention %q", pe.Message, wantText)
-	}
-	if !strings.Contains(pe.Message, "本地模型 endpoint") {
-		t.Fatalf("every refusal must name the other way out: %q", pe.Message)
+	// The whole message, not a phrase inside it: the copy is translated now,
+	// so "does this sentence contain that word" is a question about one
+	// language rather than about the refusal. That every refusal also names
+	// the way back to a local endpoint is a property of the COPY, and it is
+	// asserted where the copy lives — server/desktop/i18n, across all locales
+	// at once, rather than here in one of them.
+	if pe.Message != wantText {
+		t.Fatalf("message = %q, want %q", pe.Message, wantText)
 	}
 }
 
@@ -306,7 +308,7 @@ func TestToolLoopSurfacesTheProfileRefusal(t *testing.T) {
 		t.Fatalf("expected exactly one proxy_error, got %v", writer.errors)
 	}
 	if writer.errors[0].Kind != cloudproxy.KindAuthRequired ||
-		!strings.Contains(writer.errors[0].Message, "连接 WorkMax 账号") {
+		writer.errors[0].Message != modelGatewayUnboundMessage() {
 		t.Fatalf("the refusal reached the user as %v", writer.errors[0])
 	}
 }

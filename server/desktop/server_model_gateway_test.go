@@ -345,7 +345,7 @@ func TestModelGatewayWithoutAnAccountFailsLoudly(t *testing.T) {
 	if response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 (%s)", response.StatusCode, body)
 	}
-	if !strings.Contains(body, "连接 WorkMax 账号") {
+	if !strings.Contains(body, jsonEscaped(modelGatewayUnboundMessage())) {
 		t.Fatalf("the error must say an account is needed: %s", body)
 	}
 	if fixture.callCount.Load() != 0 {
@@ -369,7 +369,7 @@ func TestModelGatewayMembershipRefusalIsActionable(t *testing.T) {
 	if response.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 (%s)", response.StatusCode, body)
 	}
-	for _, want := range []string{"会员套餐", "升级"} {
+	for _, want := range []string{jsonEscaped(modelGatewayForbiddenMessage())} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("403 body must be actionable, missing %q: %s", want, body)
 		}
@@ -394,7 +394,7 @@ func TestModelGatewayRetiredModelPointsAtTheSettings(t *testing.T) {
 	if response.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (%s)", response.StatusCode, body)
 	}
-	if !strings.Contains(body, "重新选择一个模型") {
+	if !strings.Contains(body, jsonEscaped(modelGatewayRetiredModelMessage())) {
 		t.Fatalf("a retired model must send the user back to the picker: %s", body)
 	}
 }
@@ -413,7 +413,7 @@ func TestModelGatewayUnreachableCloudFailsExplicitly(t *testing.T) {
 	if response.StatusCode != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502 (%s)", response.StatusCode, body)
 	}
-	if !strings.Contains(body, "无法连接 WorkMax 云端") {
+	if !strings.Contains(body, jsonEscaped(modelGatewayUnreachableMessage())) {
 		t.Fatalf("unreachable cloud must say so: %s", body)
 	}
 }
@@ -429,7 +429,7 @@ func TestModelGatewayWithoutAChosenModelFailsExplicitly(t *testing.T) {
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (%s)", response.StatusCode, body)
 	}
-	if !strings.Contains(body, "尚未选择官方模型") {
+	if !strings.Contains(body, jsonEscaped(modelGatewayNoModelMessage())) {
 		t.Fatalf("missing the actionable sentence: %s", body)
 	}
 }
@@ -700,4 +700,16 @@ func TestModelGatewayRoutesTheQueryStringTheCLIActuallySends(t *testing.T) {
 			t.Errorf("POST %s forwarded to %q, want %q", path, got, upstream)
 		}
 	}
+}
+
+// jsonEscaped renders a message the way it appears inside a JSON response
+// body, so an assertion can look for the whole sentence rather than a phrase
+// that happens to survive escaping. The messages are translated now, so a
+// substring in one language is no longer a stable thing to look for.
+func jsonEscaped(msg string) string {
+	encoded, err := json.Marshal(msg)
+	if err != nil {
+		return msg
+	}
+	return string(encoded[1 : len(encoded)-1])
 }

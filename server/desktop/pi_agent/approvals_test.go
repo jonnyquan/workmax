@@ -498,7 +498,7 @@ func TestRunTurn_NilApprovals_KeepsLegacyBehavior(t *testing.T) {
 // hole this closes was measured end to end: a write to a path outside the
 // workspace came back to the renderer as a bare failed result, indis-
 // tinguishable from a disk error, while the same call on the claude engine
-// says "blocked — 路径在工作区之外".
+// says "blocked", carrying the guard's reason.
 func TestRunTurn_Approval_GuardBlockNarratesReason(t *testing.T) {
 	rt, _, proc := newTestRuntime(t, frames(
 		promptOK,
@@ -525,12 +525,12 @@ func TestRunTurn_Approval_GuardBlockNarratesReason(t *testing.T) {
 	if len(denials) != 2 {
 		t.Fatalf("tool_denied events = %d, want 2 (%+v)", len(denials), denials)
 	}
-	if denials[0].Name != "Write" || denials[0].Target != "escape.txt" || denials[0].Reason != "路径在工作区之外" {
+	if denials[0].Name != "Write" || denials[0].Target != "escape.txt" || denials[0].Reason != pathGuardReason("outside") {
 		t.Errorf("first denial = %+v", denials[0])
 	}
 	// An unknown reason code (a newer extension against this sidecar) still
 	// denies, with the generic sentence rather than a leaked identifier.
-	if denials[1].Name != "Edit" || denials[1].Reason != pathGuardFallbackReason {
+	if denials[1].Name != "Edit" || denials[1].Reason != pathGuardFallbackReason() {
 		t.Errorf("unknown-code denial = %+v", denials[1])
 	}
 

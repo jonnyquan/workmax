@@ -150,13 +150,13 @@ func (r *LocalModelProfileReader) officialModelProfile(dto LocalModelSettingsDTO
 	if r.CloudBound == nil || !r.CloudBound() {
 		return "", "", "", "", &localinference.ProfileError{
 			Kind:    cloudproxy.KindAuthRequired,
-			Message: modelGatewayUnboundMessage,
+			Message: modelGatewayUnboundMessage(),
 		}
 	}
 	if dto.OfficialModelID == "" {
 		return "", "", "", "", &localinference.ProfileError{
 			Kind:    cloudproxy.KindBadRequest,
-			Message: modelGatewayNoModelMessage,
+			Message: modelGatewayNoModelMessage(),
 		}
 	}
 	// The protocol still decides which engine runs the turn (the claude tool
@@ -169,7 +169,7 @@ func (r *LocalModelProfileReader) officialModelProfile(dto LocalModelSettingsDTO
 	if base == "" {
 		return "", "", "", "", &localinference.ProfileError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   modelGatewayUnavailableMessage,
+			Message:   modelGatewayUnavailableMessage(),
 			Retryable: false,
 		}
 	}

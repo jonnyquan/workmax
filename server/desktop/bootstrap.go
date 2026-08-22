@@ -386,6 +386,13 @@ func Bootstrap(cfg BootstrapConfig) (_ *Boot, err error) {
 	// Display preferences for this machine. Small, non-secret, and read once
 	// per launch by the shell before the window paints.
 	uiPreferences := NewUIPreferenceStore(dbRes.DB)
+	// The stored language, applied before anything can fail in it. A "system"
+	// preference is deliberately NOT resolved here: the sidecar starts before
+	// the webview exists, so there is no Accept-Language to read yet, and the
+	// request middleware picks it up on the renderer's first call.
+	if pref, err := uiPreferences.Get(); err == nil {
+		applyStoredLocale(pref.Language)
+	}
 
 	// Minds (心智体): identity-scoped personas over the shared knowledge base.
 	// Only the DB — the knowledge half is reached through KnowledgeIndex at

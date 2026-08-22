@@ -42,6 +42,8 @@ import (
 
 	agentruntime "server/desktop/agentruntime"
 	cloudproxy "server/desktop/cloud_proxy"
+
+	"server/desktop/i18n"
 )
 
 // Config wires a Runtime.
@@ -110,7 +112,7 @@ func (r *Runtime) RunTurn(ctx context.Context, in agentruntime.TurnInput, emit a
 	if info, statErr := os.Stat(r.cfg.BinPath); statErr != nil || info.IsDir() {
 		return &agentruntime.RuntimeError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "pi 引擎二进制不可用",
+			Message:   i18n.T("agent.pi.binary_unavailable"),
 			Retryable: false,
 			Details:   map[string]any{"bin": r.cfg.BinPath},
 		}
@@ -121,7 +123,7 @@ func (r *Runtime) RunTurn(ctx context.Context, in agentruntime.TurnInput, emit a
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return &agentruntime.RuntimeError{
 				Kind:      cloudproxy.KindServiceUnavailable,
-				Message:   "无法创建 pi 数据目录",
+				Message:   i18n.T("agent.pi.data_dir_failed"),
 				Retryable: false,
 				Details:   map[string]any{"reason": err.Error()},
 			}
@@ -132,7 +134,7 @@ func (r *Runtime) RunTurn(ctx context.Context, in agentruntime.TurnInput, emit a
 	if err := writeModelsJSON(piHome, in); err != nil {
 		return &agentruntime.RuntimeError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "无法写入 pi 模型配置",
+			Message:   i18n.T("agent.pi.models_write_failed"),
 			Retryable: false,
 			Details:   map[string]any{"reason": err.Error()},
 		}
@@ -157,7 +159,7 @@ func (r *Runtime) RunTurn(ctx context.Context, in agentruntime.TurnInput, emit a
 		if err := os.WriteFile(extPath, permissionsExtension, 0o644); err != nil {
 			return &agentruntime.RuntimeError{
 				Kind:      cloudproxy.KindServiceUnavailable,
-				Message:   "无法写入 pi 审批扩展",
+				Message:   i18n.T("agent.pi.extension_write_failed"),
 				Retryable: false,
 				Details:   map[string]any{"reason": err.Error()},
 			}
@@ -208,7 +210,7 @@ func (r *Runtime) RunTurn(ctx context.Context, in agentruntime.TurnInput, emit a
 		}
 		return &agentruntime.RuntimeError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "无法启动 pi 工具循环",
+			Message:   i18n.T("agent.pi.start_failed"),
 			Retryable: true,
 			Details:   map[string]any{"reason": serr.Error()},
 		}
@@ -234,7 +236,7 @@ func (r *Runtime) RunTurn(ctx context.Context, in agentruntime.TurnInput, emit a
 		}
 		return &agentruntime.RuntimeError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "无法向 pi 进程发送请求",
+			Message:   i18n.T("agent.pi.send_failed"),
 			Retryable: true,
 			Details:   map[string]any{"reason": werr.Error()},
 		}
@@ -265,7 +267,7 @@ func (r *Runtime) RunTurn(ctx context.Context, in agentruntime.TurnInput, emit a
 		}
 		return &agentruntime.RuntimeError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "pi 工具循环在完成前退出",
+			Message:   i18n.T("agent.pi.exited_early"),
 			Retryable: true,
 			Details:   details,
 		}
@@ -359,7 +361,7 @@ func pump(ctx context.Context, stdout io.Reader, p *framePump) (bool, error) {
 			}
 			return false, &agentruntime.RuntimeError{
 				Kind:      cloudproxy.KindServiceUnavailable,
-				Message:   "读取 pi 输出失败",
+				Message:   i18n.T("agent.pi.read_failed"),
 				Retryable: true,
 				Details:   map[string]any{"reason": rerr.Error()},
 			}
@@ -396,7 +398,7 @@ func (p *framePump) dispatch(ctx context.Context, line []byte) (bool, error) {
 			// The prompt was rejected before acceptance. Failures *after*
 			// acceptance never come back on this channel — they ride the
 			// event stream (message_end stopReason, or a dead process).
-			msg := "pi 拒绝了本轮请求"
+			msg := i18n.T("agent.pi.turn_refused")
 			details := map[string]any{}
 			if f.Error != "" {
 				details["reason"] = f.Error
@@ -459,7 +461,7 @@ func (p *framePump) dispatch(ctx context.Context, line []byte) (bool, error) {
 				Kind: agentruntime.EventToolDenied,
 				Tool: agentruntime.ToolEvent{
 					Name:   claudeToolName(f.ToolName),
-					Reason: agentruntime.OutsideSurfaceReason,
+					Reason: agentruntime.OutsideSurfaceReason(),
 				},
 			})
 		}
@@ -491,7 +493,7 @@ func (p *framePump) dispatch(ctx context.Context, line []byte) (bool, error) {
 				}
 			}
 			if msg == "" {
-				msg = "pi 模型调用失败"
+				msg = i18n.T("agent.pi.model_call_failed")
 			}
 			return false, &agentruntime.RuntimeError{
 				Kind:      cloudproxy.KindUnknown,

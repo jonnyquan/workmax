@@ -504,7 +504,7 @@ func TestRunTurn_ToolOutsideTheProfileIsNarratedAsDenied(t *testing.T) {
 	if denied.Name != "Bash" {
 		t.Errorf("denial names %q, want the shared spelling of the call it refuses", denied.Name)
 	}
-	if denied.Reason != agentruntime.OutsideSurfaceReason {
+	if denied.Reason != agentruntime.OutsideSurfaceReason() {
 		t.Errorf("denial reason = %q, want the same sentence the claude engine uses", denied.Reason)
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"server/desktop/i18n"
 )
 
 // ApprovalDecision is the user's answer to one approval request. The four
@@ -65,12 +67,16 @@ var (
 )
 
 // OutsideSurfaceReason is the sentence a user reads when a call was refused
-// for being outside the local loop's tool surface. One string, because the
+// for being outside the local loop's tool surface. One sentence, because the
 // three places that can refuse a call for that reason — Consult, the claude
 // engine's PreToolUse hook, and pi's own --tools restriction — are the same
 // event as far as the reader is concerned, and telling them apart is not the
 // reader's job.
-const OutsideSurfaceReason = "工具不在本地循环的许可面内"
+//
+// A function rather than a const because the sentence is now translated, and
+// a translation is resolved when it is read, not when the binary is built.
+// The three callers already spell it the same way; they simply call it now.
+func OutsideSurfaceReason() string { return i18n.T("agent.tool.outside_surface") }
 
 // ApprovalSurfaceHas reports whether a tool name has any home in the shared
 // vocabulary — auto-allowed or askable. Anything else is outside the local
@@ -240,7 +246,7 @@ func (cfg *ApprovalConfig) Consult(ctx context.Context, emit EmitFunc, tool, tar
 		// Outside the declared surface entirely — no card, no appeal.
 		_ = emit(Event{
 			Kind: EventToolDenied,
-			Tool: ToolEvent{Name: tool, Target: target, Reason: OutsideSurfaceReason},
+			Tool: ToolEvent{Name: tool, Target: target, Reason: OutsideSurfaceReason()},
 		})
 		return ConsultResult{
 			Decision: ApprovalDeny,
@@ -262,7 +268,7 @@ func (cfg *ApprovalConfig) Consult(ctx context.Context, emit EmitFunc, tool, tar
 		log.Printf("agent approval: %s %s: %v", tool, id, aerr)
 		_ = emit(Event{
 			Kind: EventToolDenied,
-			Tool: ToolEvent{Name: tool, Target: target, Reason: "等待批准超时或中止"},
+			Tool: ToolEvent{Name: tool, Target: target, Reason: i18n.T("agent.tool.approval_timeout")},
 		})
 		return ConsultResult{Decision: ApprovalDeny, Reason: "the user did not approve in time"}, nil
 	}
@@ -281,7 +287,7 @@ func (cfg *ApprovalConfig) Consult(ctx context.Context, emit EmitFunc, tool, tar
 	default:
 		_ = emit(Event{
 			Kind: EventToolDenied,
-			Tool: ToolEvent{Name: tool, Target: target, Reason: "用户拒绝了此操作"},
+			Tool: ToolEvent{Name: tool, Target: target, Reason: i18n.T("agent.tool.user_denied")},
 		})
 		return ConsultResult{Decision: ApprovalDeny, Reason: "the user declined this tool call"}, nil
 	}

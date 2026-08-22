@@ -618,7 +618,7 @@ func requireModelGatewayToken(policy SidecarRoutePolicy, gateway *ModelGateway) 
 	return func(c *gin.Context) {
 		if gateway == nil {
 			writeModelGatewayError(c, protocol, http.StatusServiceUnavailable,
-				modelGatewayErrorAPIError, modelGatewayUnavailableMessage)
+				modelGatewayErrorAPIError, modelGatewayUnavailableMessage())
 			return
 		}
 		var presented string
@@ -639,7 +639,7 @@ func requireModelGatewayToken(policy SidecarRoutePolicy, gateway *ModelGateway) 
 		}
 		if !gateway.Matches(presented) {
 			writeModelGatewayError(c, protocol, http.StatusUnauthorized,
-				modelGatewayErrorAuthentication, modelGatewayCredentialMessage)
+				modelGatewayErrorAuthentication, modelGatewayCredentialMessage())
 			return
 		}
 		c.Next()

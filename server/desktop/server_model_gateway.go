@@ -14,6 +14,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	cloudproxy "server/desktop/cloud_proxy"
+
+	"server/desktop/i18n"
 )
 
 // server_model_gateway.go is the loopback half of the official-model path:
@@ -90,24 +92,17 @@ var (
 // They are written for somebody staring at a failed turn, so each one names
 // the cause AND the two ways out — sign in, or go back to your own endpoint.
 // "Model gateway error" would be true and useless.
-const (
-	modelGatewayUnboundMessage = "官方模型需要连接 WorkMax 账号：请先登录，" +
-		"或在设置中改回你自己的本地模型 endpoint。"
-	modelGatewayNoModelMessage = "尚未选择官方模型：请在设置中选择一个官方模型，" +
-		"或改回你自己的本地模型 endpoint。"
-	modelGatewayForbiddenMessage = "当前会员套餐不能使用所选的官方模型：" +
-		"请在设置中换一个你的套餐支持的模型，或升级会员后重试。" +
-		"也可以在设置中改回你自己的本地模型 endpoint。"
-	modelGatewayRetiredModelMessage = "所选的官方模型已不可用（可能已下架）：" +
-		"请在设置中重新选择一个模型，或改回你自己的本地模型 endpoint。"
-	modelGatewayUnreachableMessage = "无法连接 WorkMax 云端，官方模型本轮不可用：" +
-		"请检查网络后重试，或在设置中改回你自己的本地模型 endpoint。"
-	modelGatewayExpiredMessage = "WorkMax 登录已过期：请重新登录后重试，" +
-		"或在设置中改回你自己的本地模型 endpoint。"
-	modelGatewayUnavailableMessage = "官方模型网关未就绪：请重启 WorkMax 后重试，" +
-		"或在设置中改回你自己的本地模型 endpoint。"
-	modelGatewayCredentialMessage = "无效的本地网关凭据。"
-)
+// Functions rather than constants, because each of these is now a
+// translation: it is resolved when it is read, not when the binary is built.
+// The call sites simply gained parentheses.
+func modelGatewayUnboundMessage() string      { return i18n.T("gateway.unbound") }
+func modelGatewayNoModelMessage() string      { return i18n.T("gateway.no_model") }
+func modelGatewayForbiddenMessage() string    { return i18n.T("gateway.forbidden") }
+func modelGatewayRetiredModelMessage() string { return i18n.T("gateway.retired_model") }
+func modelGatewayUnreachableMessage() string  { return i18n.T("gateway.unreachable") }
+func modelGatewayExpiredMessage() string      { return i18n.T("gateway.expired") }
+func modelGatewayUnavailableMessage() string  { return i18n.T("gateway.unavailable") }
+func modelGatewayCredentialMessage() string   { return i18n.T("gateway.bad_credential") }
 
 func (s *Server) handleModelGatewayAnthropicMessages(c *gin.Context) {
 	s.forwardModelGateway(c, modelGatewayAnthropic)
@@ -131,12 +126,12 @@ func (s *Server) forwardModelGateway(c *gin.Context, target modelGatewayTarget) 
 	gateway := s.cfg.ModelGateway
 	if gateway == nil || !gateway.Ready() {
 		writeModelGatewayError(c, target, http.StatusServiceUnavailable,
-			modelGatewayErrorAPIError, modelGatewayUnavailableMessage)
+			modelGatewayErrorAPIError, modelGatewayUnavailableMessage())
 		return
 	}
 	if s.cfg.Proxy == nil || s.cfg.TokenStore == nil {
 		writeModelGatewayError(c, target, http.StatusServiceUnavailable,
-			modelGatewayErrorAPIError, modelGatewayUnavailableMessage)
+			modelGatewayErrorAPIError, modelGatewayUnavailableMessage())
 		return
 	}
 
@@ -146,20 +141,20 @@ func (s *Server) forwardModelGateway(c *gin.Context, target modelGatewayTarget) 
 	identity := s.resolveIdentity()
 	if !identity.IsCloud() {
 		writeModelGatewayError(c, target, http.StatusUnauthorized,
-			modelGatewayErrorAuthentication, modelGatewayUnboundMessage)
+			modelGatewayErrorAuthentication, modelGatewayUnboundMessage())
 		return
 	}
 	modelID := s.officialModelIDFor(identity.UID)
 	if modelID == "" {
 		writeModelGatewayError(c, target, http.StatusBadRequest,
-			modelGatewayErrorInvalidRequest, modelGatewayNoModelMessage)
+			modelGatewayErrorInvalidRequest, modelGatewayNoModelMessage())
 		return
 	}
 
 	raw, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		writeModelGatewayError(c, target, http.StatusBadRequest,
-			modelGatewayErrorInvalidRequest, "无法读取请求体。")
+			modelGatewayErrorInvalidRequest, i18n.T("gateway.body_unreadable"))
 		return
 	}
 	// The model is the sidecar's answer, not the subprocess's. A local process
@@ -170,7 +165,7 @@ func (s *Server) forwardModelGateway(c *gin.Context, target modelGatewayTarget) 
 	body, err := withModelGatewayModel(raw, modelID)
 	if err != nil {
 		writeModelGatewayError(c, target, http.StatusBadRequest,
-			modelGatewayErrorInvalidRequest, "请求体不是合法的 JSON 对象。")
+			modelGatewayErrorInvalidRequest, i18n.T("gateway.body_not_json"))
 		return
 	}
 
@@ -271,7 +266,7 @@ func (s *Server) writeModelGatewayTransportError(
 	if errors.Is(err, cloudproxy.ErrSessionChanged) ||
 		errors.Is(context.Cause(sessionCtx), cloudproxy.ErrSessionChanged) {
 		writeModelGatewayError(c, target, http.StatusUnauthorized,
-			modelGatewayErrorAuthentication, modelGatewayUnboundMessage)
+			modelGatewayErrorAuthentication, modelGatewayUnboundMessage())
 		return
 	}
 	if sessionCtx.Err() != nil && c.Request.Context().Err() == nil {
@@ -279,11 +274,11 @@ func (s *Server) writeModelGatewayTransportError(
 		// login). Not a network problem, and not something a retry fixes
 		// without signing in again.
 		writeModelGatewayError(c, target, http.StatusUnauthorized,
-			modelGatewayErrorAuthentication, modelGatewayUnboundMessage)
+			modelGatewayErrorAuthentication, modelGatewayUnboundMessage())
 		return
 	}
 	writeModelGatewayError(c, target, http.StatusBadGateway,
-		modelGatewayErrorAPIError, modelGatewayUnreachableMessage)
+		modelGatewayErrorAPIError, modelGatewayUnreachableMessage())
 }
 
 // writeModelGatewayUpstreamStatus turns a non-200 into the one thing the
@@ -295,26 +290,25 @@ func (s *Server) writeModelGatewayUpstreamStatus(c *gin.Context, target modelGat
 	switch resp.StatusCode {
 	case http.StatusForbidden, http.StatusPaymentRequired:
 		writeModelGatewayError(c, target, http.StatusForbidden,
-			modelGatewayErrorPermission, modelGatewayForbiddenMessage)
+			modelGatewayErrorPermission, modelGatewayForbiddenMessage())
 	case http.StatusUnauthorized:
 		writeModelGatewayError(c, target, http.StatusUnauthorized,
-			modelGatewayErrorAuthentication, modelGatewayExpiredMessage)
+			modelGatewayErrorAuthentication, modelGatewayExpiredMessage())
 	case http.StatusNotFound:
 		// The cloud answers 404 for a model id that is no longer in the
 		// catalog — retired, or switched off by ops. The stored choice is the
 		// thing to change, so say that rather than reporting an outage.
 		writeModelGatewayError(c, target, http.StatusNotFound,
-			modelGatewayErrorInvalidRequest, modelGatewayRetiredModelMessage)
+			modelGatewayErrorInvalidRequest, modelGatewayRetiredModelMessage())
 	case http.StatusTooManyRequests:
 		writeModelGatewayError(c, target, http.StatusTooManyRequests,
-			modelGatewayErrorRateLimit, "官方模型请求太频繁，请稍后再试。")
+			modelGatewayErrorRateLimit, i18n.T("gateway.rate_limited"))
 	case http.StatusRequestEntityTooLarge:
 		writeModelGatewayError(c, target, http.StatusRequestEntityTooLarge,
-			modelGatewayErrorInvalidRequest, "请求过大：请减少上下文或附件后重试。")
+			modelGatewayErrorInvalidRequest, i18n.T("gateway.too_large"))
 	default:
 		writeModelGatewayError(c, target, http.StatusBadGateway, modelGatewayErrorAPIError,
-			fmt.Sprintf("官方模型网关返回了错误（上游 %d）：请稍后重试，"+
-				"或在设置中改回你自己的本地模型 endpoint。", resp.StatusCode))
+			i18n.T("gateway.upstream_error", resp.StatusCode))
 	}
 }
 
@@ -388,9 +382,9 @@ func withModelGatewayModel(raw []byte, modelID string) ([]byte, error) {
 func modelGatewayTokenFailure(err error) (int, string, string) {
 	switch {
 	case errors.Is(err, cloudproxy.ErrNoSession), errors.Is(err, cloudproxy.ErrSessionChanged):
-		return http.StatusUnauthorized, modelGatewayErrorAuthentication, modelGatewayUnboundMessage
+		return http.StatusUnauthorized, modelGatewayErrorAuthentication, modelGatewayUnboundMessage()
 	default:
-		return http.StatusUnauthorized, modelGatewayErrorAuthentication, modelGatewayExpiredMessage
+		return http.StatusUnauthorized, modelGatewayErrorAuthentication, modelGatewayExpiredMessage()
 	}
 }
 

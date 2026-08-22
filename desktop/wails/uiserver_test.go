@@ -450,3 +450,69 @@ func TestUIAppearanceLeavesOtherAssetsAlone(t *testing.T) {
 		t.Fatalf("a script was rewritten: %q", rec.Body.String())
 	}
 }
+
+// The language reaches the first frame the same way the theme does, and
+// through the same one read — but it lands on the lang attribute, which is
+// the anchor the other two are spliced onto rather than an attribute that can
+// be left off.
+func TestUIIndexCarriesTheStoredLanguage(t *testing.T) {
+	const document = "<!doctype html>\n<html lang=\"en\">\n  <head></head>\n</html>\n"
+	var forwarded []string
+	preference := `{"appearance":"system","density":"standard","language":"zh","updated_at":"2026-08-22T00:00:00Z"}`
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwarded = append(forwarded, r.Header.Get("Accept-Language"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, preference)
+	}))
+	defer sidecar.Close()
+
+	const cap = "test-capability"
+	handler := UIHandler(fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte(document)}},
+		cap, sidecarPortOf(t, sidecar.URL), "secret-token")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/"+cap+"/", nil)
+	// The webview's own header. The shell forwards it so the sidecar can
+	// resolve a "system" preference from the machine's answer on the very
+	// request that decides the first frame.
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.6")
+	handler.ServeHTTP(rec, req)
+
+	if !strings.Contains(rec.Body.String(), `<html lang="zh">`) {
+		t.Fatalf("served document did not carry the stored language:\n%s", rec.Body.String())
+	}
+	if len(forwarded) != 1 || forwarded[0] != "zh-CN,zh;q=0.9,en;q=0.6" {
+		t.Fatalf("Accept-Language forwarded = %v; the sidecar cannot resolve \"system\" without it", forwarded)
+	}
+}
+
+// Everything on this path fails open. A sidecar that says nothing, or says
+// something outside the vocabulary, must still serve a working document — in
+// English, which is both the shipped markup and the catalogs' own fallback.
+func TestUIIndexFallsBackToEnglishWhenTheLanguageIsUnusable(t *testing.T) {
+	const document = "<!doctype html>\n<html lang=\"en\">\n  <head></head>\n</html>\n"
+	for _, body := range []string{
+		`{"appearance":"system","density":"standard","language":"klingon"}`,
+		`{"appearance":"system","density":"standard","language":"system"}`,
+		`{"appearance":"system","density":"standard"}`,
+		`not json at all`,
+	} {
+		sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, body)
+		}))
+		const cap = "test-capability"
+		handler := UIHandler(fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte(document)}},
+			cap, sidecarPortOf(t, sidecar.URL), "secret-token")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/"+cap+"/", nil))
+		sidecar.Close()
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("body %q: status = %d, want 200 — a language must never cost the window", body, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `<html lang="en"`) {
+			t.Fatalf("body %q: document did not fall back to English:\n%s", body, rec.Body.String())
+		}
+	}
+}

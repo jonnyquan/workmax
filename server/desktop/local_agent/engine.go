@@ -42,6 +42,8 @@ import (
 	agentruntime "server/desktop/agentruntime"
 	cloudproxy "server/desktop/cloud_proxy"
 	localinference "server/desktop/local_inference"
+
+	"server/desktop/i18n"
 )
 
 // doneEventData mirrors local_inference's terminal event byte-for-byte: the
@@ -191,7 +193,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 		}
 		return emitProxyError(dst, cloudproxy.ProxyError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "无法读取本地模型配置",
+			Message:   i18n.T("local.config_unreadable"),
 			Retryable: false,
 			Details:   map[string]any{"reason": perr.Error()},
 		})
@@ -199,7 +201,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	if baseURL == "" || modelID == "" {
 		return emitProxyError(dst, cloudproxy.ProxyError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "本地模型未配置，请在设置中填写 base_url 与 model_id",
+			Message:   i18n.T("local.not_configured"),
 			Retryable: false,
 		})
 	}
@@ -220,7 +222,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	if cr, ok := e.runtime.(*claudeRuntime); ok && cr.cliPath == "" {
 		return emitProxyError(dst, cloudproxy.ProxyError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "本地工具循环需要 claude CLI；未找到可用的 CLI 二进制",
+			Message:   i18n.T("agent.local.cli_missing"),
 			Retryable: false,
 		})
 	}
@@ -243,7 +245,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	if cerr != nil {
 		return emitProxyError(dst, cloudproxy.ProxyError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "本地缓存初始化失败",
+			Message:   i18n.T("agent.local.cache_init_failed"),
 			Retryable: false,
 			Details:   map[string]any{"reason": cerr.Error()},
 		})
@@ -259,7 +261,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	if aerr != nil {
 		return emitProxyError(dst, cloudproxy.ProxyError{
 			Kind:    cloudproxy.KindBadRequest,
-			Message: "附件加载失败",
+			Message: i18n.T("attachments.load_failed"),
 			Details: map[string]any{"reason": aerr.Error()},
 		})
 	}
@@ -268,7 +270,7 @@ func (e *Engine) Chat(ctx context.Context, req cloudproxy.ChatRequest, dst cloud
 	if werr != nil {
 		return emitProxyError(dst, cloudproxy.ProxyError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "无法创建线程工作区",
+			Message:   i18n.T("workspace.create_failed"),
 			Retryable: false,
 			Details:   map[string]any{"reason": werr.Error()},
 		})

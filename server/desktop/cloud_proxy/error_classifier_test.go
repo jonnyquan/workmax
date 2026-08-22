@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"server/desktop/i18n"
 )
 
 // fakeNetErr satisfies net.Error so we can exercise the Timeout()
@@ -41,18 +43,23 @@ func TestClassifyTokenStoreError_OtherError(t *testing.T) {
 	}
 }
 
+// The messages are translated now, so these assert the KEY each failure
+// resolves to rather than a phrase in one language. That keeps what the test
+// is actually about — did the classifier reach for the right message — and
+// stops a copy edit or a locale switch from failing a test about network
+// classification.
 func TestClassifyNetworkError(t *testing.T) {
 	cases := []struct {
 		name      string
 		err       error
 		wantKind  ProxyErrorKind
 		retryable bool
-		msgSubstr string
+		wantKey   string
 	}{
-		{"context cancelled", context.Canceled, KindNetworkUnavailable, true, "取消"},
-		{"deadline exceeded", context.DeadlineExceeded, KindNetworkUnavailable, true, "取消"},
-		{"timeout", fakeNetErr{msg: "i/o timeout", timeout: true}, KindNetworkUnavailable, true, "超时"},
-		{"generic", errors.New("connection refused"), KindNetworkUnavailable, true, "网络连接失败"},
+		{"context cancelled", context.Canceled, KindNetworkUnavailable, true, "proxy.canceled"},
+		{"deadline exceeded", context.DeadlineExceeded, KindNetworkUnavailable, true, "proxy.canceled"},
+		{"timeout", fakeNetErr{msg: "i/o timeout", timeout: true}, KindNetworkUnavailable, true, "proxy.network_timeout"},
+		{"generic", errors.New("connection refused"), KindNetworkUnavailable, true, "proxy.network_failed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -63,8 +70,13 @@ func TestClassifyNetworkError(t *testing.T) {
 			if got.Retryable != tc.retryable {
 				t.Errorf("retryable: got %v, want %v", got.Retryable, tc.retryable)
 			}
-			if !strings.Contains(got.Message, tc.msgSubstr) {
-				t.Errorf("message %q missing substr %q", got.Message, tc.msgSubstr)
+			if want := i18n.T(tc.wantKey); got.Message != want {
+				t.Errorf("message: got %q, want %q (key %s)", got.Message, want, tc.wantKey)
+			}
+			// A key that resolved to itself means the catalog is missing it —
+			// the message would then be an identifier on a user's screen.
+			if got.Message == tc.wantKey {
+				t.Errorf("key %q is not in the catalog", tc.wantKey)
 			}
 		})
 	}

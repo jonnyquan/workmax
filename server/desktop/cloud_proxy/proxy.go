@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+
+	"server/desktop/i18n"
 )
 
 // ChatRequest is what the sidecar accepts from the renderer at
@@ -340,7 +342,7 @@ func (p *Proxy) tryAuthRecover(
 		// Refresh chain dead → real auth_required.
 		return p.emitErrorAndClose(dst, ProxyError{
 			Kind:      KindAuthRequired,
-			Message:   "登录已过期，请重新登录",
+			Message:   i18n.T("proxy.session_expired"),
 			Retryable: false,
 		}, nil), true
 	}
@@ -457,7 +459,7 @@ func (p *Proxy) emitSessionChanged(dst SSEWriter) error {
 	if dst != nil {
 		_ = dst.WriteProxyError(ProxyError{
 			Kind:      KindSessionChanged,
-			Message:   "登录账号已变更，请重新打开当前会话",
+			Message:   i18n.T("proxy.identity_changed"),
 			Retryable: false,
 		})
 	}

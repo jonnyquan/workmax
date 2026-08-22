@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"server/desktop/i18n"
 )
 
 // ProxyErrorKind is the closed enum of error categories the sidecar
@@ -52,7 +54,7 @@ func ClassifyTokenStoreError(err error) (pe ProxyError) {
 	if errors.Is(err, ErrNoSession) {
 		return ProxyError{
 			Kind:      KindAuthRequired,
-			Message:   "需要登录 workmax 账号",
+			Message:   i18n.T("proxy.auth_required"),
 			Retryable: false,
 		}
 	}
@@ -60,7 +62,7 @@ func ClassifyTokenStoreError(err error) (pe ProxyError) {
 	// can't fix without re-login; treat it the same way.
 	return ProxyError{
 		Kind:      KindAuthRequired,
-		Message:   "需要登录 workmax 账号",
+		Message:   i18n.T("proxy.auth_required"),
 		Retryable: false,
 		Details:   map[string]any{"reason": err.Error()},
 	}
@@ -79,7 +81,7 @@ func ClassifyNetworkError(err error) (pe ProxyError) {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return ProxyError{
 			Kind:      KindNetworkUnavailable,
-			Message:   "请求已取消",
+			Message:   i18n.T("proxy.canceled"),
 			Retryable: true,
 			Details:   map[string]any{"reason": err.Error()},
 		}
@@ -88,14 +90,14 @@ func ClassifyNetworkError(err error) (pe ProxyError) {
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return ProxyError{
 			Kind:      KindNetworkUnavailable,
-			Message:   "网络超时，请检查你的网络",
+			Message:   i18n.T("proxy.network_timeout"),
 			Retryable: true,
 			Details:   map[string]any{"reason": err.Error()},
 		}
 	}
 	return ProxyError{
 		Kind:      KindNetworkUnavailable,
-		Message:   "网络连接失败，请检查你的网络",
+		Message:   i18n.T("proxy.network_failed"),
 		Retryable: true,
 		Details:   map[string]any{"reason": err.Error()},
 	}
@@ -122,7 +124,7 @@ func ClassifyHTTPResponse(resp *http.Response, body []byte) (pe ProxyError) {
 		// rotate it. Either way, re-login is the only fix.
 		return ProxyError{
 			Kind:      KindAuthExpired,
-			Message:   "登录已过期，请重新登录",
+			Message:   i18n.T("proxy.session_expired"),
 			Retryable: false,
 			Details: map[string]any{
 				"upstream_status":      status,
@@ -138,7 +140,7 @@ func ClassifyHTTPResponse(resp *http.Response, body []byte) (pe ProxyError) {
 		if status == http.StatusPaymentRequired || strings.Contains(string(body), "quota_exceeded") {
 			return ProxyError{
 				Kind:      KindQuotaExceeded,
-				Message:   "本月配额已用完，可升级到 Pro 解锁更多",
+				Message:   i18n.T("proxy.quota_exhausted"),
 				Retryable: false,
 				Details: map[string]any{
 					"upstream_status":      status,
@@ -148,7 +150,7 @@ func ClassifyHTTPResponse(resp *http.Response, body []byte) (pe ProxyError) {
 		}
 		return ProxyError{
 			Kind:      KindBadRequest,
-			Message:   "请求被拒绝",
+			Message:   i18n.T("proxy.forbidden"),
 			Retryable: false,
 			Details: map[string]any{
 				"upstream_status":      status,
@@ -160,7 +162,7 @@ func ClassifyHTTPResponse(resp *http.Response, body []byte) (pe ProxyError) {
 		retryAfter := parseRetryAfterMS(resp.Header.Get("Retry-After"))
 		return ProxyError{
 			Kind:         KindRateLimited,
-			Message:      "请求太频繁，请稍后再试",
+			Message:      i18n.T("proxy.rate_limited"),
 			Retryable:    true,
 			RetryAfterMS: retryAfter,
 			Details: map[string]any{
@@ -172,7 +174,7 @@ func ClassifyHTTPResponse(resp *http.Response, body []byte) (pe ProxyError) {
 	case status == http.StatusRequestEntityTooLarge: // 413
 		return ProxyError{
 			Kind:      KindPayloadTooLarge,
-			Message:   "请求过大，请减少文件或精简内容",
+			Message:   i18n.T("proxy.too_large"),
 			Retryable: false,
 			Details: map[string]any{
 				"upstream_status":      status,
@@ -183,7 +185,7 @@ func ClassifyHTTPResponse(resp *http.Response, body []byte) (pe ProxyError) {
 	case status >= 500 && status < 600: // 5xx
 		return ProxyError{
 			Kind:      KindServiceUnavailable,
-			Message:   "workmax 服务暂时异常，请稍后重试",
+			Message:   i18n.T("proxy.service_error"),
 			Retryable: true,
 			Details: map[string]any{
 				"upstream_status":      status,
@@ -196,7 +198,7 @@ func ClassifyHTTPResponse(resp *http.Response, body []byte) (pe ProxyError) {
 		// show what workmax.app actually said (e.g. validation errors).
 		msg := extractErrorMessage(body)
 		if msg == "" {
-			msg = "请求无效"
+			msg = i18n.T("proxy.bad_request")
 		}
 		return ProxyError{
 			Kind:      KindBadRequest,
@@ -211,7 +213,7 @@ func ClassifyHTTPResponse(resp *http.Response, body []byte) (pe ProxyError) {
 	default: // 1xx/3xx that somehow reach us — treat as unknown
 		return ProxyError{
 			Kind:      KindUnknown,
-			Message:   "未知响应",
+			Message:   i18n.T("proxy.unknown_response"),
 			Retryable: true,
 			Details: map[string]any{
 				"upstream_status":      status,
@@ -248,7 +250,7 @@ func ClassifyLocalUpstreamError(status int, body string) (pe ProxyError) {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden: // 401, 403
 		return ProxyError{
 			Kind:      KindAuthRequired,
-			Message:   "本地模型 endpoint 拒绝了凭据：请检查设置中的 API key",
+			Message:   i18n.T("local.credentials_rejected"),
 			Retryable: false,
 			Details:   details,
 		}
@@ -256,7 +258,7 @@ func ClassifyLocalUpstreamError(status int, body string) (pe ProxyError) {
 	case status == http.StatusPaymentRequired: // 402
 		return ProxyError{
 			Kind:      KindQuotaExceeded,
-			Message:   "本地模型 endpoint 报告额度不足：请检查该服务商的余额或配额",
+			Message:   i18n.T("local.insufficient_quota"),
 			Retryable: false,
 			Details:   details,
 		}
@@ -266,7 +268,7 @@ func ClassifyLocalUpstreamError(status int, body string) (pe ProxyError) {
 		// mistake: a base_url that does not have the API where we asked.
 		return ProxyError{
 			Kind:      KindBadRequest,
-			Message:   "本地模型 endpoint 返回 404：请检查 base_url 是否正确",
+			Message:   i18n.T("local.not_found"),
 			Retryable: false,
 			Details:   details,
 		}
@@ -274,7 +276,7 @@ func ClassifyLocalUpstreamError(status int, body string) (pe ProxyError) {
 	case status == http.StatusRequestEntityTooLarge: // 413
 		return ProxyError{
 			Kind:      KindPayloadTooLarge,
-			Message:   "请求过大，请减少文件或精简内容",
+			Message:   i18n.T("proxy.too_large"),
 			Retryable: false,
 			Details:   details,
 		}
@@ -282,7 +284,7 @@ func ClassifyLocalUpstreamError(status int, body string) (pe ProxyError) {
 	case status == http.StatusTooManyRequests: // 429
 		return ProxyError{
 			Kind:      KindRateLimited,
-			Message:   "本地模型 endpoint 限流，请稍后再试",
+			Message:   i18n.T("local.rate_limited"),
 			Retryable: true,
 			Details:   details,
 		}
@@ -296,7 +298,7 @@ func ClassifyLocalUpstreamError(status int, body string) (pe ProxyError) {
 		// question worth asking; "workmax is having a moment" is not.
 		return ProxyError{
 			Kind:      KindNetworkUnavailable,
-			Message:   "无法连接本地模型 endpoint：请确认它正在运行，且 base_url 正确",
+			Message:   i18n.T("local.unreachable"),
 			Retryable: true,
 			Details:   details,
 		}
@@ -304,7 +306,7 @@ func ClassifyLocalUpstreamError(status int, body string) (pe ProxyError) {
 	case status >= 500 && status < 600: // other 5xx, 500/503/504 included
 		return ProxyError{
 			Kind:      KindServiceUnavailable,
-			Message:   "本地模型 endpoint 返回了服务端错误，请稍后重试",
+			Message:   i18n.T("local.server_error"),
 			Retryable: true,
 			Details:   details,
 		}
@@ -315,7 +317,7 @@ func ClassifyLocalUpstreamError(status int, body string) (pe ProxyError) {
 		// on it.
 		msg := extractErrorMessage([]byte(body))
 		if msg == "" {
-			msg = "本地模型 endpoint 拒绝了请求：请检查模型 ID 与端点配置"
+			msg = i18n.T("local.request_rejected")
 		}
 		return ProxyError{
 			Kind:      KindBadRequest,
@@ -327,7 +329,7 @@ func ClassifyLocalUpstreamError(status int, body string) (pe ProxyError) {
 	default:
 		return ProxyError{
 			Kind:      KindUnknown,
-			Message:   "本地模型 endpoint 返回了无法识别的结果",
+			Message:   i18n.T("local.unreadable_response"),
 			Retryable: true,
 			Details:   details,
 		}
@@ -341,11 +343,11 @@ func ClassifyLocalUpstreamError(status int, body string) (pe ProxyError) {
 func ClassifyUpstreamStreamError(err error) (pe ProxyError) {
 	defer func() { pe = sanitizeProxyError(pe) }()
 	if err == nil {
-		return ProxyError{Kind: KindUnknown, Message: "上游连接异常结束", Retryable: true}
+		return ProxyError{Kind: KindUnknown, Message: i18n.T("proxy.upstream_eof"), Retryable: true}
 	}
 	return ProxyError{
 		Kind:      KindServiceUnavailable,
-		Message:   "workmax 服务连接中断，请稍后重试",
+		Message:   i18n.T("proxy.stream_interrupted"),
 		Retryable: true,
 		Details:   map[string]any{"reason": err.Error()},
 	}

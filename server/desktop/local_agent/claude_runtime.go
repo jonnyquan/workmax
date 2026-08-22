@@ -15,6 +15,8 @@ import (
 	agentruntime "server/desktop/agentruntime"
 	cloudproxy "server/desktop/cloud_proxy"
 	localinference "server/desktop/local_inference"
+
+	"server/desktop/i18n"
 )
 
 // claudeRuntime is the Claude Agent SDK engine behind the agentruntime seam:
@@ -75,7 +77,7 @@ func (r *claudeRuntime) RunTurn(ctx context.Context, in agentruntime.TurnInput, 
 		}
 		return &agentruntime.RuntimeError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "无法启动本地工具循环",
+			Message:   i18n.T("agent.local.start_failed"),
 			Retryable: true,
 			Details:   map[string]any{"reason": qerr.Error()},
 		}
@@ -165,7 +167,7 @@ func securityHook(guard *pathValidator, emit agentruntime.EmitFunc) claudesdk.Ho
 				Tool: agentruntime.ToolEvent{
 					Name:   toolName,
 					Target: toolTarget(toolInput),
-					Reason: agentruntime.OutsideSurfaceReason,
+					Reason: agentruntime.OutsideSurfaceReason(),
 				},
 			})
 			return claudesdk.NewPreToolUseOutput(claudesdk.PermissionDecisionDeny,
@@ -309,7 +311,7 @@ func (r *claudeRuntime) pump(ctx context.Context, iter claudesdk.MessageIterator
 			}
 			return &agentruntime.RuntimeError{
 				Kind:      cloudproxy.KindServiceUnavailable,
-				Message:   "本地工具循环中断",
+				Message:   i18n.T("agent.local.interrupted"),
 				Retryable: true,
 				Details:   map[string]any{"reason": nerr.Error()},
 			}
@@ -408,7 +410,7 @@ func (r *claudeRuntime) pump(ctx context.Context, iter claudesdk.MessageIterator
 				}
 			}
 			if m.IsError {
-				detail := "本地工具循环失败"
+				detail := i18n.T("agent.local.failed")
 				if m.Result != nil && *m.Result != "" {
 					detail = *m.Result
 				}
@@ -423,7 +425,7 @@ func (r *claudeRuntime) pump(ctx context.Context, iter claudesdk.MessageIterator
 	if !sawResult {
 		return &agentruntime.RuntimeError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "本地工具循环在结果前终止",
+			Message:   i18n.T("agent.local.ended_early"),
 			Retryable: true,
 		}
 	}

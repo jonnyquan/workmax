@@ -57,6 +57,10 @@ func (s *Server) handlePutAppearance(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	// A language switch has to reach the NEXT error message, not the next
+	// launch. "system" is left to the request middleware, which is already
+	// watching the header this very request carried.
+	applyStoredLocale(dto.Language)
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, dto)
 }

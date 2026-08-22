@@ -268,8 +268,9 @@ func withAppearance(base string, renderer fs.FS, sidecarPort int, sidecarToken s
 			next.ServeHTTP(w, r)
 			return
 		}
-		appearance, density := readDisplay(r.Context(), client, sidecar, sidecarToken)
-		document = applyDisplay(document, appearance, density)
+		appearance, density, language := readDisplay(
+			r.Context(), client, sidecar, sidecarToken, r.Header.Get("Accept-Language"))
+		document = applyDisplay(document, appearance, density, language)
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		// Never cached: the document now carries a preference that changes,
@@ -292,30 +293,38 @@ func withAppearance(base string, renderer fs.FS, sidecarPort int, sidecarToken s
 // One request for both, because this runs while index.html is being served and
 // a second round trip would be spent on the first frame's latency. They live
 // in one row on the sidecar for the same reason.
-func readDisplay(ctx context.Context, client *http.Client, url, token string) (appearance, density string) {
+func readDisplay(ctx context.Context, client *http.Client, url, token, acceptLanguage string) (appearance, density, language string) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	req.Header.Set("X-Local-Token", token)
+	// The webview's own Accept-Language, forwarded so the sidecar can resolve
+	// a "system" language preference from the same header the machine sent.
+	// Without this the shell would be asking about a locale the sidecar had no
+	// way to know on the very request that decides the first frame.
+	if acceptLanguage != "" {
+		req.Header.Set("Accept-Language", acceptLanguage)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", ""
+		return "", "", ""
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	var payload struct {
 		Appearance string `json:"appearance"`
 		Density    string `json:"density"`
+		Language   string `json:"language"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	// The vocabularies are repeated here rather than trusted from the sidecar,
 	// because this is the step that turns a stored string into markup. The
@@ -329,13 +338,21 @@ func readDisplay(ctx context.Context, client *http.Client, url, token string) (a
 	case "compact", "comfortable":
 		density = payload.Density
 	}
-	return appearance, density
+	// "system" is absent from this list for a different reason than the other
+	// two defaults: it is not "write nothing", it is "the sidecar already
+	// resolved it from the Accept-Language we forwarded". An empty answer here
+	// leaves lang="en" as shipped, which is the honest fallback.
+	switch payload.Language {
+	case "en", "zh":
+		language = payload.Language
+	}
+	return appearance, density, language
 }
 
 // applyDisplay writes data-theme and data-density onto <html>. Each default —
 // and every failure upstream of it — leaves that attribute off entirely, which
 // is what the stylesheet already answers correctly on its own.
-func applyDisplay(document []byte, appearance, density string) []byte {
+func applyDisplay(document []byte, appearance, density, language string) []byte {
 	attributes := ""
 	if appearance == "light" || appearance == "dark" {
 		attributes += ` data-theme="` + appearance + `"`
@@ -343,7 +360,15 @@ func applyDisplay(document []byte, appearance, density string) []byte {
 	if density == "compact" || density == "comfortable" {
 		attributes += ` data-density="` + density + `"`
 	}
-	if attributes == "" {
+	// The lang attribute is not like the other two: it is always present and
+	// always says something, so "leave it off" is not available as a default.
+	// An unresolved language keeps the shipped en, which is also the locale the
+	// catalogs fall back to — the document and the sidecar agree either way.
+	lang := "en"
+	if language == "en" || language == "zh" {
+		lang = language
+	}
+	if attributes == "" && lang == "en" {
 		return document
 	}
 	anchor := []byte(appearanceAnchor)
@@ -351,7 +376,7 @@ func applyDisplay(document []byte, appearance, density string) []byte {
 	if index < 0 {
 		return document
 	}
-	replacement := []byte(`<html lang="en"` + attributes + `>`)
+	replacement := []byte(`<html lang="` + lang + `"` + attributes + `>`)
 	out := make([]byte, 0, len(document)+len(replacement)-len(anchor))
 	out = append(out, document[:index]...)
 	out = append(out, replacement...)

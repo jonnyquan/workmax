@@ -30,6 +30,8 @@ import (
 
 	agentruntime "server/desktop/agentruntime"
 	cloudproxy "server/desktop/cloud_proxy"
+
+	"server/desktop/i18n"
 )
 
 // permissionsExtension is the pi extension source, embedded so the sidecar
@@ -53,16 +55,27 @@ const approvalTitlePrefix = "workmax-approval:"
 // user is told why instead of watching a call report "failed".
 const blockedTitlePrefix = "workmax-blocked:"
 
-// pathGuardReasons renders the extension's reason codes for the user. An
-// unknown code (a newer extension against an older sidecar) falls back to the
-// generic sentence rather than leaking a bare identifier.
-var pathGuardReasons = map[string]string{
-	"traversal": "路径包含目录穿越",
-	"sensitive": "路径涉及敏感文件",
-	"outside":   "路径在工作区之外",
+// pathGuardReasonKeys maps the extension's reason codes to message keys. It
+// holds KEYS, not sentences: a package-level map of resolved strings would be
+// built at init, which happens before the window's language is known, and
+// would then serve that first answer forever.
+var pathGuardReasonKeys = map[string]string{
+	"traversal": "agent.pathguard.traversal",
+	"sensitive": "agent.pathguard.sensitive",
+	"outside":   "agent.pathguard.outside",
 }
 
-const pathGuardFallbackReason = "路径未通过本地循环的安全检查"
+// pathGuardReason renders a reason code for the user. An unknown code (a newer
+// extension against an older sidecar) falls back to the generic sentence
+// rather than leaking a bare identifier.
+func pathGuardReason(code string) string {
+	if key, ok := pathGuardReasonKeys[code]; ok {
+		return i18n.T(key)
+	}
+	return pathGuardFallbackReason()
+}
+
+func pathGuardFallbackReason() string { return i18n.T("agent.pathguard.rejected") }
 
 // approvalToolProfile is the approval-mode tool allowlist: the read surface
 // plus the write surface the extension gates. Bash stays out, as on the
@@ -152,10 +165,7 @@ func (p *framePump) handleGuardBlock(ctx context.Context, f *piFrame) error {
 	rest := strings.TrimPrefix(f.Title, blockedTitlePrefix)
 	piTool, rest, _ := strings.Cut(rest, ":")
 	target, code, _ := strings.Cut(rest, ":")
-	reason, ok := pathGuardReasons[code]
-	if !ok {
-		reason = pathGuardFallbackReason
-	}
+	reason := pathGuardReason(code)
 	// Best-effort, like every other denial narration: the refusal already
 	// holds whether or not the client is still listening.
 	_ = p.emit(agentruntime.Event{
@@ -175,7 +185,7 @@ func (p *framePump) respond(ctx context.Context, frame map[string]any) error {
 		}
 		return &agentruntime.RuntimeError{
 			Kind:      cloudproxy.KindServiceUnavailable,
-			Message:   "无法向 pi 进程发送应答",
+			Message:   i18n.T("agent.pi.reply_failed"),
 			Retryable: true,
 			Details:   map[string]any{"reason": werr.Error()},
 		}

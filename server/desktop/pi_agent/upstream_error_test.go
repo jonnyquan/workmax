@@ -10,6 +10,8 @@ import (
 
 	agentruntime "server/desktop/agentruntime"
 	cloudproxy "server/desktop/cloud_proxy"
+
+	"server/desktop/i18n"
 )
 
 // Every string below was captured from pi 0.84.1 against a scripted
@@ -22,7 +24,12 @@ func TestClassifyPiUpstreamMessage_RealShapes(t *testing.T) {
 		msg       string
 		kind      cloudproxy.ProxyErrorKind
 		retryable bool
-		wantIn    string // substring the user must be able to read
+		// wantIn is for the cases where the ENDPOINT's own words must survive
+		// classification. wantKey is for the ones where we supply the sentence:
+		// those are translated now, so the test names the message rather than a
+		// phrase that only exists in one language.
+		wantIn  string
+		wantKey string // substring the user must be able to read
 	}{
 		{
 			name:      "a 400 with the endpoint's own words",
@@ -36,21 +43,21 @@ func TestClassifyPiUpstreamMessage_RealShapes(t *testing.T) {
 			msg:       "400 status code (no body)",
 			kind:      cloudproxy.KindBadRequest,
 			retryable: false,
-			wantIn:    "模型 ID",
+			wantKey:   "local.request_rejected",
 		},
 		{
 			name:      "a rejected key",
 			msg:       `401: {"message":"invalid api key"}`,
 			kind:      cloudproxy.KindAuthRequired,
 			retryable: false,
-			wantIn:    "API key",
+			wantKey:   "local.credentials_rejected",
 		},
 		{
 			name:      "throttling",
 			msg:       "429 status code (no body)",
 			kind:      cloudproxy.KindRateLimited,
 			retryable: true,
-			wantIn:    "限流",
+			wantKey:   "local.rate_limited",
 		},
 		{
 			// The one the task named: a refused connection, which pi reports as
@@ -59,35 +66,35 @@ func TestClassifyPiUpstreamMessage_RealShapes(t *testing.T) {
 			msg:       "502 status code (no body)",
 			kind:      cloudproxy.KindNetworkUnavailable,
 			retryable: true,
-			wantIn:    "正在运行",
+			wantKey:   "local.unreachable",
 		},
 		{
 			name:      "the endpoint blew up",
 			msg:       "500 status code (no body)",
 			kind:      cloudproxy.KindServiceUnavailable,
 			retryable: true,
-			wantIn:    "服务端错误",
+			wantKey:   "local.server_error",
 		},
 		{
 			name:      "the provider's meter",
 			msg:       "402 status code (no body)",
 			kind:      cloudproxy.KindQuotaExceeded,
 			retryable: false,
-			wantIn:    "额度",
+			wantKey:   "local.insufficient_quota",
 		},
 		{
 			name:      "a base_url with no API behind it",
 			msg:       "404 status code (no body)",
 			kind:      cloudproxy.KindBadRequest,
 			retryable: false,
-			wantIn:    "base_url",
+			wantKey:   "local.not_found",
 		},
 		{
 			name:      "too much to send",
 			msg:       "413 status code (no body)",
 			kind:      cloudproxy.KindPayloadTooLarge,
 			retryable: false,
-			wantIn:    "请求过大",
+			wantKey:   "proxy.too_large",
 		},
 	}
 	for _, tc := range cases {
@@ -102,8 +109,19 @@ func TestClassifyPiUpstreamMessage_RealShapes(t *testing.T) {
 			if pe.Retryable != tc.retryable {
 				t.Errorf("retryable = %v, want %v", pe.Retryable, tc.retryable)
 			}
-			if !strings.Contains(pe.Message, tc.wantIn) {
-				t.Errorf("message = %q, want it to carry %q", pe.Message, tc.wantIn)
+			switch {
+			case tc.wantKey != "":
+				want := i18n.T(tc.wantKey)
+				if pe.Message != want {
+					t.Errorf("message = %q, want %q (key %s)", pe.Message, want, tc.wantKey)
+				}
+				if pe.Message == tc.wantKey {
+					t.Errorf("key %q is not in the catalog", tc.wantKey)
+				}
+			default:
+				if !strings.Contains(pe.Message, tc.wantIn) {
+					t.Errorf("message = %q, want it to carry %q", pe.Message, tc.wantIn)
+				}
 			}
 			if pe.Details["upstream_status"] == nil {
 				t.Error("the status must survive into details for diagnosis")

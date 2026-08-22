@@ -235,6 +235,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	// behavior for Gin redirects, unknown paths, and wrong methods while the
 	// per-route table becomes the auditable source for route policy.
 	router.Use(sidecarPerimeter(cfg.LocalToken))
+	// The window's language, kept in step with the machine while the stored
+	// preference says "system". The header this reads is one the webview
+	// already sends on every request — see locale.go.
+	router.Use(localeFromRequests(s.languagePreferenceOrSystem))
 	if err := registerCurrentSidecarRoutes(router, s, cfg.LocalToken); err != nil {
 		authCancel()
 		_ = listener.Close()

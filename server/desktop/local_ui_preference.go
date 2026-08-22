@@ -36,6 +36,22 @@ const (
 	DensityComfortable = "comfortable"
 )
 
+// The three language states. "system" is the default and means "ask the
+// webview": the document request carries an Accept-Language header that
+// already reflects the OS setting, so the shell resolves it there rather than
+// storing a guess. That is why the default is a word and not a locale code —
+// a stored "en" means "the user chose English", which is a different fact from
+// "nobody has chosen", and only the second one should follow the machine when
+// its language changes.
+//
+// Unlike appearance and density, this one is NOT expressed as the absence of
+// an attribute: <html lang> is always present and always has to say something.
+const (
+	LanguageSystem = "system"
+	LanguageEN     = "en"
+	LanguageZH     = "zh"
+)
+
 // AppearanceSettingsDTO is the wire shape for GET/PUT /settings/appearance.
 //
 // Two preferences on one route because they are read together, once, while the
@@ -44,7 +60,10 @@ const (
 type AppearanceSettingsDTO struct {
 	Appearance string `json:"appearance"`
 	Density    string `json:"density"`
-	UpdatedAt  string `json:"updated_at"`
+	// Language is the third preference on the same row for the same reason:
+	// the shell needs it before the first frame, and it costs no extra read.
+	Language  string `json:"language"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // AppearanceSettingsPut is the PUT body. Each field is a closed vocabulary,
@@ -56,6 +75,7 @@ type AppearanceSettingsDTO struct {
 type AppearanceSettingsPut struct {
 	Appearance *string `json:"appearance,omitempty"`
 	Density    *string `json:"density,omitempty"`
+	Language   *string `json:"language,omitempty"`
 }
 
 // UIPreferenceStore persists the machine's display preferences (migration
@@ -88,26 +108,34 @@ func (s *UIPreferenceStore) Get() (AppearanceSettingsDTO, error) {
 	var (
 		appearance string
 		density    string
+		language   string
 		updatedAt  string
 	)
-	row := s.db.Raw(`SELECT appearance, density, updated_at FROM w_desktop_ui_preference WHERE id = 1`).Row()
-	if err := row.Scan(&appearance, &density, &updatedAt); err == nil {
+	row := s.db.Raw(`SELECT appearance, density, language, updated_at FROM w_desktop_ui_preference WHERE id = 1`).Row()
+	if err := row.Scan(&appearance, &density, &language, &updatedAt); err == nil {
 		if !ValidAppearance(appearance) {
 			appearance = AppearanceSystem
 		}
 		if !ValidDensity(density) {
 			density = DensityStandard
 		}
-		return AppearanceSettingsDTO{Appearance: appearance, Density: density, UpdatedAt: updatedAt}, nil
+		if !ValidLanguage(language) {
+			language = LanguageSystem
+		}
+		return AppearanceSettingsDTO{
+			Appearance: appearance, Density: density, Language: language, UpdatedAt: updatedAt,
+		}, nil
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if err := s.db.Exec(
-		`INSERT OR IGNORE INTO w_desktop_ui_preference (id, appearance, density, updated_at) VALUES (1, ?, ?, ?)`,
-		AppearanceSystem, DensityStandard, now,
+		`INSERT OR IGNORE INTO w_desktop_ui_preference (id, appearance, density, language, updated_at) VALUES (1, ?, ?, ?, ?)`,
+		AppearanceSystem, DensityStandard, LanguageSystem, now,
 	).Error; err != nil {
 		return AppearanceSettingsDTO{}, fmt.Errorf("seed ui preference: %w", err)
 	}
-	return AppearanceSettingsDTO{Appearance: AppearanceSystem, Density: DensityStandard, UpdatedAt: now}, nil
+	return AppearanceSettingsDTO{
+		Appearance: AppearanceSystem, Density: DensityStandard, Language: LanguageSystem, UpdatedAt: now,
+	}, nil
 }
 
 // Put validates and stores whichever preferences the body mentions, leaving
@@ -118,7 +146,7 @@ func (s *UIPreferenceStore) Put(in AppearanceSettingsPut) (AppearanceSettingsDTO
 	if s == nil || s.db == nil {
 		return AppearanceSettingsDTO{}, errors.New("ui preference store unavailable")
 	}
-	if in.Appearance == nil && in.Density == nil {
+	if in.Appearance == nil && in.Density == nil && in.Language == nil {
 		return AppearanceSettingsDTO{}, errors.New("no preference given")
 	}
 	// Read first, so an unmentioned field is written back as itself. The two
@@ -144,19 +172,30 @@ func (s *UIPreferenceStore) Put(in AppearanceSettingsPut) (AppearanceSettingsDTO
 				"density must be %q, %q or %q", DensityCompact, DensityStandard, DensityComfortable)
 		}
 	}
+	language := current.Language
+	if in.Language != nil {
+		language = strings.TrimSpace(*in.Language)
+		if !ValidLanguage(language) {
+			return AppearanceSettingsDTO{}, fmt.Errorf(
+				"language must be %q, %q or %q", LanguageSystem, LanguageEN, LanguageZH)
+		}
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if err := s.db.Exec(`
-		INSERT INTO w_desktop_ui_preference (id, appearance, density, updated_at)
-		VALUES (1, ?, ?, ?)
+		INSERT INTO w_desktop_ui_preference (id, appearance, density, language, updated_at)
+		VALUES (1, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			appearance = excluded.appearance,
 			density = excluded.density,
+			language = excluded.language,
 			updated_at = excluded.updated_at`,
-		appearance, density, now,
+		appearance, density, language, now,
 	).Error; err != nil {
 		return AppearanceSettingsDTO{}, fmt.Errorf("persist ui preference: %w", err)
 	}
-	return AppearanceSettingsDTO{Appearance: appearance, Density: density, UpdatedAt: now}, nil
+	return AppearanceSettingsDTO{
+		Appearance: appearance, Density: density, Language: language, UpdatedAt: now,
+	}, nil
 }
 
 // ValidAppearance reports whether a value is one of the three states.
@@ -173,6 +212,16 @@ func ValidAppearance(value string) bool {
 func ValidDensity(value string) bool {
 	switch value {
 	case DensityCompact, DensityStandard, DensityComfortable:
+		return true
+	default:
+		return false
+	}
+}
+
+// ValidLanguage reports whether a value is one of the three language states.
+func ValidLanguage(value string) bool {
+	switch value {
+	case LanguageSystem, LanguageEN, LanguageZH:
 		return true
 	default:
 		return false

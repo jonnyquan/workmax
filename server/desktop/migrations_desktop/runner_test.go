@@ -24,7 +24,7 @@ func TestApplyRunsMessageCreatedOrderIndexMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	want := []string{"0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015"}
+	want := []string{"0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016"}
 	if len(applied) != len(want) {
 		t.Fatalf("applied: got %v, want %v", applied, want)
 	}
@@ -140,10 +140,10 @@ func TestApplyRunsMessageCreatedOrderIndexMigration(t *testing.T) {
 	if err := prefRows.Close(); err != nil {
 		t.Fatalf("close ui preference column rows: %v", err)
 	}
-	// ADD COLUMN appends, so density lands after updated_at rather than beside
-	// the preference it sits with. The order is the migration's, not the
-	// author's, and pinning what SQLite actually does is the point.
-	if got := strings.Join(prefColumns, ","); got != "id,appearance,updated_at,density" {
+	// ADD COLUMN appends, so density and language land after updated_at rather
+	// than beside the preferences they sit with. The order is the migrations',
+	// not the author's, and pinning what SQLite actually does is the point.
+	if got := strings.Join(prefColumns, ","); got != "id,appearance,updated_at,density,language" {
 		t.Fatalf("ui preference columns=%s", got)
 	}
 	// The seeded row must already carry the default: a NULL here would reach
@@ -187,6 +187,25 @@ func TestApplyRunsMessageCreatedOrderIndexMigration(t *testing.T) {
 	}
 	if projectTableCount != 1 {
 		t.Fatalf("project table count = %d, want 1", projectTableCount)
+	}
+
+	// 0016: the window's language — the third column on 0010's row, and the
+	// third preference the shell reads in that one pre-first-frame query.
+	var languageDefault string
+	if err := db.Raw(
+		`SELECT language FROM w_desktop_ui_preference WHERE id = 1`,
+	).Row().Scan(&languageDefault); err != nil {
+		t.Fatalf("scan language: %v", err)
+	}
+	if languageDefault != "system" {
+		t.Fatalf("language default = %q, want %q — a fresh install follows the machine", languageDefault, "system")
+	}
+	// The CHECK is the half a hand-edited database cannot walk past, and it is
+	// the reason this value is safe to splice into <html lang>.
+	if err := db.Exec(
+		`UPDATE w_desktop_ui_preference SET language = 'klingon' WHERE id = 1`,
+	).Error; err == nil {
+		t.Fatal("the language CHECK must refuse a value outside the vocabulary")
 	}
 
 	if err := db.Exec(`
