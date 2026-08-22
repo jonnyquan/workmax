@@ -753,10 +753,13 @@ function parseAgentCreateThreadData(value, status, request) {
         throw new TypeError("agent.createThread ready response is invalid");
     }
     assertPlainObject(value.thread, "agent.createThread response thread");
-    // "pinned" joined LocalThreadRow with thread pins; a freshly created
-    // thread is never pinned, but the row shape is the row shape — an
-    // exact-keys check that lags the server's row is a create that fails
-    // for no user-visible reason (the packaged-app smoke caught exactly that).
+    // "pinned" joined LocalThreadRow with thread pins, and "project" with
+    // thread projects; a freshly created thread has neither, but the row shape
+    // is the row shape — an exact-keys check that lags the server's row is a
+    // create that fails for no user-visible reason. The packaged-app smoke
+    // caught the pinned lag; the project lag broke every home-screen create
+    // for six days before a live run caught it. When the row grows a column,
+    // this list grows the same day.
     assertExactKeys(value.thread, [
         "uuid",
         "name",
@@ -765,6 +768,7 @@ function parseAgentCreateThreadData(value, status, request) {
         "updated_at",
         "cloud_sync_state",
         "pinned",
+        "project",
     ], "agent.createThread response thread");
     const uuid = validateCanonicalV4ThreadUUID(value.thread.uuid);
     const name = validateAgentThreadName(value.thread.name);
