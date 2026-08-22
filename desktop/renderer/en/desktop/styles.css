@@ -1010,8 +1010,17 @@ textarea::placeholder {
   /* The base button rule centres its content; a row must stretch. Found by
      measuring rendered rows once — every title sat at a different left edge. */
   justify-content: stretch;
+  /* The title's track is the one that gives way: without an explicit
+     minmax(0,1fr) the implicit column sizes to its content, so a long name
+     pushed the row wider than the rail — the time painted over the title's
+     tail and the whole list grew a horizontal scrollbar. */
+  grid-template-columns: minmax(0, 1fr);
   grid-auto-flow: column;
-  justify-items: start;
+  /* stretch, not start: a start-aligned grid item sizes to max-content and
+     simply overflows its track, so the minmax(0,1fr) above constrained the
+     TRACK while the title kept its full width and painted under the time.
+     Stretch pins the item to the track; text-align keeps the words left. */
+  justify-items: stretch;
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
@@ -2595,7 +2604,9 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 }
 
 .message.user .message-role {
-  justify-content: flex-end;
+  /* The bubble's side already names the speaker; a "You" caption above it
+     was a label for a fact the layout states. */
+  display: none;
 }
 
 /* The assistant signs its answers with the same mark the rail wears. */
@@ -2639,11 +2650,12 @@ body:has(#thread-panel[hidden]) #context-panel-button {
 }
 
 .message.user .bubble {
-  /* Pure text, same as the answer — the conversation is a document. The
-     question is distinguished by weight, not by a container. */
-  background: transparent;
-  padding: 0;
-  font-weight: var(--fw-medium);
+  /* The question rides a tinted container on the right, the answer stays
+     plain document text — the grammar ChatGPT, Claude and Codex all settled
+     on. One glance separates who asked from who answered without a label
+     spending a line to say so. */
+  margin-left: auto;
+  max-width: min(85%, var(--measure));
 }
 
 /* Waiting for the first token. The three dots occupy the empty bubble so the
