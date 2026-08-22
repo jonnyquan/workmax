@@ -2054,15 +2054,28 @@ async function testThreadGroupingAndSearch() {
   // depending on the machine's timezone — which is how the first version of
   // this test failed: "23:30 UTC yesterday" is this morning in UTC+8, and the
   // code was right to call it today.
-  const local = (y, m, d, h = 9) => new Date(y, m - 1, d, h, 0, 0).toISOString();
-  const now = new Date(2026, 7, 8, 10, 0, 0);
+  //
+  // And built RELATIVE to the real clock, not from absolute dates: the
+  // rendered sidebar groups with Date.now(), so an absolute fixture ages —
+  // the second version of this test went green-for-a-week and then failed
+  // when its "this week" rows drifted into Older. The offsets keep every
+  // bucket populated on whatever day the suite runs.
+  const base = new Date();
+  base.setHours(10, 0, 0, 0);
+  const day = (offset, h = 9) => {
+    const d = new Date(base);
+    d.setDate(d.getDate() + offset);
+    d.setHours(h, 0, 0, 0);
+    return d.toISOString();
+  };
+  const now = base;
   const threads = [
-    { uuid: "t-today", name: "Quarterly sales", updatedAt: local(2026, 8, 8, 1) },
-    { uuid: "t-lastnight", name: "Late night", updatedAt: local(2026, 8, 7, 23) },
-    { uuid: "t-week", name: "Pipeline notes", updatedAt: local(2026, 8, 3) },
-    { uuid: "t-old", name: "Archived plan", updatedAt: local(2026, 6, 1) },
+    { uuid: "t-today", name: "Quarterly sales", updatedAt: day(0, 1) },
+    { uuid: "t-lastnight", name: "Late night", updatedAt: day(-1, 23) },
+    { uuid: "t-week", name: "Pipeline notes", updatedAt: day(-5) },
+    { uuid: "t-old", name: "Archived plan", updatedAt: day(-68) },
     { uuid: "t-broken", name: "Broken stamp", updatedAt: "not-a-date" },
-    { uuid: "t-future", name: "Clock skew", updatedAt: local(2026, 8, 9) },
+    { uuid: "t-future", name: "Clock skew", updatedAt: day(1) },
   ];
 
   const bridge = {
@@ -5502,8 +5515,11 @@ async function testOnboardingHiddenOnceUsable() {
 // The BUILT bridge lib versus the sidecar's actual local-create response.
 // Every VM scenario fakes the bridge, so this contract had no test between
 // the Go suite (server half) and the fakes (renderer half) — and it broke
-// twice invisibly: the validator predated cloud_sync_state="local", then
-// predated "pinned". The packaged-app smoke found it; this keeps it found.
+// three times invisibly: the validator predated cloud_sync_state="local",
+// then "pinned", then "project". The fixture below must be pasted from a
+// REAL sidecar response (curl the PUT and copy the body) — a fixture written
+// from the validator's own key list proves nothing, which is exactly how
+// the third break stayed green here while every live create failed.
 async function testBridgeLibAcceptsLocalCreateContract() {
   const libCode = fs.readFileSync(
     new URL("../renderer/en/desktop/lib/desktop-bridge.js", import.meta.url),
@@ -5527,6 +5543,7 @@ async function testBridgeLibAcceptsLocalCreateContract() {
     updated_at: "2026-08-09T15:56:52.103724Z",
     cloud_sync_state: "local",
     pinned: false,
+    project: "",
   };
   const input = { threadUUID: localThread.uuid, name: "probe", agentMode: "ppt" };
 
