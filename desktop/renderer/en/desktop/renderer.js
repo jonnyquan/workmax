@@ -2520,7 +2520,9 @@ export function finishActiveTurn(activeTurn, label, canceled) {
     attachMessageActions(
       activeTurn.assistantBubble.parentNode,
       "assistant",
-      activeTurn.assistantText
+      activeTurn.assistantText,
+      // The turn that just finished is the newest answer by definition.
+      { persistent: true }
     );
     attachTurnProvenance(
       activeTurn.assistantBubble.parentNode,

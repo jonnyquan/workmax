@@ -198,3 +198,6 @@ output/
 
 # Claude Code local config (per-developer, not portable)
 .claude/
+
+# Scratch UI captures from design passes — never part of a build.
+.tmp-ui/

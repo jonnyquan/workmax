@@ -1223,6 +1223,63 @@ async function testMissingBridge() {
 // only what it said. The sidecar folds tool frames into steps as they
 // arrive and stores the result on the message row; this is the read half —
 // the same strip the live turn drew, rebuilt from that fold.
+// The newest answer keeps its actions on screen; older ones wait for a
+// hover. Exactly one row is persistent — the invariant that matters, because
+// the alternative is a transcript that accumulates toolbars.
+async function testNewestAnswerKeepsItsActionsVisible() {
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        return response({ items: [thread("t-acts", "Two exchanges")] });
+      }
+      if (pathname === "/agent/threads/t-acts/messages") {
+        return response({
+          items: [
+            message("m-1", "first question", "first answer"),
+            message("m-2", "second question", "second answer"),
+          ],
+        });
+      }
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn() { return { turnID: "unused" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  document.byId.get("thread-list").children
+    .find((node) => node.classList?.contains("thread-item"))
+    ?.children[0].click();
+  await settle();
+  await settle();
+
+  const rows = walk(document.byId.get("message-list"), (n) =>
+    n.classList?.contains("message-actions"));
+  const revealed = rows.filter((row) => row.classList.contains("revealed"));
+  assert.equal(revealed.length, 1, "exactly one action row stands, never two");
+  assert.match(
+    revealed[0].textContent,
+    /Regenerate/u,
+    "the standing row belongs to the newest ANSWER — a question's actions stay on hover",
+  );
+  // And the older answer's row exists but waits to be asked for.
+  const quiet = rows.filter((row) => !row.classList.contains("revealed"));
+  assert.ok(quiet.length >= 1, "older messages keep their actions behind a hover");
+  assert.ok(
+    quiet.every((row) => row.classList.contains("reveal-on-hover")),
+    "quiet rows use the shared reveal mechanism rather than a private hide",
+  );
+}
+
 async function testStoredWorkLogSurvivesReopen() {
   const bridge = {
     async fetch(pathname) {
@@ -10443,6 +10500,7 @@ await testShowEarlierPrependsWithoutRebuildingWhatIsMounted();
 await testShowEarlierHoldsTheScrollAnchorAndRetiresItselfAtTheTop();
 await testCompletedTurnReconcilesInPlaceInsideTheWindow();
 await testFencesInvalidateOnBumpAndCascadeFromSession();
+await testNewestAnswerKeepsItsActionsVisible();
 await testStoredWorkLogSurvivesReopen();
 await testAuthenticatedCacheRead();
 await testUnauthenticatedLogin();

@@ -195,6 +195,7 @@ function buildExchangeNodes(item, isLast) {
     options.engine = item.agent_engine;
     options.model = item.agent_model;
     options.mind = item.agent_mind;
+    options.persistent = isLast;
     const node = renderMessage(
       "assistant",
       item.ai_text || "Response interrupted before text was cached.",
@@ -511,6 +512,28 @@ export function attachMessageActions(wrapper, role, text, options = {}) {
   }
   const actions = document.createElement("div");
   actions.className = "message-actions reveal-on-hover";
+  // The newest answer keeps its actions on screen; every older one waits for
+  // a hover. Copy and Regenerate belong to the answer you are looking at, and
+  // Codex, ChatGPT and Claude all leave that one row standing — hiding it
+  // makes the reader hunt for a control they were about to use. Older rows
+  // stay quiet so the transcript reads as a document, not a toolbar stack.
+  //
+  // Exactly one row is persistent, so the previous holder gives it up here
+  // rather than in each of the callers that could create a newer one.
+  if (options.persistent && role === "assistant") {
+    // Walked rather than queried: an action row is always a direct child of
+    // a message, which is a direct child of the list, so two loops say it
+    // exactly — and this path stays inside the DOM surface the bundled
+    // renderer is allowed to assume.
+    for (const message of Array.from(messageList.children || [])) {
+      for (const child of Array.from(message.children || [])) {
+        if (child.classList?.contains("message-actions")) {
+          child.classList.remove("revealed");
+        }
+      }
+    }
+    actions.classList.add("revealed");
+  }
   const copy = buildCopyButton(text, role === "assistant" ? "Copy answer" : "Copy");
   if (copy) actions.appendChild(copy);
   if (role === "assistant" && options.regenerateText) {
