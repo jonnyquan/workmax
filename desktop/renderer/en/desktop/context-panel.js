@@ -1339,10 +1339,23 @@ function renderWorkspaceDiff(data) {
     stat.textContent = `+${file.added} −${file.removed}`;
     row.append(name, stat);
     row.addEventListener("click", () => {
-      const open = patchEl.hidden === false;
-      patchEl.hidden = open;
-      if (!open) renderDiffPatch(patchEl, data.patch, file.path);
-      row.classList.toggle("expanded", !open);
+      // One patch element serves every row, so the click has to ask which
+      // FILE is showing — not merely whether something is. Reading the
+      // element's visibility instead meant a second file collapsed the patch
+      // rather than switching to it, and left the first row still badged as
+      // expanded: two rows claiming a view only one of them had.
+      const alreadyOpen = patchEl.dataset.path === file.path && patchEl.hidden === false;
+      for (const other of Array.from(filesEl.children || [])) {
+        other.classList?.remove("expanded");
+      }
+      if (alreadyOpen) {
+        patchEl.hidden = true;
+        patchEl.dataset.path = "";
+        return;
+      }
+      renderDiffPatch(patchEl, data.patch, file.path);
+      patchEl.dataset.path = file.path;
+      row.classList.add("expanded");
     });
     filesEl.appendChild(row);
   }
@@ -1352,6 +1365,7 @@ function renderWorkspaceDiff(data) {
   // the DOM proportional to what the reader is looking at.
   patchEl.hidden = true;
   patchEl.innerHTML = "";
+  patchEl.dataset.path = "";
 
   section.hidden = false;
 }

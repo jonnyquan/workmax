@@ -765,6 +765,18 @@ class FakeElement {
   }
 
   appendChild(node) {
+    // Real fragment semantics: appending one splices its children in and
+    // leaves the fragment itself out of the tree. Without this the diff's
+    // lines would arrive as one nested node and every textContent assertion
+    // would still pass — a stub that is wrong in the same direction as the
+    // code it checks proves nothing.
+    if (node?.isFragment) {
+      for (const child of node.children.splice(0)) {
+        child.parentNode = this;
+        this.children.push(child);
+      }
+      return node;
+    }
     node.parentNode = this;
     this.children.push(node);
     return node;
@@ -964,6 +976,17 @@ class FakeDocument {
 
   createElement(tagName) {
     return new FakeElement(tagName);
+  }
+
+  // A fragment is an element whose own tag never reaches the tree: appending
+  // it moves its children and leaves nothing behind. The diff renderer builds
+  // its lines in one, and a stub without it simply threw — which read in the
+  // test output as "the click handler is broken" rather than "the harness
+  // does not model this API".
+  createDocumentFragment() {
+    const frag = new FakeElement("#document-fragment");
+    frag.isFragment = true;
+    return frag;
   }
 
   // Text nodes are how the Markdown renderer puts model output on the page —
@@ -1226,6 +1249,88 @@ async function testMissingBridge() {
 // The newest answer keeps its actions on screen; older ones wait for a
 // hover. Exactly one row is persistent — the invariant that matters, because
 // the alternative is a transcript that accumulates toolbars.
+// The Changes section is a file list over ONE patch element, so clicking a
+// second file has to switch the view rather than ask "is something open".
+// Before this, the second click collapsed the patch and left the first row
+// still badged as expanded — two rows claiming a view only one of them had.
+// Only reachable by clicking twice, on two different files, which is why it
+// survived until a live read of the toggle.
+async function testDiffRowsSwitchRatherThanCollapse() {
+  const patch = [
+    "diff --git a/one.md b/one.md",
+    "@@ -1 +1 @@",
+    "-old one",
+    "+new one",
+    "diff --git a/two.md b/two.md",
+    "@@ -1 +1 @@",
+    "-old two",
+    "+new two",
+  ].join("\n");
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        return response({ items: [thread("t-diff", "Changed two files")] });
+      }
+      if (pathname === "/agent/threads/t-diff/messages") {
+        return response({ items: [message("m-1", "edit both", "done")] });
+      }
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      async listWorkspaceFiles() { return typedSuccess({ items: [], count: 0, truncated: false }); },
+      async workspaceDiff() {
+        return typedSuccess({
+          git: true,
+          files: [
+            { path: "one.md", added: 1, removed: 1 },
+            { path: "two.md", added: 1, removed: 1 },
+          ],
+          patch,
+        });
+      },
+      startTurn() { return { turnID: "unused" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  document.byId.get("thread-list").children
+    .find((node) => node.classList?.contains("thread-item"))
+    ?.children[0].click();
+  await settle();
+  await settle();
+
+  const patchEl = document.byId.get("diff-patch");
+  const rows = Array.from(document.byId.get("diff-files").children);
+  assert.equal(rows.length, 2, "one row per changed file");
+  const expandedCount = () => rows.filter((r) => r.classList.contains("expanded")).length;
+
+  rows[0].click();
+  assert.equal(patchEl.hidden, false, "the first click opens the patch");
+  assert.match(patchEl.textContent, /new one/u, "and it is the clicked file's patch");
+  assert.equal(expandedCount(), 1, "exactly one row is badged");
+
+  rows[1].click();
+  assert.equal(patchEl.hidden, false, "a second file SWITCHES the view rather than closing it");
+  assert.match(patchEl.textContent, /new two/u, "and shows that file's hunks");
+  assert.ok(
+    !patchEl.textContent.includes("new one"),
+    "the previous file's hunks give way — one patch element, one file",
+  );
+  assert.equal(expandedCount(), 1, "the badge moves with the view; it is never claimed twice");
+
+  rows[1].click();
+  assert.equal(patchEl.hidden, true, "clicking the open file again closes it");
+  assert.equal(expandedCount(), 0, "and nothing is left badged");
+}
+
 async function testNewestAnswerKeepsItsActionsVisible() {
   const bridge = {
     async fetch(pathname) {
@@ -10500,6 +10605,7 @@ await testShowEarlierPrependsWithoutRebuildingWhatIsMounted();
 await testShowEarlierHoldsTheScrollAnchorAndRetiresItselfAtTheTop();
 await testCompletedTurnReconcilesInPlaceInsideTheWindow();
 await testFencesInvalidateOnBumpAndCascadeFromSession();
+await testDiffRowsSwitchRatherThanCollapse();
 await testNewestAnswerKeepsItsActionsVisible();
 await testStoredWorkLogSurvivesReopen();
 await testAuthenticatedCacheRead();
