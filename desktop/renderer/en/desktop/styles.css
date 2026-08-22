@@ -3895,15 +3895,23 @@ button.composer-chip:hover {
   padding: 0 var(--sp-2);
   border: none;
   border-radius: var(--r-control);
-  background: hsl(var(--primary));
-  color: hsl(var(--primary-foreground));
+  /* A quiet row, not a filled primary block: ChatGPT, Claude and Codex all
+     open their rail with an unpainted "New chat" line. The rail's job is to
+     list; the one saturated block at its top shouted over every row below
+     it, and the composer on the home surface is already the loud door. */
+  background: transparent;
+  color: hsl(var(--foreground));
   font-size: var(--fs-base);
   font-weight: var(--fw-medium);
   justify-content: flex-start;
 }
 
 .rail-nav-new:hover:not(:disabled) {
-  background: hsl(var(--primary) / 0.9);
+  background: hsl(var(--muted));
+}
+
+.rail-nav-new:disabled {
+  color: hsl(var(--muted-foreground));
 }
 
 .rail-new-icon {

@@ -260,7 +260,23 @@ function withoutColourTransitions(rewrite) {
   }
   root.classList.add("theme-switching");
   rewrite();
-  const release = () => root.classList.remove("theme-switching");
+  const release = () => {
+    root.classList.remove("theme-switching");
+    // WKWebView keeps some composited layers rasterised in the OLD theme
+    // after the token rewrite — translucent rounded surfaces (the user
+    // bubble, the active thread row) stayed light-coloured for up to a
+    // minute after switching to dark, while their computed styles were
+    // already correct. Lifting the body onto its own layer and dropping it
+    // back forces a full re-raster in the same frame. Measured on macOS 27
+    // WebKit; remove when a WebKit fix makes it a no-op.
+    const body = document.body;
+    if (body?.style) {
+      body.style.transform = "translateZ(0)";
+      const undo = () => { body.style.transform = ""; };
+      if (typeof raf === "function") raf(undo);
+      else undo();
+    }
+  };
   const raf = globalThis.requestAnimationFrame;
   if (typeof raf === "function") raf(() => raf(release));
   else release();
