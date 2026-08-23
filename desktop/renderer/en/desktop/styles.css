@@ -1129,34 +1129,29 @@ textarea::placeholder {
   stroke-linejoin: round;
 }
 
-/* A pinned row's pin stays lit at rest — the reveal only governs the group,
-   and a pin that vanishes when the pointer leaves cannot tell you which rows
-   are pinned. The group heading says it too, but only while the list is short
-   enough for the heading to be on screen. */
-.thread-item:has(.thread-pin.pinned) .thread-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
+/* The icons take the time's place rather than sitting on top of it. Both live
+   at the row's right end, and the four text buttons that came before could
+   overlap the time because each carried a filled background that hid what was
+   underneath — an icon that paints only its own strokes cannot, so a hovered
+   row read as a pin drawn through "19 小时".
 
-.thread-item .thread-pin.pinned {
-  color: hsl(var(--primary));
-}
+   Codex does the same thing, and for a better reason than avoiding a
+   collision: a row can only answer one question at a time. At rest it says
+   when it last changed; under the pointer it says what you can do to it.
 
-/* …but only the PIN. Holding the group open for a pinned row would also hold
-   the ⋯ open, and a row at rest carrying a menu button is the clutter the
-   reveal exists to prevent. Both halves go together for the same reason the
-   shared mechanism states them together: an element at opacity 0 is still
-   hit-testable, and an invisible button over a clickable row is a trap that
-   only shows up for someone who clicks without hovering first. */
-.thread-item:has(.thread-pin.pinned) .thread-more {
+   opacity, not display, so nothing reflows as the pointer crosses the row. */
+.thread-item:hover .thread-when,
+.thread-item:focus-within .thread-when {
   opacity: 0;
-  pointer-events: none;
 }
 
-.thread-item:hover .thread-more,
-.thread-actions:focus-within .thread-more {
-  opacity: 1;
-  pointer-events: auto;
+/* A pinned row's pin, when the row is hovered, is lit — the control is a
+   toggle and this is the half of it that says which way it is set. It is NOT
+   held visible at rest: the Pinned heading above already groups these rows,
+   and a permanent icon on every pinned row is the clutter the reveal exists
+   to prevent. */
+.thread-pin.pinned {
+  color: hsl(var(--primary));
 }
 
 /* "Local only" is a fact, so it sits on the row at rest, next to the name it

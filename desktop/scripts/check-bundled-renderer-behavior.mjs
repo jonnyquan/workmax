@@ -6720,7 +6720,7 @@ async function testPinnedThreadsLeadTheSidebar() {
   assert.equal(
     unpinButton.classList.contains("pinned"),
     true,
-    "a pinned row's pin is lit — which is what keeps it visible once the pointer leaves",
+    "the toggle says which way it is set, and not only what it will do next",
   );
   unpinButton.click();
   await settle();
