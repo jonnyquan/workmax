@@ -3852,11 +3852,18 @@ if (threadNextButton) {
   threadNextButton.addEventListener("click", () => stepThread(1));
 }
 
-// ---- Rail sections: Chats / Schedule / Plugins ----
+// ---- Rail sections: Schedule / Plugins / Projects ----
+//
+// Listed in the order they appear in the rail, which is not the order they
+// were written in: Projects moved to the FOOT of the nav so it sits directly
+// on top of the thread list, because a conversation belongs to a project and
+// adjacency is how a column says so. The array order carries no behaviour —
+// showRailView walks the whole list either way — but a list that disagrees
+// with the markup is a list the next reader has to go and check.
 const RAIL_VIEWS = [
-  ["projects", "#rail-nav-projects", "#rail-view-projects"],
   ["schedule", "#rail-nav-schedule", "#rail-view-schedule"],
   ["plugins", "#rail-nav-plugins", "#rail-view-plugins"],
+  ["projects", "#rail-nav-projects", "#rail-view-projects"],
 ];
 
 function showRailView(name) {

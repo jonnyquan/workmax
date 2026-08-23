@@ -284,6 +284,57 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   assert.doesNotMatch(rendererSource, /sidebarExpandButton/u);
 }
 
+// --- Projects sits on top of the list it governs -----------------------------
+//
+// A conversation belongs to a project, and adjacency is the only way a column
+// says "belongs to". Projects used to lead the nav, which left Plugins as the
+// row immediately above the thread list — so the list read as the plugins'
+// contents. Two things hold that fix in place, and both are the kind that rot
+// quietly: the ORDER (Projects last, nothing between it and the list) and the
+// INITIAL STATE (this row ships current, and must ship looking current).
+{
+  const navAt = rendererHTML.indexOf('<nav class="rail-nav"');
+  const navEnd = rendererHTML.indexOf("</nav>", navAt);
+  assert.ok(navAt > 0 && navEnd > navAt, "the rail nav is in the markup");
+  const navHTML = rendererHTML.slice(navAt, navEnd);
+
+  const order = [...navHTML.matchAll(/id=["']rail-nav-([a-z]+)["']/gu)].map((m) => m[1]);
+  assert.deepEqual(
+    order,
+    ["schedule", "plugins", "projects"],
+    "Projects is the last nav row, so nothing sits between it and the thread list",
+  );
+  const viewAt = rendererHTML.indexOf('id="rail-view-projects"');
+  const listAt = rendererHTML.indexOf('id="thread-list"');
+  assert.ok(navEnd < viewAt && viewAt < listAt, "the list is inside the view the row names");
+
+  // The initial state is the markup's job — showRailView is never called at
+  // boot, so a row wearing only aria-current paints as an inactive peer until
+  // something is clicked. Both marks, or the header of the list looks like a
+  // destination nobody is on.
+  const projectsRow = navHTML.slice(navHTML.indexOf('id="rail-nav-projects"'));
+  assert.match(projectsRow, /class=["'][^"']*\bactive\b/u, "the current row ships with the active class");
+  assert.match(projectsRow, /aria-current=["']page["']/u, "the current row ships with aria-current");
+  assert.equal(
+    (navHTML.match(/aria-current=/gu) || []).length,
+    1,
+    "exactly one nav row is current",
+  );
+  assert.equal(
+    (navHTML.match(/class=["'][^"']*\brail-nav-item active\b/gu) || []).length,
+    1,
+    "exactly one nav row ships active",
+  );
+
+  // And the gap is closed: the full rail-view inset under the row that names
+  // the list would put a paragraph of air between them.
+  assert.match(
+    rendererCSS,
+    /#rail-view-projects\s*\{[^}]*?padding-top:\s*0;/u,
+    "the conversations hang off the Projects row rather than floating below it",
+  );
+}
+
 // --- Density is one number, or it is three sets of rules that drift ----------
 //
 // The mechanism only pays for itself if EVERY spacing step goes through the

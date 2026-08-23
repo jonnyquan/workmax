@@ -605,17 +605,29 @@
              straight in with its destinations. The vertical space the banner
              took belongs to the list. -->
         <!-- The rail's destinations, stacked vertically the way Codex stacks
-             them: New chat first (the primary action), then Projects — the
-             conversations, grouped — then Schedule and Plugins. The list
-             itself lives under the view these switch between. -->
+             them: New chat first (the primary action), then Schedule and
+             Plugins, and Projects LAST — directly above the list it governs.
+             The order is not alphabetical or by importance: a conversation
+             belongs to a project, and the only way a column says "belongs to"
+             is adjacency. Projects sat first here, which left Plugins as the
+             row immediately above the thread list and made the list read as
+             the plugins' contents. It is still the same view switcher — when
+             Schedule or Plugins is showing it is the way back — it just sits
+             where the thing it names begins. -->
         <nav class="rail-nav" aria-label="Sidebar sections">
           <button id="new-thread-button" class="rail-nav-new" type="button" disabled>
             <span class="rail-new-icon" aria-hidden="true">+</span>
             New chat
           </button>
-          <button id="rail-nav-projects" class="rail-nav-item" type="button" aria-current="page">Projects</button>
           <button id="rail-nav-schedule" class="rail-nav-item" type="button">Schedule</button>
           <button id="rail-nav-plugins" class="rail-nav-item" type="button">Plugins</button>
+          <!-- The markup carries the initial state, not a boot-time call: the
+               other two views ship hidden, and this row ships current. It
+               needs the class as well as the attribute — showRailView sets
+               both on every switch, so a row wearing only aria-current paints
+               as an inactive peer until the first click, which is exactly the
+               row that must not look like one now that the list hangs off it. -->
+          <button id="rail-nav-projects" class="rail-nav-item active" type="button" aria-current="page">Projects</button>
         </nav>
 
         <div id="rail-view-projects" class="rail-view rail-view-grow">
