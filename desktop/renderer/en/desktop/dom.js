@@ -95,6 +95,7 @@ export const newThreadError = document.querySelector("#new-thread-error");
 export const newThreadSubmitButton = document.querySelector("#new-thread-submit-button");
 export const newThreadCancelButton = document.querySelector("#new-thread-cancel-button");
 export const threadList = document.querySelector("#thread-list");
+export const threadMenu = document.querySelector("#thread-menu");
 export const emptyState = document.querySelector("#empty-state");
 export const emptyTitle = document.querySelector("#empty-title");
 export const emptyDescription = document.querySelector("#empty-description");

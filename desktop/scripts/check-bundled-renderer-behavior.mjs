@@ -495,15 +495,17 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   assert.match(rendererSource, /item\.className = inProject/u);
   assert.match(rendererSource, /"thread-item reveal-on-hover-host"/u);
   assert.match(rendererSource, /wrapper\.className = `message \$\{role\} reveal-on-hover-host`/u);
-  // An armed Delete is waiting for a second click and must not vanish when the
-  // pointer leaves the row it is on — it uses the mechanism's own escape hatch
-  // rather than a rule of its own.
-  assert.match(
+  // Delete no longer needs the mechanism's escape hatch: it moved into the row
+  // menu, which is a surface of its own and does not hide when the pointer
+  // leaves the row. The guarantee it needed the hatch FOR is still tested —
+  // arm, then confirm, with the menu staying open in between — in the delete
+  // test itself. What must not come back is a hover-revealed destructive
+  // button in the row's corner.
+  assert.doesNotMatch(
     rendererSource,
-    /del\.classList\.add\("armed", "revealed"\)/u,
-    "an armed delete stays visible through the shared mechanism",
+    /"thread-delete reveal-on-hover"/u,
+    "a destructive control does not live behind a hover on the row",
   );
-  assert.match(rendererSource, /del\.classList\.remove\("armed", "revealed"\)/u);
 
   // Switching the theme rewrites every colour token at once. Without this the
   // window spends the transition duration as a wash of half-old colour.
@@ -1018,6 +1020,22 @@ class FakeDocument {
     for (const handler of [...handlers]) handler(event);
   }
 
+  // dispatchKey's general form. Document-level listeners are how the app
+  // handles things that can happen anywhere — a press that dismisses an open
+  // menu, a shortcut — and a test that can only send keydown cannot reach
+  // half of them. Every handler for the type runs, as on the real document.
+  dispatchDocument(type, init = {}) {
+    const handlers = this.listeners.get(type);
+    if (!handlers) return;
+    const event = {
+      ...init,
+      preventDefault: init.preventDefault ?? (() => {}),
+      stopPropagation: init.stopPropagation ?? (() => {}),
+      target: init.target ?? null,
+    };
+    for (const handler of [...handlers]) handler(event);
+  }
+
   querySelector(selector) {
     this.querySelectorCalls += 1;
     if (!selector.startsWith("#")) {
@@ -1028,6 +1046,17 @@ class FakeDocument {
 
   createElement(tagName) {
     return new FakeElement(tagName);
+  }
+
+  // SVG lives in a namespace, and createElement would silently produce an
+  // HTML element named "svg" that renders as nothing. The row icons are built
+  // this way rather than from an innerHTML string — the renderer never parses
+  // markup — so the stub has to model the call. The namespace is kept on the
+  // element so a test can assert an icon really is SVG.
+  createElementNS(namespaceURI, tagName) {
+    const element = new FakeElement(tagName);
+    element.namespaceURI = namespaceURI;
+    return element;
   }
 
   // A fragment is an element whose own tag never reaches the tree: appending
@@ -2875,11 +2904,22 @@ async function testThreadDeleteIsTwoStepAndLocalOnly() {
   };
 
   const { document, ns } = await runRenderer(bridge, desktopBridge);
-  const deleteButtons = () =>
-    walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-delete"));
 
+  // Delete lives in the row's menu now, so the offer is tested where it is
+  // made: open each row's menu and look for the item. A row's menu is opened
+  // by right-clicking the row — the same event the ⋯ button raises.
+  const rows = () =>
+    walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-item"));
+  const menuItems = () =>
+    Array.from(document.byId.get("thread-menu").children || []);
+  const deleteItemFor = (row) => {
+    row.dispatch("contextmenu", { clientX: 40, clientY: 120 });
+    return menuItems().find((child) => child.textContent === "Delete") ?? null;
+  };
+
+  const offered = rows().filter((row) => deleteItemFor(row) !== null);
   assert.equal(
-    deleteButtons().length,
+    offered.length,
     1,
     "delete must be offered on the local thread and only there — a synced thread's delete would undo itself",
   );
@@ -2893,18 +2933,32 @@ async function testThreadDeleteIsTwoStepAndLocalOnly() {
   // maps setTimeout to setImmediate, so the 4-second disarm fires as soon as
   // the test yields. Synchronous is also the honest reading of the contract —
   // arming is instantaneous, only DISarming waits.
-  const del = deleteButtons()[0];
+  const del = deleteItemFor(rows()[0]);
+  assert.ok(del, "the local row's menu carries Delete");
   del.click();
   assert.equal(deleted.length, 0, "the first click must arm, not delete");
   assert.equal(del.textContent, "Confirm", "the armed control must say what the next click does");
+  // And the menu is still open around it: closing on the first click would
+  // throw the arming away and put the second click on whatever was underneath.
+  assert.equal(
+    document.byId.get("thread-menu").hidden,
+    false,
+    "an arming click must not dismiss the menu it armed",
+  );
   del.click();
   await settle();
   assert.deepEqual(Array.from(deleted), ["00000000-0000-4000-8000-00000000d001"]);
   assert.equal(
-    walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-delete")).length,
-    0,
-    "the deleted thread must leave the list (and the synced one never had a button)",
+    document.byId.get("thread-menu").hidden,
+    true,
+    "the menu closes with the row it belonged to",
   );
+  assert.equal(
+    rows().filter((row) => deleteItemFor(row) !== null).length,
+    0,
+    "the deleted thread must leave the list (and the synced one never offered delete)",
+  );
+  ns.closeThreadMenu?.();
   assert.doesNotMatch(document.byId.get("thread-list").textContent, /Local scratch/);
   assert.match(document.byId.get("thread-list").textContent, /Synced deck/);
   assert.equal(
@@ -6505,6 +6559,86 @@ async function testSidebarSearchIconOpensThePalette() {
   assert.equal(document.byId.get("quick-switcher").hidden, true, "pressing it again dismisses");
 }
 
+// --- The row's two icons, and the menu behind the third click ----------------
+//
+// Codex's shape: hover puts two icons on the row, right-click opens the rest.
+// The properties that make that safe rather than merely fashionable are the
+// ones tested here — the ⋯ and right-click reach the SAME menu (two doors,
+// one room), a second right-click on the same row closes it, Escape closes
+// it, and the menu names the row it belongs to, because a menu drawn over the
+// row it acts on has no other way to say which one that is.
+async function testRowMenuHasTwoDoorsAndOneRoom() {
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        return response({
+          items: [{ ...thread("row-menu-a", "Payroll notes"), updated_at: new Date().toISOString() }],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const { desktopBridge } = localModeBridge({ localRoute: true });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  const row = walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-item"))[0];
+  const actions = walk(row, (n) => n.classList?.contains("thread-actions"))[0];
+  assert.ok(actions, "the row carries an actions group");
+  const icons = Array.from(actions.children || []);
+  assert.equal(icons.length, 2, "two icons on hover, and the rest behind the menu");
+
+  // Each icon is an icon: a drawn glyph, and words in the two places a glyph
+  // can carry them.
+  for (const icon of icons) {
+    const svg = Array.from(icon.children || [])[0];
+    // The stub upper-cases tagName the way an HTML element does; a real SVG
+    // element keeps its case. The namespace below is the fact that matters
+    // either way, and it is the one a typo cannot fake.
+    assert.equal(svg?.tagName?.toLowerCase(), "svg", "the control is drawn, not spelled");
+    assert.equal(
+      svg.namespaceURI,
+      "http://www.w3.org/2000/svg",
+      "and drawn in the SVG namespace — createElement would make an inert HTML element",
+    );
+    assert.ok(icon.title, "an icon button has a tooltip");
+    assert.ok(icon.getAttribute("aria-label"), "and a label, for the users a tooltip never reaches");
+  }
+  assert.equal(icons[0].title, "Pin");
+  assert.equal(icons[1].title, "More");
+
+  const menu = document.byId.get("thread-menu");
+  assert.equal(menu.hidden, true, "the menu starts closed");
+
+  // Door one: the ⋯ button — which is what makes every action in the menu
+  // reachable from a keyboard, since right-click is not a key.
+  icons[1].dispatch("click", { clientX: 30, clientY: 60 });
+  assert.equal(menu.hidden, false, "the ⋯ opens the menu");
+  const viaButton = Array.from(menu.children || []).map((child) => child.textContent);
+  assert.equal(viaButton[0], "Payroll notes", "the menu names the row it belongs to");
+
+  // Door two: right-click on the row. Same room.
+  row.dispatch("contextmenu", { clientX: 30, clientY: 60 });
+  const viaRightClick = Array.from(menu.children || []).map((child) => child.textContent);
+  assert.deepEqual(viaRightClick, viaButton, "both doors open the same menu");
+
+  // Two ways out, and they are the two the reader actually performs: a press
+  // somewhere else, and Escape. (A repeat right-click re-opens at the new
+  // position rather than toggling — pointerdown has already dismissed the old
+  // menu by the time contextmenu runs, so a toggle branch could never fire.)
+  document.dispatchDocument("pointerdown", { target: document.byId.get("chat-input") });
+  assert.equal(menu.hidden, true, "pressing anywhere else dismisses the menu");
+
+  row.dispatch("contextmenu", { clientX: 30, clientY: 60 });
+  assert.equal(menu.hidden, false, "and it opens again on the next right-click");
+  document.dispatchDocument("keydown", { key: "Escape" });
+  assert.equal(menu.hidden, true, "Escape closes the menu");
+}
+
 async function testPinnedThreadsLeadTheSidebar() {
   let pinned = false;
   const pinCalls = [];
@@ -6573,7 +6707,21 @@ async function testPinnedThreadsLeadTheSidebar() {
     document.byId.get("thread-list"),
     (n) => n.classList?.contains("thread-pin"),
   )[0];
-  assert.equal(unpinButton.textContent, "Unpin", "the toggle names its next action");
+  // The toggle is an icon now, so what it says it will do lives in the two
+  // places an icon can say anything: the tooltip a pointer gets, and the
+  // label a screen reader reads. An icon button carrying only one of them is
+  // unlabelled for half its users.
+  assert.equal(unpinButton.title, "Unpin", "the toggle's tooltip names its next action");
+  assert.equal(
+    unpinButton.getAttribute("aria-label"),
+    "Unpin Old favourite",
+    "and the label names the row it will act on",
+  );
+  assert.equal(
+    unpinButton.classList.contains("pinned"),
+    true,
+    "a pinned row's pin is lit — which is what keeps it visible once the pointer leaves",
+  );
   unpinButton.click();
   await settle();
   await settle();
@@ -6683,17 +6831,26 @@ async function testProjectGroupingAndMoveAction() {
     "expanding restores the threads",
   );
 
-  // The "Move to project" button opens an inline editor. Typing a name and
-  // pressing Enter calls setThreadProject on the bridge.
+  // Moving a thread lives in the row's menu. The projects that already exist
+  // are listed there BY NAME — the answer most of the time — and retyping one
+  // is what produces a second project called "Q3 Deck " with a trailing
+  // space. The field is still offered, under New project…, for the first one.
   const looseItem = walk(
     list,
     (n) => n.dataset?.threadUuid === "p-loose",
   )[0];
-  const projectButton = walk(
-    looseItem,
-    (n) => n.classList?.contains("thread-project"),
-  )[0];
-  assert.ok(projectButton, "every row offers a Project button");
+  const menuItems = () => Array.from(document.byId.get("thread-menu").children || []);
+  looseItem.dispatch("contextmenu", { clientX: 40, clientY: 120 });
+  const listed = menuItems()
+    .filter((child) => child.classList?.contains("thread-menu-project"))
+    .map((child) => child.textContent);
+  assert.deepEqual(
+    listed,
+    ["Q3 Deck", "Budget"],
+    "the menu lists the projects that exist, in the order the rail knows them",
+  );
+  const projectButton = menuItems().find((child) => child.textContent === "New project…");
+  assert.ok(projectButton, "and still offers the field, for a project that does not exist yet");
   projectButton.click();
   const input = looseItem.querySelector
     ? looseItem.querySelector(".thread-project-input")
@@ -6721,10 +6878,8 @@ async function testProjectGroupingAndMoveAction() {
     list,
     (n) => n.dataset?.threadUuid === "p-loose",
   )[0];
-  const movedButton = walk(
-    movedItem,
-    (n) => n.classList?.contains("thread-project"),
-  )[0];
+  movedItem.dispatch("contextmenu", { clientX: 40, clientY: 120 });
+  const movedButton = menuItems().find((child) => child.textContent === "New project…");
   movedButton.click();
   const movedInput = movedItem.querySelector
     ? movedItem.querySelector(".thread-project-input")
@@ -10799,20 +10954,33 @@ async function testThreadSyncSwitchPausesAndStaysVisible() {
   const { document } = await runRenderer(bridge, desktopBridge);
   await settle();
 
-  const syncButtons = () =>
-    walk(document.byId.get("thread-list"), (node) =>
-      node.classList?.contains("thread-sync")
-    );
+  // The switch is a menu item now; the STATE it used to double as stayed on
+  // the row. Both halves are tested, because splitting them is exactly the
+  // kind of change that quietly drops one.
+  const rows = () =>
+    walk(document.byId.get("thread-list"), (node) => node.classList?.contains("thread-item"));
+  const menuItems = () => Array.from(document.byId.get("thread-menu").children || []);
+  const syncItemFor = (row) => {
+    row.dispatch("contextmenu", { clientX: 40, clientY: 120 });
+    return menuItems().find(
+      (child) =>
+        child.textContent === "Keep on this machine" || child.textContent === "Resume syncing"
+    ) ?? null;
+  };
 
-  const buttons = syncButtons();
+  const offered = rows().map(syncItemFor).filter(Boolean);
   assert.equal(
-    buttons.length,
+    offered.length,
     1,
     "only a thread the cloud already knows about gets the switch — a local-only thread has no sync to pause",
   );
-  assert.equal(buttons[0].textContent, "Syncing");
+  assert.equal(
+    offered[0].textContent,
+    "Keep on this machine",
+    "a syncing thread is offered the pause, named for what it does rather than for the state it is in",
+  );
 
-  buttons[0].dispatch("click");
+  offered[0].click();
   await settle();
   assert.deepEqual(calls, [["00000000-0000-4000-8000-0000000f1001", "paused"]]);
 
@@ -10822,14 +10990,35 @@ async function testThreadSyncSwitchPausesAndStaysVisible() {
     /Cloud deck/,
     "a paused conversation must stay in the list — disappearing would read as deletion",
   );
-  const afterButtons = syncButtons();
-  assert.equal(afterButtons[0].textContent, "Local only");
-  assert.equal(afterButtons[0].classList.contains("paused"), true);
+  // And the label is on the ROW, not behind a hover: "this one never leaves
+  // my machine" is a standing fact, and a fact you have to hover to see is a
+  // fact the user does not have.
+  const badges = walk(document.byId.get("thread-list"), (node) =>
+    node.classList?.contains("thread-local-badge")
+  );
+  assert.equal(badges.length, 1, "a paused thread wears its state at rest");
+  assert.equal(badges[0].textContent, "Local only");
+  assert.equal(
+    walk(document.byId.get("thread-list"), (node) =>
+      node.classList?.contains("reveal-on-hover") && node.classList?.contains("thread-local-badge")
+    ).length,
+    0,
+    "the badge is not hover-revealed",
+  );
 
-  // And back again.
-  afterButtons[0].dispatch("click");
+  // And back again, through the menu that now says the opposite thing.
+  const resume = syncItemFor(rows()[0]);
+  assert.equal(resume.textContent, "Resume syncing");
+  resume.click();
   await settle();
   assert.deepEqual(calls.at(-1), ["00000000-0000-4000-8000-0000000f1001", "synced"]);
+  assert.equal(
+    walk(document.byId.get("thread-list"), (node) =>
+      node.classList?.contains("thread-local-badge")
+    ).length,
+    0,
+    "resuming takes the badge with it",
+  );
 }
 
 await testMissingBridge();
@@ -10916,6 +11105,7 @@ await testPaletteRunsCommands();
 await testPaletteOpensWithoutThreads();
 await testColumnFolds();
 await testSidebarSearchIconOpensThePalette();
+await testRowMenuHasTwoDoorsAndOneRoom();
 await testPinnedThreadsLeadTheSidebar();
 await testProjectGroupingAndMoveAction();
 await testModesParseFailureNamesTheSkew();

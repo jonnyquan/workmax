@@ -17,6 +17,7 @@ import {
   quickSwitcherList,
   sidebarSearchButton,
   threadList,
+  threadMenu,
   threadPanel,
 } from "./dom.js";
 import {
@@ -374,89 +375,272 @@ function renderThreadButton(thread, inProject = false) {
     badge.textContent = t("Interrupted");
     button.appendChild(badge);
   }
+  // A paused sync is a STANDING FACT about the conversation, not an action, so
+  // it stays on the row at rest while the switch that changes it moves into
+  // the menu. It used to be a hover-revealed button doing both jobs, which
+  // meant "this one never leaves my machine" was only true-looking while the
+  // pointer was on it. A fact you can only see by hovering is a fact the user
+  // does not have.
+  if (thread.cloud_sync_state === "paused") {
+    const badge = document.createElement("span");
+    badge.className = "thread-local-badge";
+    badge.textContent = t("Local only");
+    button.appendChild(badge);
+  }
   button.addEventListener("click", () => {
     selectThread(thread);
   });
   item.appendChild(button);
+  item.appendChild(buildThreadActions(thread, item));
+  // Right-click anywhere on the row opens the same menu the ⋯ opens. On this
+  // platform that also covers Control-click, which is how a Mac trackpad
+  // without a second button asks for a context menu.
+  item.addEventListener("contextmenu", (event) => {
+    event.preventDefault?.();
+    openThreadMenu(thread, item, event);
+  });
+  return item;
+}
+
+// --- Row actions: two icons, and a menu for everything else ------------------
+//
+// Four text buttons used to sit in the row's corner — Pin, Project, Syncing,
+// Delete — each appearing on hover, each a different width, and each having to
+// be told where to sit relative to the others. The stylesheet carried five
+// pixel offsets (right: 62px / 74px / 122px / 134px …) whose only job was to
+// keep four variable-width labels from overlapping, recomputed by hand every
+// time a label changed length. Translating the labels would have invalidated
+// every one of those numbers, which is how a layout built on arithmetic fails:
+// silently, in the language nobody tested.
+//
+// Two icons now, in a flex row that measures itself. Pin is the one action
+// worth a click of its own — it is cheap, reversible and used constantly — and
+// ⋯ carries the rest. Both are the same size, so nothing has to know about
+// anything else's width.
+//
+// The ⋯ is not decoration: right-click is the fast path, but a menu reachable
+// ONLY by right-click is a menu a keyboard cannot open, and Delete used to be
+// Tab-reachable. The button keeps that promise.
+function buildThreadActions(thread, item) {
+  const actions = document.createElement("div");
+  actions.className = "thread-actions reveal-on-hover";
+  const name = thread.name || t("Untitled thread");
+
   const pin = document.createElement("button");
   pin.type = "button";
-  pin.className = "thread-pin reveal-on-hover";
+  pin.className = "thread-action thread-pin";
   pin.classList.toggle("pinned", thread.pinned === true);
-  pin.textContent = thread.pinned ? t("Unpin") : t("Pin");
-  pin.setAttribute(
-    "aria-label",
-    t(thread.pinned ? "Unpin {name}" : "Pin {name}", {
-      name: thread.name || t("Untitled thread"),
-    })
-  );
-  pin.addEventListener("click", () => {
+  // Both marks, and they say the same thing: title is the tooltip a pointer
+  // gets, aria-label is what a screen reader reads. An icon button with only
+  // one of them is either unlabelled or untooltipped, and which one is missing
+  // depends on which user you are.
+  const pinLabel = t(thread.pinned ? "Unpin {name}" : "Pin {name}", { name });
+  pin.title = thread.pinned ? t("Unpin") : t("Pin");
+  pin.setAttribute("aria-label", pinLabel);
+  pin.appendChild(buildIcon(PIN_ICON));
+  pin.addEventListener("click", (event) => {
+    event.stopPropagation?.();
     pin.disabled = true;
     void toggleThreadPin(thread);
   });
-  item.appendChild(pin);
-  // "Move to project": same shape and position pattern as pin. The editor opens
-  // inline rather than via window.prompt — see openProjectEditor for why.
-  if (typeof window.desktopBridge?.agent?.setThreadProject === "function") {
-    const project = document.createElement("button");
-    project.type = "button";
-    project.className = "thread-project reveal-on-hover";
-    project.textContent = t("Project");
-    project.setAttribute(
-      "aria-label",
-      t("Set project for {name}", { name: thread.name || t("Untitled thread") })
-    );
-    project.addEventListener("click", () => {
-      openProjectEditor(thread, item);
-    });
-    item.appendChild(project);
+  actions.appendChild(pin);
+
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "thread-action thread-more";
+  more.title = t("More");
+  more.setAttribute("aria-label", t("More actions for {name}", { name }));
+  more.setAttribute("aria-haspopup", "menu");
+  more.appendChild(buildIcon(MORE_ICON));
+  more.addEventListener("click", (event) => {
+    event.stopPropagation?.();
+    openThreadMenu(thread, item, event);
+  });
+  actions.appendChild(more);
+  return actions;
+}
+
+// Icons are hand-written paths on the app's 16-unit grid, drawn with
+// createElementNS — not innerHTML. The whole renderer holds the line that
+// markup is never parsed from a string, and an icon is not a good enough
+// reason to open that door for the first time.
+const PIN_ICON = [
+  "M6 1.9h4",
+  "M6.6 1.9v3.5a2.6 2.6 0 0 1-1.4 2.3l-.8.5a1.2 1.2 0 0 0-.6 1v.3h8.4v-.3a1.2 1.2 0 0 0-.6-1l-.8-.5a2.6 2.6 0 0 1-1.4-2.3V1.9",
+  "M8 9.5v4.6",
+];
+const MORE_ICON = ["M3.6 8h.01", "M8 8h.01", "M12.4 8h.01"];
+
+function buildIcon(paths) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  for (const d of paths) {
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute("d", d);
+    svg.appendChild(path);
   }
-  if (threadSyncSwitchable(thread)) {
-    const paused = thread.cloud_sync_state === "paused";
-    const sync = document.createElement("button");
-    sync.type = "button";
-    sync.className = "thread-sync reveal-on-hover";
-    sync.classList.toggle("paused", paused);
-    sync.textContent = paused ? t("Local only") : t("Syncing");
-    sync.setAttribute(
-      "aria-label",
-      t(paused ? "Resume syncing {name}" : "Stop syncing {name}", {
-        name: thread.name || t("Untitled thread"),
+  return svg;
+}
+
+// --- The row menu ------------------------------------------------------------
+//
+// One element for the whole rail, refilled on open. Its items are conditional
+// — a synced thread has no delete, a local one has no sync switch — so the
+// menu is built from the thread rather than shown from the markup.
+//
+// Projects lead it, and as a LIST rather than a text field: the projects that
+// exist are the answer most of the time, and making the reader retype a name
+// they already used is how a second project called "Q3 deck " (trailing space)
+// gets created. The field is still there under "New project…" for the first
+// one, and for the times the answer is not on the list.
+let openMenuThreadUUID = "";
+
+export function closeThreadMenu() {
+  if (!threadMenu) return;
+  threadMenu.hidden = true;
+  threadMenu.textContent = "";
+  openMenuThreadUUID = "";
+}
+
+// Every project the rail knows about, in the order the sidecar sorted them.
+// Derived rather than stored: the thread list IS the record of which projects
+// exist, and a second list would be one that could disagree with it.
+function knownProjects() {
+  const seen = [];
+  for (const candidate of state.threads) {
+    const key = typeof candidate.project === "string" ? candidate.project.trim() : "";
+    if (key && !seen.includes(key)) seen.push(key);
+  }
+  return seen;
+}
+
+function menuItem(label, run, kind = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = kind ? `thread-menu-item ${kind}` : "thread-menu-item";
+  button.setAttribute("role", "menuitem");
+  button.textContent = label;
+  button.addEventListener("click", (event) => {
+    event.stopPropagation?.();
+    run(button);
+  });
+  return button;
+}
+
+function menuHeading(label) {
+  const heading = document.createElement("div");
+  heading.className = "thread-menu-heading";
+  heading.textContent = label;
+  return heading;
+}
+
+export function openThreadMenu(thread, item, event) {
+  if (!threadMenu) return;
+  // Always (re)open at the pointer rather than toggling on a repeat press.
+  // A toggle here would be dead code as well as wrong: pointerdown fires
+  // before contextmenu, so the document-level dismissal has already closed
+  // any open menu by the time this runs. Native context menus re-open at the
+  // new position too.
+  closeThreadMenu();
+  openMenuThreadUUID = thread.uuid;
+
+  const heading = document.createElement("div");
+  heading.className = "thread-menu-title";
+  heading.textContent = thread.name || t("Untitled thread");
+  threadMenu.appendChild(heading);
+
+  threadMenu.appendChild(
+    menuItem(thread.pinned ? t("Unpin") : t("Pin"), () => {
+      closeThreadMenu();
+      void toggleThreadPin(thread);
+    })
+  );
+
+  if (typeof window.desktopBridge?.agent?.setThreadProject === "function") {
+    const projects = knownProjects().filter((key) => key !== thread.project);
+    if (projects.length > 0) threadMenu.appendChild(menuHeading(t("Move to project")));
+    for (const key of projects) {
+      threadMenu.appendChild(
+        menuItem(key, () => {
+          closeThreadMenu();
+          void commitThreadProject(thread, key);
+        }, "thread-menu-project")
+      );
+    }
+    threadMenu.appendChild(
+      menuItem(t("New project…"), () => {
+        closeThreadMenu();
+        openProjectEditor(thread, item);
       })
     );
-    sync.addEventListener("click", () => {
-      sync.disabled = true;
-      void toggleThreadCloudSync(thread);
-    });
-    item.appendChild(sync);
+    if (thread.project) {
+      threadMenu.appendChild(
+        menuItem(t("Remove from project"), () => {
+          closeThreadMenu();
+          void commitThreadProject(thread, "");
+        })
+      );
+    }
   }
-  if (threadIsDeletable(thread)) {
-    // Two clicks, one control: the first arms it, the second deletes. A modal
-    // would be heavier machinery for the same guarantee — that no single
-    // misclick destroys a conversation.
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "thread-delete reveal-on-hover";
-    del.textContent = t("Delete");
-    del.setAttribute(
-      "aria-label",
-      t("Delete {name}", { name: thread.name || t("Untitled thread") })
+
+  if (threadSyncSwitchable(thread)) {
+    const paused = thread.cloud_sync_state === "paused";
+    threadMenu.appendChild(
+      menuItem(paused ? t("Resume syncing") : t("Keep on this machine"), () => {
+        closeThreadMenu();
+        void toggleThreadCloudSync(thread);
+      })
     );
-    del.addEventListener("click", () => {
-      if (!del.classList.contains("armed")) {
-        del.classList.add("armed", "revealed");
-        del.textContent = t("Confirm");
-        setTimeout(() => {
-          del.classList.remove("armed", "revealed");
-          del.textContent = t("Delete");
-        }, DELETE_ARM_MS);
-        return;
-      }
-      del.disabled = true;
-      void deleteThread(thread);
-    });
-    item.appendChild(del);
   }
-  return item;
+
+  if (threadIsDeletable(thread)) {
+    // Two clicks, one item: the first arms it, the second deletes — the same
+    // guarantee the row's Delete button used to carry, kept because moving a
+    // destructive action into a menu is not a reason to make it cheaper. The
+    // menu deliberately stays OPEN after the first click; closing it would
+    // discard the arming and make the second click land somewhere else.
+    threadMenu.appendChild(
+      menuItem(t("Delete"), (button) => {
+        if (!button.classList.contains("armed")) {
+          button.classList.add("armed");
+          button.textContent = t("Confirm");
+          setTimeout(() => {
+            button.classList.remove("armed");
+            button.textContent = t("Delete");
+          }, DELETE_ARM_MS);
+          return;
+        }
+        closeThreadMenu();
+        void deleteThread(thread);
+      }, "danger")
+    );
+  }
+
+  threadMenu.hidden = false;
+  placeThreadMenu(event);
+  // Focus the first item so the keyboard lands inside the thing it opened.
+  const first = Array.from(threadMenu.children || []).find(
+    (child) => typeof child.focus === "function" && child.classList?.contains("thread-menu-item")
+  );
+  first?.focus?.();
+}
+
+// Viewport coordinates, clamped so a row near the bottom of a tall rail does
+// not open its menu below the window. The measurements are read from the live
+// element, which is why this runs after `hidden` comes off: a hidden element
+// measures zero and every menu would think it fits.
+function placeThreadMenu(event) {
+  const x = Number.isFinite(event?.clientX) ? event.clientX : 0;
+  const y = Number.isFinite(event?.clientY) ? event.clientY : 0;
+  const width = threadMenu.offsetWidth || 220;
+  const height = threadMenu.offsetHeight || 0;
+  const maxX = (globalThis.innerWidth || 0) - width - 8;
+  const maxY = (globalThis.innerHeight || 0) - height - 8;
+  threadMenu.style.left = `${Math.max(8, Math.min(x, maxX > 8 ? maxX : x))}px`;
+  threadMenu.style.top = `${Math.max(8, Math.min(y, maxY > 8 ? maxY : y))}px`;
 }
 
 // Long enough to move the pointer one row down and click again; short enough
@@ -488,6 +672,11 @@ function toggleProjectGroup(heading, indicator) {
 // happens in the palette now, and a list that quietly shortens itself while
 // another window has focus is not something this column should do.
 export function renderThreads() {
+  // The menu belongs to a row that is about to be replaced, and a menu whose
+  // row is gone is a menu whose Delete points at nothing. Every path that
+  // repaints the rail comes through here, which is why this is the only place
+  // that has to remember.
+  closeThreadMenu();
   threadList.textContent = "";
   if (state.threads.length === 0) {
     const item = document.createElement("li");
@@ -752,6 +941,36 @@ function commitQuickSwitcherChoice(candidate) {
     return;
   }
   selectThread(candidate.thread);
+}
+
+// The menu's four ways out. Each is a different way of saying "the reader has
+// moved on": a press somewhere else, Escape, a scroll that would leave the
+// menu floating over the wrong row, and the rail repainting under it
+// (renderThreads). pointerdown rather than click so the menu is gone before
+// whatever was pressed acts on it.
+document.addEventListener("pointerdown", (event) => {
+  if (!threadMenu || threadMenu.hidden) return;
+  // A press INSIDE the menu is the menu being used, not dismissed. The stub
+  // DOM has no contains(), and neither does a synthetic event without a
+  // target, so both absences fall through to "outside" — which closes a menu
+  // that was about to run its item anyway, one tick before the item's own
+  // handler. The item still runs; it is its own listener.
+  if (typeof threadMenu.contains === "function" && event.target &&
+      threadMenu.contains(event.target)) {
+    return;
+  }
+  closeThreadMenu();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !threadMenu || threadMenu.hidden) return;
+  event.stopPropagation?.();
+  closeThreadMenu();
+});
+if (threadList) {
+  // Scrolling moves the row out from under a menu pinned to viewport
+  // coordinates. Closing is the honest answer; re-anchoring on every scroll
+  // frame is machinery for a gesture that means "I am looking elsewhere".
+  threadList.addEventListener("scroll", () => closeThreadMenu());
 }
 
 if (quickSwitcherInput) {

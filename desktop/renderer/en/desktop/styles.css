@@ -1079,56 +1079,98 @@ textarea::placeholder {
   font-weight: var(--fw-medium);
 }
 
-/* Row controls. Delete, pin and sync live in the row's corner and stay out of
-   sight until the row is hovered or the control is focused — a destructive
-   control on every row at rest reads as clutter and invites misclicks. Clicks
-   and keyboard focus work regardless: opacity hides, it does not disable. */
-.thread-delete,
-.thread-pin,
-.thread-sync,
-.thread-project {
+/* Row controls: two icons in the row's corner, out of sight until the row is
+   hovered or one of them is focused. Clicks and keyboard focus work
+   regardless — opacity hides, it does not disable.
+
+   This used to be four text buttons, each positioned by hand against the
+   others (right: 62px / 74px / 122px / 134px, one rule per combination that
+   could occur). A flex row measures itself, which is the point: the offsets
+   were arithmetic over label widths, and label widths stopped being knowable
+   the moment the interface learned a second language. */
+.thread-actions {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: 50%;
+  right: var(--sp-1);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  transform: translateY(-50%);
+}
+
+.thread-action {
+  display: grid;
+  place-items: center;
+  width: var(--h-control-sm);
   height: var(--h-control-sm);
-  padding: 0 var(--sp-2);
+  padding: 0;
   border-color: transparent;
   border-radius: var(--r-control);
-  background: hsl(var(--card));
-  box-shadow: 0 0 0 1px hsl(var(--border));
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+}
+
+.thread-action:hover {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+/* The app's one icon treatment, stated once in .icon-button svg and repeated
+   here for a control that is not a title-bar button: same grid, same weight,
+   same currentColor, so a row icon and a chrome icon are the same object. */
+.thread-action svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* A pinned row's pin stays lit at rest — the reveal only governs the group,
+   and a pin that vanishes when the pointer leaves cannot tell you which rows
+   are pinned. The group heading says it too, but only while the list is short
+   enough for the heading to be on screen. */
+.thread-item:has(.thread-pin.pinned) .thread-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.thread-item .thread-pin.pinned {
+  color: hsl(var(--primary));
+}
+
+/* …but only the PIN. Holding the group open for a pinned row would also hold
+   the ⋯ open, and a row at rest carrying a menu button is the clutter the
+   reveal exists to prevent. Both halves go together for the same reason the
+   shared mechanism states them together: an element at opacity 0 is still
+   hit-testable, and an invisible button over a clickable row is a trap that
+   only shows up for someone who clicks without hovering first. */
+.thread-item:has(.thread-pin.pinned) .thread-more {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.thread-item:hover .thread-more,
+.thread-actions:focus-within .thread-more {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* "Local only" is a fact, so it sits on the row at rest, next to the name it
+   is about — the switch that changes it lives in the menu. */
+.thread-local-badge {
+  flex: none;
+  margin-left: var(--sp-1);
+  padding: 0 6px;
+  border-radius: 999px;
+  background: hsl(var(--muted));
   color: hsl(var(--muted-foreground));
   font-size: var(--fs-micro);
   font-weight: var(--fw-normal);
-  /* Reveal comes from .reveal-on-hover; the row is the host. `armed` is a
-     delete waiting for its second click and must stay visible with the pointer
-     anywhere — .revealed says so. */
-}
-
-.thread-item:has(.thread-delete) .thread-pin {
-  right: 62px;
-}
-
-/* Unlike pin and delete, a paused sync does NOT hide at rest: "this one stays
-   on my machine" is a standing fact about the conversation, and a fact you can
-   only see by hovering is a fact the user does not have. */
-.thread-item:has(.thread-sync) .thread-pin {
-  right: 74px;
-}
-
-/* The project button sits to the LEFT of pin, so it stacks behind pin's shift
-   rules: whatever pushes pin outward also pushes project one more step. Delete
-   and sync are mutually exclusive (local vs synced), so the two :has rules
-   never combine. */
-.thread-project {
-  right: 66px;
-}
-
-.thread-item:has(.thread-delete) .thread-project {
-  right: 122px;
-}
-
-.thread-item:has(.thread-sync) .thread-project {
-  right: 134px;
+  white-space: nowrap;
 }
 
 /* The inline "Move to project" editor. Overlays the whole row so the field is
@@ -4028,4 +4070,76 @@ button.composer-chip:hover {
 
 .account-menu-item:hover {
   background: hsl(var(--muted));
+}
+
+/* --- The conversation row's menu -----------------------------------------
+   Same surface as the account menu — one card treatment in this window, not
+   two — but positioned in VIEWPORT coordinates at the pointer rather than
+   anchored to a control. Fixed, because the rail scrolls and an absolutely
+   positioned menu would ride the list out of view while staying on screen. */
+.thread-menu {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  min-width: 200px;
+  max-width: 280px;
+  padding: var(--sp-1);
+  border-radius: var(--r-surface);
+  background: hsl(var(--card));
+  box-shadow: 0 0 0 1px hsl(var(--border)), 0 8px 24px hsl(0 0% 8% / 0.16);
+}
+
+/* The name of the thing the menu is about. A context menu opened by
+   right-click has no other way to say which row it belongs to — the row
+   underneath it is covered by the menu. */
+.thread-menu-title {
+  padding: var(--sp-1) var(--sp-2) 2px;
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-menu-heading {
+  padding: var(--sp-2) var(--sp-2) 2px;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-strong);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.thread-menu-item {
+  justify-content: start;
+  height: var(--h-control);
+  padding: 0 var(--sp-2);
+  overflow: hidden;
+  border: none;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: hsl(var(--foreground));
+  font-size: var(--fs-base);
+  font-weight: var(--fw-normal);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-menu-item:hover {
+  background: hsl(var(--muted));
+}
+
+/* Destructive, and armed. Quiet until it is pressed once — the weight arrives
+   with the consequence, not before it. */
+.thread-menu-item.danger:hover {
+  color: hsl(var(--destructive));
+}
+
+.thread-menu-item.armed,
+.thread-menu-item.armed:hover {
+  background: hsl(var(--destructive) / 0.12);
+  color: hsl(var(--destructive));
+  font-weight: var(--fw-medium);
 }

@@ -745,6 +745,14 @@
         </div>
       </aside>
 
+      <!-- The row menu, shared by every conversation in the rail. One element,
+           refilled on open, because the alternative is a menu per row: sixty
+           hidden menus in the document, sixty sets of listeners, and a
+           guarantee that the one you are looking at is stale.
+           It lives outside the rail so the rail's own overflow cannot clip it,
+           and it is positioned in viewport coordinates at the pointer. -->
+      <div id="thread-menu" class="thread-menu" role="menu" hidden></div>
+
       <section id="main-stage" class="content" data-surface="home" aria-live="polite">
         <!-- No chrome strip of its own any more: the conversation's name and
              the run's state both moved up into the window's title bar, so
