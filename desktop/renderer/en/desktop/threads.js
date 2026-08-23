@@ -41,8 +41,10 @@ import {
   THEME_HINTS,
   THEME_LABELS,
   exportSelectedThread,
+  exportThreadByUUID,
   loadThreads,
   openModelSettings,
+  renameThreadByUUID,
   setStatus,
   setTheme,
   state,
@@ -199,25 +201,28 @@ async function commitThreadProject(thread, projectKey) {
   await loadThreads();
 }
 
-// The inline editor for "Move to project". window.prompt would be the simplest
-// input a browser can offer, but WKWebView (the only webview this app ships in)
-// does not honour it: the call returns null without blocking or showing any
-// UI, so the user clicks "Project" and nothing happens. An inline field on the
-// row itself is the reliable path, and the only one a test harness can drive
-// without a real prompt implementation.
-function openProjectEditor(thread, item) {
+// The inline editor a row uses when the menu asks it for a word — a project
+// name, a new title. window.prompt would be the simplest input a browser can
+// offer, but WKWebView (the only webview this app ships in) does not honour
+// it: the call returns null without blocking or showing any UI, so the user
+// picks the menu item and nothing happens. An inline field on the row itself
+// is the reliable path, and the only one a test harness can drive without a
+// real prompt implementation.
+//
+// One editor for both questions rather than two that drift. The Enter /
+// Escape / blur handling below is the part worth not writing twice: it is
+// three lines of intent and one subtle guard, and a second copy would be the
+// one that forgets the guard.
+function openRowEditor(item, { value, placeholder, ariaLabel, commit: onCommit }) {
   if (item.querySelector?.(".thread-project-editor")) return;
   const editor = document.createElement("div");
   editor.className = "thread-project-editor";
   const input = document.createElement("input");
   input.type = "text";
   input.className = "thread-project-input";
-  input.value = thread.project || "";
-  input.setAttribute("placeholder", t("Project name"));
-  input.setAttribute(
-    "aria-label",
-    t("Project for {name}", { name: thread.name || t("Untitled thread") })
-  );
+  input.value = value;
+  input.setAttribute("placeholder", placeholder);
+  input.setAttribute("aria-label", ariaLabel);
   // A flag, not a DOM probe: blur fires again when the editor is torn down
   // (Enter or Escape), and without it the second blur would double-commit or
   // double-cancel. document.body.contains would do the same job in a real
@@ -226,7 +231,7 @@ function openProjectEditor(thread, item) {
   const commit = () => {
     if (settled) return;
     settled = true;
-    void commitThreadProject(thread, input.value);
+    onCommit(input.value);
     editor.remove();
   };
   const cancel = () => {
@@ -252,6 +257,27 @@ function openProjectEditor(thread, item) {
   item.appendChild(editor);
   input.focus();
   input.select?.();
+}
+
+function openProjectEditor(thread, item) {
+  openRowEditor(item, {
+    value: thread.project || "",
+    placeholder: t("Project name"),
+    ariaLabel: t("Project for {name}", { name: thread.name || t("Untitled thread") }),
+    commit: (value) => void commitThreadProject(thread, value),
+  });
+}
+
+// Renaming from the rail, without opening the conversation first. The header
+// form is the other way to ask; both land in renameThreadByUUID, so the
+// validation and the in-flight guard exist once.
+function openRenameEditor(thread, item) {
+  openRowEditor(item, {
+    value: thread.name || "",
+    placeholder: t("Conversation name"),
+    ariaLabel: t("New name for {name}", { name: thread.name || t("Untitled thread") }),
+    commit: (value) => void renameThreadByUUID(thread.uuid, value),
+  });
 }
 
 // The sync switch: "does this conversation leave my machine?"
@@ -558,6 +584,34 @@ export function openThreadMenu(thread, item, event) {
       void toggleThreadPin(thread);
     })
   );
+
+  // Rename and Export are about this conversation rather than about where it
+  // is filed, so they sit with Pin rather than under the Projects heading.
+  // Both used to require opening the thread first — the controls lived in the
+  // header of the open conversation and nowhere else — which made "rename
+  // this one" a three-step errand ending somewhere you did not mean to go.
+  if (typeof window.desktopBridge?.agent?.renameThread === "function") {
+    threadMenu.appendChild(
+      menuItem(t("Rename"), () => {
+        closeThreadMenu();
+        openRenameEditor(thread, item);
+      })
+    );
+  }
+  // Offered only where it would produce something: exporting an empty
+  // conversation writes a file with a title and nothing under it, and the
+  // sidecar answers thread_empty rather than pretending otherwise.
+  if (
+    (thread.message_count || 0) > 0 &&
+    typeof window.desktopBridge?.agent?.exportThread === "function"
+  ) {
+    threadMenu.appendChild(
+      menuItem(t("Export as Markdown"), () => {
+        closeThreadMenu();
+        void exportThreadByUUID(thread.uuid);
+      })
+    );
+  }
 
   if (typeof window.desktopBridge?.agent?.setThreadProject === "function") {
     const projects = knownProjects().filter((key) => key !== thread.project);
@@ -961,11 +1015,47 @@ document.addEventListener("pointerdown", (event) => {
   }
   closeThreadMenu();
 });
+// Escape closes it; the arrows walk it. A menu that can only be entered with
+// Tab is one a keyboard user has to leave the menu to escape from — Tab does
+// not wrap, so the last item's next stop is whatever comes after the menu in
+// the document, which is nothing to do with the conversation they opened it
+// for. Arrows wrap, which is what makes the menu a place rather than a
+// stretch of the tab order.
 document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape" || !threadMenu || threadMenu.hidden) return;
-  event.stopPropagation?.();
-  closeThreadMenu();
+  if (!threadMenu || threadMenu.hidden) return;
+  if (event.key === "Escape") {
+    event.stopPropagation?.();
+    closeThreadMenu();
+    return;
+  }
+  const step =
+    event.key === "ArrowDown" ? 1 :
+    event.key === "ArrowUp" ? -1 :
+    event.key === "Home" ? 0 :
+    event.key === "End" ? -0.5 :
+    null;
+  if (step === null) return;
+  const items = Array.from(threadMenu.children || []).filter((child) =>
+    child.classList?.contains("thread-menu-item")
+  );
+  if (items.length === 0) return;
+  event.preventDefault?.();
+  const here = items.findIndex((child) => child.focused === true || child === activeMenuItem());
+  const next =
+    step === 0 ? 0 :
+    step === -0.5 ? items.length - 1 :
+    here < 0 ? (step > 0 ? 0 : items.length - 1) :
+    (here + step + items.length) % items.length;
+  items[next]?.focus?.();
 });
+
+// document.activeElement in a real browser; the stub does not model one, so
+// the arrow walk falls back to the `focused` flag its elements carry. Both
+// answers are "which item is the keyboard on", and neither is authoritative
+// on the other's platform.
+function activeMenuItem() {
+  return globalThis.document?.activeElement ?? null;
+}
 if (threadList) {
   // Scrolling moves the row out from under a menu pinned to viewport
   // coordinates. Closing is the honest answer; re-anchoring on every scroll

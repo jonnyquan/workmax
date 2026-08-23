@@ -1002,11 +1002,27 @@ function closeSettingsPanel() {
   state.settingsModelLoaded = false;
   clearModelAPIKeyField();
   setModelSettingsError("");
+  // Hand the keyboard back to whatever opened this. The opener can have gone
+  // away while the dialog was up — the identity row hides itself when the
+  // account it names stops existing — and the old code simply skipped the
+  // handover in that case, which left focus on a control INSIDE the overlay
+  // that had just become hidden. Tab then continues from a subtree nobody can
+  // see, and a screen reader reads from one; "nothing focusable is left" is a
+  // state to recover from, not one to leave.
   const opener = state.settingsOpener;
   state.settingsOpener = null;
   if (opener && opener.hidden !== true && typeof opener.focus === "function") {
     opener.focus();
+    return;
   }
+  if (chatInput && !chatInput.disabled) {
+    chatInput.focus();
+    return;
+  }
+  // Nowhere sensible to put it: give it up rather than leave it behind the
+  // closed door. The document takes it, which is where a fresh page starts.
+  const stranded = document.activeElement;
+  if (stranded && typeof stranded.blur === "function") stranded.blur();
 }
 
 // The gear, the onboarding "use a local model" card and the quick switcher all
@@ -1857,10 +1873,18 @@ async function loadRecoverableTurns(
 // Export writes the conversation into the thread's workspace as Markdown,
 // then opens the folder: "take your data with you" ends with the file in
 // front of the user, not with a path in a status message they must chase.
+// Export the thread that is open. The rail's row menu exports one that is
+// not, which is the whole reason the uuid became a parameter: "export this
+// conversation" should not first require opening it and waiting for its
+// messages to load.
 export async function exportSelectedThread() {
+  if (!state.selectedThreadUUID) return;
+  await exportThreadByUUID(state.selectedThreadUUID);
+}
+
+export async function exportThreadByUUID(threadUUID) {
   const agent = window.desktopBridge?.agent;
   if (!agent || typeof agent.exportThread !== "function") return;
-  const threadUUID = state.selectedThreadUUID;
   if (!threadUUID) return;
   const exportButton = document.querySelector("#export-thread-button");
   if (exportButton) exportButton.disabled = true;
@@ -1932,11 +1956,20 @@ function openRenameForm() {
 }
 
 async function submitRename() {
-  const threadUUID = state.selectedThreadUUID;
   const input = document.querySelector("#rename-thread-input");
+  if (!state.selectedThreadUUID || !input) return;
+  await renameThreadByUUID(state.selectedThreadUUID, input.value);
+}
+
+// The rename itself, for any thread rather than the open one. The header form
+// and the rail's row menu are two ways of asking the same question, and the
+// answer must not be written twice: everything below the input — validation,
+// the in-flight selection guard, the repaint — is the same work whichever
+// control asked.
+export async function renameThreadByUUID(threadUUID, rawName) {
   const agent = window.desktopBridge?.agent;
-  if (!threadUUID || !input || !agent) return;
-  const name = input.value.trim();
+  if (!threadUUID || !agent) return;
+  const name = String(rawName || "").trim();
   if (name === "" || utf8ByteLength(name) > MAX_THREAD_NAME_BYTES) {
     setStatus(t("Enter a name up to 200 characters."), "error");
     return;

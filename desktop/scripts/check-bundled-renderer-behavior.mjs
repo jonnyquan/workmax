@@ -770,6 +770,15 @@ class FakeClassList {
   }
 }
 
+// Focus is EXCLUSIVE — one activeElement per document, and focusing anything
+// un-focuses whatever held it. The stub used to set a flag and never clear
+// it, so `focused` accumulated: after walking a menu with the arrows, every
+// item the keyboard had passed through still claimed to be focused, and code
+// that asks "which one is focused" got the first answer rather than the
+// current one. Modelling the invariant here rather than in each test is the
+// difference between a harness and a set of coincidences.
+let focusedElement = null;
+
 class FakeElement {
   constructor(tagName = "div") {
     this.tagName = tagName.toUpperCase();
@@ -922,7 +931,16 @@ class FakeElement {
   }
 
   focus() {
+    if (focusedElement && focusedElement !== this) focusedElement.focused = false;
+    focusedElement = this;
     this.focused = true;
+  }
+
+  // Giving focus up. The other half of exclusivity: without it, "put the
+  // keyboard down" is something the app can do and the harness cannot see.
+  blur() {
+    this.focused = false;
+    if (focusedElement === this) focusedElement = null;
   }
 
   select() {
@@ -1042,6 +1060,13 @@ class FakeDocument {
       throw new Error(`unsupported selector in bundled renderer test: ${selector}`);
     }
     return this.byId.get(selector.slice(1)) ?? null;
+  }
+
+  // The one element the keyboard is on, or null. Real code reads this to
+  // answer "where am I" before moving; without it the stub forces every such
+  // path down a fallback that only exists for the stub.
+  get activeElement() {
+    return focusedElement;
   }
 
   createElement(tagName) {
@@ -5630,10 +5655,66 @@ async function testLocalAccountSwitcherSwitchesAndReloads() {
     true,
     "the dialog closes once the switch lands: the session reloads underneath it",
   );
+  // Focus ends in the composer, NOT back on the identity row. closeSettingsPanel
+  // does hand it to the opener — but a switch reloads the whole session behind
+  // the dialog, and a composer going from disabled to usable takes the caret,
+  // which is the later of the two.
+  //
+  // This assertion used to claim the opposite, and passed: the harness let
+  // `focused` accumulate, so the row still answered true long after something
+  // else had the keyboard. The general focus-return is covered below, on a
+  // close that does not reload the session under it.
   assert.equal(
-    document.byId.get("local-account-row").focused,
-    true,
-    "and focus goes back to the control that opened it",
+    document.activeElement,
+    document.byId.get("chat-input"),
+    "the caret lands where the reader can now type",
+  );
+}
+
+// Closing a dialog puts the keyboard back where it came from. Tested on a
+// plain close rather than on the account switch, which ends somewhere else
+// for a reason of its own.
+async function testClosingSettingsReturnsFocusToItsOpener() {
+  const { bridge, desktopBridge } = localModeBridge({
+    localRoute: true,
+    accounts: [{ id: 1, name: "Local", active: true }],
+  });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  const row = document.byId.get("local-account-row");
+  assert.equal(row.hidden, false, "the identity row is on screen to open the dialog with");
+  row.click();
+  document.byId.get("account-menu-settings").click();
+  await settle();
+  assert.equal(document.byId.get("settings-overlay").hidden, false, "the dialog opened");
+  const inside = document.activeElement;
+  assert.ok(inside, "opening puts the keyboard inside the dialog");
+
+  document.byId.get("settings-close-button").click();
+  await settle();
+  assert.equal(document.byId.get("settings-overlay").hidden, true);
+  assert.equal(
+    document.activeElement,
+    row,
+    "the keyboard goes back to the control that opened the dialog",
+  );
+
+  // And when the opener has gone away while the dialog was up — the identity
+  // row hides itself when the account it names stops existing — the keyboard
+  // must not be left on a control inside the now-hidden overlay. Tab would
+  // carry on from a subtree nobody can see.
+  row.click();
+  document.byId.get("account-menu-settings").click();
+  await settle();
+  row.hidden = true;
+  document.byId.get("settings-close-button").click();
+  await settle();
+  const landed = document.activeElement;
+  assert.notEqual(landed, inside, "focus does not stay behind the closed door");
+  assert.ok(
+    landed === null || landed === document.byId.get("chat-input"),
+    "it goes to the composer, or is given up outright — never left in hidden content",
   );
 }
 
@@ -6575,7 +6656,11 @@ async function testRowMenuHasTwoDoorsAndOneRoom() {
       }
       if (pathname === "/agent/threads?include_paused=true") {
         return response({
-          items: [{ ...thread("row-menu-a", "Payroll notes"), updated_at: new Date().toISOString() }],
+          items: [{
+            ...thread("row-menu-a", "Payroll notes"),
+            message_count: 3,
+            updated_at: new Date().toISOString(),
+          }],
         });
       }
       if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
@@ -6583,6 +6668,11 @@ async function testRowMenuHasTwoDoorsAndOneRoom() {
     },
   };
   const { desktopBridge } = localModeBridge({ localRoute: true });
+  // Enough items for the walk below to have somewhere to walk. A menu of one
+  // wraps to itself and would pass an arrow test that moves nothing.
+  desktopBridge.agent.renameThread = async (uuid, name) =>
+    typedSuccess({ thread: { ...thread(uuid, name), name } });
+  desktopBridge.agent.exportThread = async () => typedSuccess({ messages: 3, path: "e.md" });
   const { document } = await runRenderer(bridge, desktopBridge);
   await settle();
 
@@ -6637,6 +6727,118 @@ async function testRowMenuHasTwoDoorsAndOneRoom() {
   assert.equal(menu.hidden, false, "and it opens again on the next right-click");
   document.dispatchDocument("keydown", { key: "Escape" });
   assert.equal(menu.hidden, true, "Escape closes the menu");
+
+  // The arrows walk it, and they wrap. Tab does not wrap — the last item's
+  // next stop is whatever follows the menu in the document — so a menu
+  // reachable only by Tab is one a keyboard has to leave in order to leave.
+  row.dispatch("contextmenu", { clientX: 30, clientY: 60 });
+  const items = () =>
+    Array.from(menu.children || []).filter((child) => child.classList?.contains("thread-menu-item"));
+  const focusedIndex = () => items().findIndex((child) => child.focused === true);
+  assert.equal(focusedIndex(), 0, "opening lands the keyboard on the first item");
+  document.dispatchDocument("keydown", { key: "ArrowDown" });
+  assert.equal(focusedIndex(), 1, "ArrowDown steps forward");
+  document.dispatchDocument("keydown", { key: "ArrowUp" });
+  document.dispatchDocument("keydown", { key: "ArrowUp" });
+  assert.equal(focusedIndex(), items().length - 1, "ArrowUp past the top wraps to the bottom");
+  document.dispatchDocument("keydown", { key: "Home" });
+  assert.equal(focusedIndex(), 0, "Home jumps to the first");
+  document.dispatchDocument("keydown", { key: "End" });
+  assert.equal(focusedIndex(), items().length - 1, "End jumps to the last");
+  closeMenu(document);
+}
+
+// Rename and Export used to be reachable only from the header of an OPEN
+// conversation, which made "rename that one" a three-step errand ending
+// somewhere the reader did not mean to go. Both are in the row menu now, and
+// both run against the row's own uuid rather than the selection — the point
+// of the change is that nothing has to be opened first.
+async function testRowMenuRenamesAndExportsWithoutOpeningTheThread() {
+  const renames = [];
+  const exports = [];
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        return response({
+          items: [
+            { ...thread("row-rename-a", "Payroll notes"), message_count: 4, updated_at: new Date().toISOString() },
+            { ...thread("row-rename-b", "Empty one"), message_count: 0, updated_at: new Date().toISOString() },
+          ],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const { desktopBridge } = localModeBridge({ localRoute: true });
+  desktopBridge.agent.renameThread = async (uuid, name) => {
+    renames.push([uuid, name]);
+    return typedSuccess({ thread: { ...thread(uuid, name), name } });
+  };
+  desktopBridge.agent.exportThread = async (uuid) => {
+    exports.push(uuid);
+    return typedSuccess({ messages: 4, path: "export.md" });
+  };
+  const { document } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  const rowFor = (uuid) =>
+    walk(document.byId.get("thread-list"), (n) => n.dataset?.threadUuid === uuid)[0];
+  const menuItems = () => Array.from(document.byId.get("thread-menu").children || []);
+  const openOn = (uuid) => {
+    rowFor(uuid).dispatch("contextmenu", { clientX: 30, clientY: 60 });
+    return menuItems();
+  };
+
+  // Export is offered where it would produce something, and not where it
+  // would write a title with nothing under it.
+  assert.ok(
+    openOn("row-rename-a").some((child) => child.textContent === "Export as Markdown"),
+    "a conversation with messages can be exported from its row",
+  );
+  assert.equal(
+    openOn("row-rename-b").some((child) => child.textContent === "Export as Markdown"),
+    false,
+    "an empty conversation is not offered an export that would answer thread_empty",
+  );
+
+  openOn("row-rename-a").find((child) => child.textContent === "Export as Markdown").click();
+  await settle();
+  assert.deepEqual(exports, ["row-rename-a"], "export runs against the row, not the selection");
+  assert.equal(
+    document.byId.get("thread-panel").hidden,
+    true,
+    "and nothing was opened to do it",
+  );
+
+  // Rename opens the row's own inline editor — WKWebView ignores
+  // window.prompt, so a field on the row is the only reliable way to ask.
+  const item = rowFor("row-rename-a");
+  openOn("row-rename-a").find((child) => child.textContent === "Rename").click();
+  const input = walk(item, (n) => n.classList?.contains("thread-project-input"))[0];
+  assert.ok(input, "Rename opens an inline field on the row");
+  assert.equal(input.value, "Payroll notes", "prefilled with the name being changed");
+  input.value = "Payroll notes 2026";
+  input.dispatch("keydown", { key: "Enter" });
+  await settle();
+  await settle();
+  assert.deepEqual(
+    renames,
+    [["row-rename-a", "Payroll notes 2026"]],
+    "Enter commits through the same rename the header form uses",
+  );
+  assert.match(
+    document.byId.get("thread-list").textContent,
+    /Payroll notes 2026/,
+    "and the row repaints with the new name",
+  );
+}
+
+function closeMenu(document) {
+  document.dispatchDocument("keydown", { key: "Escape" });
 }
 
 async function testPinnedThreadsLeadTheSidebar() {
@@ -11084,6 +11286,7 @@ await testMessageActionsAbsentWithoutAClipboard();
 await testStreamedAnswerGainsActionsWhenReconcileFails();
 await testSignedOutLocalRouteCanDriveTheAgent();
 await testLocalAccountSwitcherSwitchesAndReloads();
+await testClosingSettingsReturnsFocusToItsOpener();
 await testSettingsSectionsAreOneAtATime();
 await testModelSectionLoadsWhenReachedFromTheNav();
 await testLocalAccountCreateDoesNotSwitch();
@@ -11106,6 +11309,7 @@ await testPaletteOpensWithoutThreads();
 await testColumnFolds();
 await testSidebarSearchIconOpensThePalette();
 await testRowMenuHasTwoDoorsAndOneRoom();
+await testRowMenuRenamesAndExportsWithoutOpeningTheThread();
 await testPinnedThreadsLeadTheSidebar();
 await testProjectGroupingAndMoveAction();
 await testModesParseFailureNamesTheSkew();
