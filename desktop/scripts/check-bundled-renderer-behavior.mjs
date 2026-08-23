@@ -45,6 +45,7 @@ const RENDERER_MODULES = [
   "context-panel.js",
   "mind.js",
   "fence.js",
+  "i18n.js",
 ];
 const moduleSources = new Map(
   RENDERER_MODULES.map((name) => [name, fs.readFileSync(path.join(rendererDir, name), "utf8")]),
@@ -1158,6 +1159,12 @@ async function runRenderer(mockBridge, mockDesktopBridge, options = {}) {
   // by default, which is what "follow the system" looks like on the wire —
   // and what every other test in this file runs against.
   if (options.theme) document.documentElement.setAttribute("data-theme", options.theme);
+  // The shell resolves the language before the first byte reaches the page,
+  // so a test that wants Chinese sets what the shell would have written.
+  document.documentElement.lang = options.lang || "en";
+  if (options.languageChoice) {
+    document.documentElement.setAttribute("data-language", options.languageChoice);
+  }
   let uuidSequence = 0;
   const crypto = {
     randomUUID() {
@@ -1171,6 +1178,9 @@ async function runRenderer(mockBridge, mockDesktopBridge, options = {}) {
     Date,
     URL,
     document,
+    // setLanguage reloads after persisting; the stub records rather than
+    // navigates, so a test can assert the reload happened (or did not).
+    location: options.location || { reload() {} },
     setTimeout: (handler) => setImmediate(handler),
     clearTimeout: () => {},
     window: {
@@ -1240,6 +1250,172 @@ async function testMissingBridge() {
     /must run inside WorkMax Desktop/
   );
   assert.equal(document.byId.get("status-card").classList.contains("error"), true);
+}
+
+// Every translatable string the shipped markup carries must have a Chinese
+// entry. This is the gate that keeps the catalog from silently lagging the
+// interface: add copy to index.html without adding it to i18n.js and this
+// names the exact string. The extraction mirrors translatePage's own rules —
+// text nodes plus the three copy attributes, whitespace collapsed.
+async function testChineseCatalogCoversTheMarkup() {
+  const i18nSource = fs.readFileSync(path.join(rendererDir, "i18n.js"), "utf8");
+  const module = new vm.SourceTextModule(i18nSource, { context: vm.createContext({}) });
+  await module.link(() => { throw new Error("i18n.js must not import anything"); });
+  await module.evaluate();
+  const { hasTranslation } = module.namespace;
+
+  const html = rendererHTML.replace(/<!--[\s\S]*?-->/gu, "");
+  const wanted = new Set();
+  for (const match of html.matchAll(/(?:placeholder|title|aria-label)="([^"]+)"/gu)) {
+    const value = decodeEntities(match[1]).trim();
+    if (value && !value.startsWith("#")) wanted.add(value);
+  }
+  for (const match of html.matchAll(/>([^<>]+)</gu)) {
+    const value = decodeEntities(match[1]).trim().replace(/\s+/gu, " ");
+    // Numeric character references are glyphs (the settings gear ships as
+    // &#xFE0E;), not copy — their hex digits would otherwise pass the
+    // "contains letters" test below.
+    if (value.includes("&#")) continue;
+    if (value && /[A-Za-z]{2}/u.test(value)) wanted.add(value);
+  }
+  // Deliberately untranslated: literal example values a user might type, the
+  // product name, glyphs, and strings that are already their own translation.
+  const exempt = new Set([
+    "http://127.0.0.1:11434/v1",
+    "llama3.2",
+    "WorkMax Desktop",
+    "中文",
+    "English",
+  ]);
+  const missing = [...wanted].filter((text) => !exempt.has(text) && !hasTranslation(text));
+  assert.deepEqual(missing, [], "markup copy without a Chinese entry");
+}
+
+function decodeEntities(text) {
+  return text
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'");
+}
+
+// translatePage against the three shapes the markup actually holds: a leaf
+// element, MIXED content (an icon span beside a bare text node — the shape
+// that a children-only walk silently skips), and attribute copy.
+async function testTranslatePageHandlesTheThreeShapes() {
+  const body = new FakeElement("body");
+  const leaf = new FakeElement("h2");
+  leaf.textContent = "What should we make today?";
+  const mixed = new FakeElement("button");
+  const icon = new FakeElement("span");
+  icon.textContent = "+";
+  const words = { nodeType: 3, textContent: "\n            New chat\n          " };
+  mixed.children = [icon, words];
+  const field = new FakeElement("textarea");
+  field.setAttribute("placeholder", "Ask anything…");
+  field.setAttribute("aria-label", "Message WorkMax Agent");
+  body.children = [leaf, mixed, field];
+
+  const context = vm.createContext({
+    document: { documentElement: { lang: "zh" }, body },
+  });
+  const i18nSource = fs.readFileSync(path.join(rendererDir, "i18n.js"), "utf8");
+  const module = new vm.SourceTextModule(i18nSource, { context });
+  await module.link(() => { throw new Error("i18n.js must not import anything"); });
+  await module.evaluate();
+  module.namespace.translatePage();
+
+  assert.equal(leaf.textContent, "今天想做点什么？", "a leaf element's text translates");
+  assert.equal(words.textContent, "新对话", "the text node beside an icon translates — mixed content is the shape a children walk misses");
+  assert.equal(icon.textContent, "+", "glyphs pass through untouched");
+  assert.equal(field.getAttribute("placeholder"), "想问什么都可以…", "placeholder copy translates");
+  assert.equal(field.getAttribute("aria-label"), "发给 WorkMax Agent 的消息", "aria copy translates");
+
+  // And t() interpolates AFTER lookup, so the catalog owns the word order.
+  const { t } = module.namespace;
+  // A sentence no catalog entry claims, and none ever will. A real UI string
+  // here would turn into a failure about nothing the day it gets translated.
+  assert.equal(
+    t("no catalog entry claims this sentence", undefined),
+    "no catalog entry claims this sentence",
+    "an entry the catalog lacks stays English"
+  );
+  context.document.documentElement.lang = "en";
+  assert.equal(t("New chat"), "New chat", "an English window is untouched");
+}
+
+// The language control: three states, the persisted switch reloads, and a
+// failed persist does NOT reload — a reload without a stored preference would
+// come back in the old language and read as "the switch does nothing".
+async function testLanguageSwitchPersistsThenReloads() {
+  const putCalls = [];
+  let reloads = 0;
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn() { return { turnID: "unused" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+    settings: {
+      async putLanguage(choice) {
+        putCalls.push(choice);
+        return typedSuccess({
+          appearance: "system", density: "standard",
+          language: choice, resolved_language: choice === "system" ? "en" : choice,
+          updated_at: "2026-08-23T00:00:00Z",
+        });
+      },
+    },
+  };
+  const { document } = await runRenderer(undefined, desktopBridge, {
+    location: { reload() { reloads += 1; } },
+  });
+
+  // System is the default choice, and it is marked as such.
+  assert.equal(
+    document.byId.get("language-system").getAttribute("aria-pressed"),
+    "true",
+    "with no stored choice the control shows System",
+  );
+
+  document.byId.get("language-zh").click();
+  await settle();
+  assert.deepEqual(putCalls, ["zh"], "the choice is persisted through the typed bridge");
+  assert.equal(reloads, 1, "a persisted switch reloads into the new language");
+
+  // Clicking the state already chosen is a no-op, not a reload loop.
+  document.byId.get("language-zh").click();
+  await settle();
+  assert.deepEqual(putCalls, ["zh"], "re-choosing the same language asks nothing");
+  assert.equal(reloads, 1);
+}
+
+async function testLanguageSwitchFailureDoesNotReload() {
+  let reloads = 0;
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn() { return { turnID: "unused" }; },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+    settings: {
+      async putLanguage() { throw new Error("sidecar is away"); },
+    },
+  };
+  const { document } = await runRenderer(undefined, desktopBridge, {
+    location: { reload() { reloads += 1; } },
+  });
+  document.byId.get("language-zh").click();
+  await settle();
+  assert.equal(reloads, 0, "an unsaved switch must not reload into the old language");
+  assert.equal(
+    document.byId.get("language-system").getAttribute("aria-pressed"),
+    "true",
+    "the control falls back to the applied state rather than showing a lie",
+  );
 }
 
 // A conversation reopened days later still shows what the agent DID, not
@@ -10614,6 +10790,10 @@ await testCompletedTurnReconcilesInPlaceInsideTheWindow();
 await testFencesInvalidateOnBumpAndCascadeFromSession();
 await testDiffRowsSwitchRatherThanCollapse();
 await testNewestAnswerKeepsItsActionsVisible();
+await testChineseCatalogCoversTheMarkup();
+await testTranslatePageHandlesTheThreeShapes();
+await testLanguageSwitchPersistsThenReloads();
+await testLanguageSwitchFailureDoesNotReload();
 await testStoredWorkLogSurvivesReopen();
 await testAuthenticatedCacheRead();
 await testUnauthenticatedLogin();

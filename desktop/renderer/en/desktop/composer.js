@@ -7,6 +7,7 @@
 // inputs to or consequences of that decision; splitting them produces two
 // pieces of code that disagree about whether the send button is enabled.
 import { fences } from "./fence.js";
+import { t } from "./i18n.js";
 import {
   agentMode,
   attachButton,
@@ -71,7 +72,10 @@ import {
 // The name the form starts with, and the name a home send falls back to
 // when the prompt will not make a legal title. "Untitled presentation" was
 // a leftover from the PPT-only years: every major desktop agent just says
-// New chat and lets the first sentence rename the row.
+// New chat and lets the first sentence rename the row. A catalog key —
+// every use site wraps it in t(), because the name is data the sidecar
+// stores, and it should be stored in the language the window spoke when
+// the thread was born.
 const DEFAULT_NEW_THREAD_NAME = "New chat";
 
 function parseCreatedThread(value, expectedDraft, created) {
@@ -149,7 +153,7 @@ function parseCreateThreadData(value, status, expectedDraft) {
 export function uploadThreadFile(file) {
   const agent = desktopAgentBridge();
   if (!agent) {
-    setStatus("File upload unavailable", "error");
+    setStatus(t("File upload unavailable"), "error");
     return;
   }
   const threadUUID = state.selectedThreadUUID;
@@ -211,7 +215,7 @@ function startPendingFileUpload(agent, entry) {
 function retryPendingFileUpload(entry) {
   const agent = desktopAgentBridge();
   if (!agent) {
-    setStatus("File upload unavailable", "error");
+    setStatus(t("File upload unavailable"), "error");
     return;
   }
   if (!state.pendingFiles.includes(entry) || entry.status !== "error") return;
@@ -246,14 +250,14 @@ export function renderAttachments() {
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "attachment-chip-retry";
-      retry.textContent = "Retry";
+      retry.textContent = t("Retry");
       retry.addEventListener("click", () => {
         retryPendingFileUpload(file);
       });
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "attachment-chip-remove";
-      remove.textContent = "Remove";
+      remove.textContent = t("Remove");
       remove.addEventListener("click", () => {
         removePendingFile(file);
       });
@@ -287,7 +291,9 @@ export function removeRecoverableTurn(turnUUID) {
 function recoveryPromptPreview(value) {
   const characters = Array.from(value);
   const preview = characters.slice(0, 120).join("");
-  return `Prompt: ${preview}${characters.length > 120 ? "…" : ""}`;
+  return t("Prompt: {preview}", {
+    preview: `${preview}${characters.length > 120 ? "…" : ""}`,
+  });
 }
 
 export function updateRecoveryState() {
@@ -305,16 +311,16 @@ export function updateRecoveryState() {
   turnRecoveryDismissButton.disabled =
     !visible || busy || state.activeTurn !== null || state.recoveringSession;
   turnRecoveryResumeButton.textContent = state.resumingTurn
-    ? "Resuming..."
+    ? t("Resuming...")
     : state.recoveryLoading
-      ? "Checking..."
-      : "Resume";
+      ? t("Checking...")
+      : t("Resume");
   turnRecoveryDismissButton.textContent = state.dismissingRecovery
-    ? "Dismissing..."
-    : "Dismiss";
+    ? t("Dismissing...")
+    : t("Dismiss");
   turnRecoveryDescription.textContent = state.resumingTurn
-    ? "Retrying the interrupted request safely."
-    : "Retry this interrupted response using the same request.";
+    ? t("Retrying the interrupted request safely.")
+    : t("Retry this interrupted response using the same request.");
   turnRecoveryPrompt.textContent = recoverable
     ? recoveryPromptPreview(recoverable.user_text)
     : "";
@@ -404,46 +410,46 @@ export function updateComposerState() {
   }
 
   if (state.recoveringSession) {
-    composerStatus.textContent = "Your signed-in account changed. Select a thread again.";
+    composerStatus.textContent = t("Your signed-in account changed. Select a thread again.");
   } else if (!canSend) {
     // Not a locked door: everything else on screen already works. What is
     // missing is a model, and both ways of getting one are named.
     composerStatus.textContent = hasThread
-      ? "This conversation is yours and stays here. To send a prompt, connect a WorkMax account or set a local model under Models."
-      : "Browse and organize freely. To send a prompt, connect a WorkMax account or set a local model under Models.";
+      ? t("This conversation is yours and stays here. To send a prompt, connect a WorkMax account or set a local model under Models.")
+      : t("Browse and organize freely. To send a prompt, connect a WorkMax account or set a local model under Models.");
   } else if (!hasThread && ready) {
     // Home is ready to type. The chips already name the model; a second
     // sentence here was the old "select a thread" lobby talking over the box.
     composerStatus.textContent = "";
   } else if (!hasThread) {
     composerStatus.textContent = isLocalOnlySession()
-      ? "Starting a conversation keeps it on this machine."
+      ? t("Starting a conversation keeps it on this machine.")
       : "";
   } else if (!state.agentAvailable) {
-    composerStatus.textContent = "Agent streaming is unavailable in this Desktop build.";
+    composerStatus.textContent = t("Agent streaming is unavailable in this Desktop build.");
   } else if (state.skillsLoading) {
-    composerStatus.textContent = "Loading available skills...";
+    composerStatus.textContent = t("Loading available skills...");
   } else if (state.recoveryLoading) {
-    composerStatus.textContent = "Checking interrupted responses...";
+    composerStatus.textContent = t("Checking interrupted responses...");
   } else if (!hasMode) {
-    composerStatus.textContent = "No Desktop skill is currently available.";
+    composerStatus.textContent = t("No Desktop skill is currently available.");
   } else if (recoverable) {
     composerStatus.textContent = state.resumingTurn
-      ? "Resuming the interrupted response..."
-      : "Resume or dismiss the interrupted response before sending another prompt.";
+      ? t("Resuming the interrupted response...")
+      : t("Resume or dismiss the interrupted response before sending another prompt.");
   } else if (cancelConfirmationPending) {
-    composerStatus.textContent = "Confirming persistent cancellation...";
+    composerStatus.textContent = t("Confirming persistent cancellation...");
   } else if (active) {
     composerStatus.textContent = state.activeTurn.stopRequested
-      ? "Stopping this turn..."
-      : "WorkMax Agent is responding...";
+      ? t("Stopping this turn...")
+      : t("WorkMax Agent is responding...");
   } else if (isLocalOnlySession() && !state.toolLoop) {
     // The one ready-state sentence that is not furniture: the local route
     // falls back to chat without saying so at the dispatch, so the composer
     // has to. Tools-on and cloud say nothing — the chips already named them.
-    composerStatus.textContent = "Chat only — this local route has no tools.";
+    composerStatus.textContent = t("Chat only — this local route has no tools.");
   } else if (state.skillsDegraded) {
-    composerStatus.textContent = "Live skill details are offline.";
+    composerStatus.textContent = t("Live skill details are offline.");
   } else {
     composerStatus.textContent = "";
   }
@@ -518,6 +524,11 @@ export function canOpenNewThread() {
 // years when the only skill was a slide deck. Clicking one plants the
 // words in the home composer; sending is still the user's decision, the
 // way every major agent client treats a suggestion chip.
+//
+// Both halves are catalog keys, translated at render time — the prompt too,
+// even though it is MODEL INPUT, not chrome: the system prompt says to reply
+// in the language the user writes in, so a zh window planting a zh prompt is
+// what makes the answer come back in the window's language.
 const STARTER_PROMPTS = [
   {
     title: "Review what I have",
@@ -544,15 +555,15 @@ export function buildStarterCards() {
     // accent — one blue, one violet, one green — said nothing about the three
     // prompts and everything about a template. The prompt is the card.
     const title = document.createElement("strong");
-    title.textContent = starter.title;
+    title.textContent = t(starter.title);
     const preview = document.createElement("span");
     preview.className = "starter-preview";
-    preview.textContent = starter.prompt;
+    preview.textContent = t(starter.prompt);
     card.append(title, preview);
     card.addEventListener("click", () => {
       showHome();
-      chatInput.value = starter.prompt;
-      state.homeDraft = starter.prompt;
+      chatInput.value = t(starter.prompt);
+      state.homeDraft = t(starter.prompt);
       updateComposerState();
       if (!chatInput.disabled) chatInput.focus();
     });
@@ -571,11 +582,11 @@ export function renderEmptyState() {
     const account = activeLocalAccount();
     emptyTitle.textContent =
       account && account.name !== defaultLocalAccountLabel
-        ? "You're working as " + account.name
-        : "You're working on this machine";
+        ? t("You're working as {name}", { name: account.name })
+        : t("You're working on this machine");
     emptyDescription.hidden = false;
     emptyDescription.textContent =
-      "Your conversations and files are already here and already yours. One thing left: where should the model run?";
+      t("Your conversations and files are already here and already yours. One thing left: where should the model run?");
   } else {
     // One question, Codex-style: the app is usable, so the headline invites
     // work instead of describing machinery. The identity joins the question
@@ -584,8 +595,8 @@ export function renderEmptyState() {
     const account = isLocalOnlySession() ? activeLocalAccount() : null;
     emptyTitle.textContent =
       account && account.name !== defaultLocalAccountLabel
-        ? "What should we make, " + account.name + "?"
-        : "What should we make today?";
+        ? t("What should we make, {name}?", { name: account.name })
+        : t("What should we make today?");
     // The composer under the greeting is the next sentence. A subtitle that
     // says "pick a conversation or start fresh" is the lobby talking over it.
     // Keep a line only when there is no create path — then the box cannot
@@ -593,7 +604,7 @@ export function renderEmptyState() {
     if (state.threads.length === 0 && !state.createAvailable) {
       emptyDescription.hidden = false;
       emptyDescription.textContent =
-        "This Desktop build can continue existing threads after they appear in local history.";
+        t("This Desktop build can continue existing threads after they appear in local history.");
     } else {
       emptyDescription.hidden = true;
       emptyDescription.textContent = "";
@@ -636,22 +647,22 @@ function classifyCreateThreadFailure(result) {
   const code = createFailureCode(result.error);
   if (result.status === 401 || code === "authentication_required") {
     return new ThreadCreateFailure(
-      "Authentication is required. Cancel this draft, then sign in again.",
-      "Authentication is required before creating a thread.",
+      t("Authentication is required. Cancel this draft, then sign in again."),
+      t("Authentication is required before creating a thread."),
       false
     );
   }
   if (code === "thread_uuid_conflict") {
     return new ThreadCreateFailure(
-      "This thread identity is already owned elsewhere. Cancel and start a new draft.",
-      "The generated thread identity cannot be used.",
+      t("This thread identity is already owned elsewhere. Cancel and start a new draft."),
+      t("The generated thread identity cannot be used."),
       false
     );
   }
   if (code === "local_identity_conflict") {
     return new ThreadCreateFailure(
-      "Local history has an identity conflict. Cancel this draft before refreshing.",
-      "Local history could not safely accept this thread.",
+      t("Local history has an identity conflict. Cancel this draft before refreshing."),
+      t("Local history could not safely accept this thread."),
       false
     );
   }
@@ -662,14 +673,14 @@ function classifyCreateThreadFailure(result) {
     result.error.retry_with_same_uuid === true
   ) {
     return new ThreadCreateFailure(
-      "This thread could not be completed. Retry keeps the same identity.",
-      "The presentation thread could not be completed.",
+      t("This thread could not be completed. Retry keeps the same identity."),
+      t("The presentation thread could not be completed."),
       true
     );
   }
   return new ThreadCreateFailure(
-    "Thread creation was rejected. Cancel this draft before continuing.",
-    "The presentation thread cannot be retried.",
+    t("Thread creation was rejected. Cancel this draft before continuing."),
+    t("The presentation thread cannot be retried."),
     false
   );
 }
@@ -703,8 +714,8 @@ export function updateNewThreadState() {
   // inside it, and says so on the status line — but the guard no longer has
   // a button to grey out.
   newThreadButton.title = state.createAvailable
-    ? "New chat"
-    : "Thread creation is unavailable in this Desktop build";
+    ? t("New chat")
+    : t("Thread creation is unavailable in this Desktop build");
   newThreadForm.hidden = !state.createFormOpen;
   newThreadForm.setAttribute("aria-busy", String(state.creatingThread));
   newThreadName.disabled = state.creatingThread || attempted;
@@ -712,14 +723,14 @@ export function updateNewThreadState() {
   newThreadSubmitButton.disabled = !canSubmit;
   newThreadCancelButton.disabled = false;
   newThreadSubmitButton.textContent = state.creatingThread
-    ? "Creating..."
+    ? t("Creating...")
     : pending
-      ? "Retry sync"
+      ? t("Retry sync")
       : attempted && retryable
-        ? "Retry"
+        ? t("Retry")
         : attempted
-          ? "Cannot retry"
-        : "Create";
+          ? t("Cannot retry")
+        : t("Create");
   renderEmptyState();
 }
 
@@ -728,14 +739,14 @@ export function updateNewThreadState() {
 // row from what you typed, not from a form you filled first.
 export function titleFromPrompt(text) {
   const line = String(text || "").split(/\r?\n/)[0].trim().replace(/\s+/g, " ");
-  if (!line) return DEFAULT_NEW_THREAD_NAME;
+  if (!line) return t(DEFAULT_NEW_THREAD_NAME);
   if (isValidThreadName(line)) return line;
   let cut = line;
   while (cut && utf8ByteLength(cut) > MAX_THREAD_NAME_BYTES) {
     cut = cut.slice(0, -1);
   }
   cut = cut.trim();
-  return isValidThreadName(cut) ? cut : DEFAULT_NEW_THREAD_NAME;
+  return isValidThreadName(cut) ? cut : t(DEFAULT_NEW_THREAD_NAME);
 }
 
 // Leave the open conversation and put the composer on the home screen.
@@ -752,8 +763,8 @@ export function showHome() {
       const retryable = state.createDraft.retryable === true;
       setStatus(
         retryable
-          ? "Retry or cancel the current thread draft before switching."
-          : "Cancel the current thread draft before switching.",
+          ? t("Retry or cancel the current thread draft before switching.")
+          : t("Cancel the current thread draft before switching."),
         "error"
       );
       (retryable ? newThreadSubmitButton : newThreadCancelButton).focus();
@@ -804,7 +815,7 @@ export function openNewThreadForm() {
   try {
     threadUUID = generateThreadUUID();
   } catch {
-    setStatus("Secure thread identity generation is unavailable.", "error");
+    setStatus(t("Secure thread identity generation is unavailable."), "error");
     updateNewThreadState();
     return;
   }
@@ -815,7 +826,7 @@ export function openNewThreadForm() {
   state.createFormOpen = true;
   state.createDraft = {
     threadUUID,
-    name: DEFAULT_NEW_THREAD_NAME,
+    name: t(DEFAULT_NEW_THREAD_NAME),
     agentMode: mode,
     attempted: false,
     pending: false,
@@ -839,11 +850,11 @@ export function cancelNewThreadDraft(restoreFocus = true) {
   state.createFormOpen = false;
   state.creatingThread = false;
   state.createDraft = null;
-  newThreadName.value = DEFAULT_NEW_THREAD_NAME;
+  newThreadName.value = t(DEFAULT_NEW_THREAD_NAME);
   setCreateFeedback("");
   updateComposerState();
   if (!restoreFocus) return;
-  setStatus(wasAttempted ? "Thread creation canceled. A late result will be ignored." : "New chat canceled.");
+  setStatus(wasAttempted ? t("Thread creation canceled. A late result will be ignored.") : t("New chat canceled."));
   if (state.selectedThreadUUID && !chatInput.disabled) {
     chatInput.focus();
   } else {
@@ -883,7 +894,7 @@ export async function submitNewThread(event) {
     state.activeTurn ||
     state.recoveringSession
   ) {
-    setCreateFeedback("Enter a valid name and choose an available skill.");
+    setCreateFeedback(t("Enter a valid name and choose an available skill."));
     updateNewThreadState();
     return;
   }
@@ -923,14 +934,14 @@ export async function createThreadForHomeSend(userText) {
   try {
     threadUUID = generateThreadUUID();
   } catch {
-    setStatus("Secure thread identity generation is unavailable.", "error");
+    setStatus(t("Secure thread identity generation is unavailable."), "error");
     return false;
   }
   const mode = state.allowedModes.includes(state.selectedMode)
     ? state.selectedMode
     : state.allowedModes[0];
   if (!mode || !state.allowedModes.includes(mode)) {
-    setStatus("No Desktop skill is currently available.", "error");
+    setStatus(t("No Desktop skill is currently available."), "error");
     return false;
   }
   fences.create.bump();
@@ -964,7 +975,7 @@ async function executeCreateDraft({ skipLoad = false, revealFormOnFailure = fals
   };
   state.creatingThread = true;
   setCreateFeedback("");
-  setStatus("Starting a conversation...");
+  setStatus(t("Starting a conversation..."));
   updateComposerState();
 
   try {
@@ -989,16 +1000,16 @@ async function executeCreateDraft({ skipLoad = false, revealFormOnFailure = fals
       };
       if (revealFormOnFailure) state.createFormOpen = true;
       setCreateFeedback(
-        "The cloud thread is ready. Retry sync with the same identity, or cancel this draft.",
+        t("The cloud thread is ready. Retry sync with the same identity, or cancel this draft."),
         "pending"
       );
-      setStatus("Thread created. Local history is still syncing.");
+      setStatus(t("Thread created. Local history is still syncing."));
       return false;
     }
     if (data.thread.cloud_sync_state === "paused") {
       throw new ThreadCreateFailure(
-        "This existing thread is paused and cannot be continued here. Cancel this draft before continuing.",
-        "The existing conversation is paused.",
+        t("This existing thread is paused and cannot be continued here. Cancel this draft before continuing."),
+        t("The existing conversation is paused."),
         false
       );
     }
@@ -1019,7 +1030,7 @@ async function executeCreateDraft({ skipLoad = false, revealFormOnFailure = fals
     }
     if (!skipLoad) chatInput.focus();
     updateComposerState();
-    setStatus(data.created ? "Thread created. Ready for the first prompt." : "Thread recovered. Ready for the first prompt.");
+    setStatus(data.created ? t("Thread created. Ready for the first prompt.") : t("Thread recovered. Ready for the first prompt."));
     return true;
   } catch (error) {
     if (error instanceof SessionChangedError) {
@@ -1030,8 +1041,8 @@ async function executeCreateDraft({ skipLoad = false, revealFormOnFailure = fals
     const failure = error instanceof ThreadCreateFailure
       ? error
       : new ThreadCreateFailure(
-          "This thread could not be completed. Retry keeps the same identity, or cancel this draft.",
-          "The conversation could not be started.",
+          t("This thread could not be completed. Retry keeps the same identity, or cancel this draft."),
+          t("The conversation could not be started."),
           true
         );
     state.createDraft = {
@@ -1070,7 +1081,7 @@ export function attachDroppedFiles(files) {
 
 function titleFromAttachment(file) {
   const raw = String(file?.name || "").trim();
-  if (!raw) return DEFAULT_NEW_THREAD_NAME;
+  if (!raw) return t(DEFAULT_NEW_THREAD_NAME);
   const dot = raw.lastIndexOf(".");
   const base = dot > 0 ? raw.slice(0, dot) : raw;
   return titleFromPrompt(base || raw);

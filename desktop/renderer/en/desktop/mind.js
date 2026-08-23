@@ -46,6 +46,7 @@ import {
   mindSkillsValue,
   mindSubtitle,
 } from "./dom.js";
+import { t } from "./i18n.js";
 import { isRecord, parseDesktopBridgeResult, sanitizeErrorMessage } from "./protocol.js";
 import { renderMindChip, state } from "./renderer.js";
 
@@ -163,7 +164,7 @@ export async function loadMindRoster() {
   if (!bridge) {
     // A shell too old to carry the mind routes is a build fact, not a user
     // error — said inside the panel that cannot work, not on the status strip.
-    setMindRosterError("Minds need a newer Desktop shell.");
+    setMindRosterError(t("Minds need a newer Desktop shell."));
     return;
   }
   mindState.loading = true;
@@ -176,7 +177,7 @@ export async function loadMindRoster() {
     setMindRosterError("");
   } catch (error) {
     mindState.minds = [];
-    setMindRosterError(sanitizeErrorMessage(String(error.message || error)) || "Minds could not be loaded.");
+    setMindRosterError(sanitizeErrorMessage(String(error.message || error)) || t("Minds could not be loaded."));
   } finally {
     mindState.loading = false;
   }
@@ -221,7 +222,7 @@ export async function selectMind(id) {
     mindState.activeID = id;
     setMindRosterError("");
   } catch (error) {
-    setMindRosterError(sanitizeErrorMessage(String(error.message || error)) || "Could not switch mind.");
+    setMindRosterError(sanitizeErrorMessage(String(error.message || error)) || t("Could not switch mind."));
     return;
   }
   await loadMinds();
@@ -233,7 +234,7 @@ export async function submitCreateMind(event) {
   if (!bridge || !mindCreateName) return;
   const name = mindCreateName.value.trim();
   if (name === "") {
-    setMindRosterError("A mind needs a name.");
+    setMindRosterError(t("A mind needs a name."));
     return;
   }
   if (mindCreateButton) mindCreateButton.disabled = true;
@@ -243,7 +244,7 @@ export async function submitCreateMind(event) {
     mindCreateName.value = "";
     setMindRosterError("");
   } catch (error) {
-    setMindRosterError(sanitizeErrorMessage(String(error.message || error)) || "Could not create this mind.");
+    setMindRosterError(sanitizeErrorMessage(String(error.message || error)) || t("Could not create this mind."));
   } finally {
     if (mindCreateButton) mindCreateButton.disabled = false;
   }
@@ -295,7 +296,7 @@ function setMindEditNote(text) {
 function disarmMindDelete() {
   if (!mindEditDelete) return;
   mindEditDelete.classList.remove("armed");
-  mindEditDelete.textContent = "Delete";
+  mindEditDelete.textContent = t("Delete");
 }
 
 export async function submitEditMind(event) {
@@ -323,7 +324,7 @@ export async function submitEditMind(event) {
     closeMindEditor();
     setMindRosterError("");
   } catch (error) {
-    setMindEditNote(sanitizeErrorMessage(String(error.message || error)) || "Could not save this mind.");
+    setMindEditNote(sanitizeErrorMessage(String(error.message || error)) || t("Could not save this mind."));
   } finally {
     if (mindEditSave) mindEditSave.disabled = false;
   }
@@ -340,8 +341,8 @@ export async function submitDeleteMind() {
   if (!bridge || !id || !mindEditDelete) return;
   if (!mindEditDelete.classList.contains("armed")) {
     mindEditDelete.classList.add("armed");
-    mindEditDelete.textContent = "Delete for good";
-    setMindEditNote("This also erases everything this mind was taught.");
+    mindEditDelete.textContent = t("Delete for good");
+    setMindEditNote(t("This also erases everything this mind was taught."));
     return;
   }
   mindEditDelete.disabled = true;
@@ -351,7 +352,7 @@ export async function submitDeleteMind() {
     closeMindEditor();
     setMindRosterError("");
   } catch (error) {
-    setMindEditNote(sanitizeErrorMessage(String(error.message || error)) || "Could not delete this mind.");
+    setMindEditNote(sanitizeErrorMessage(String(error.message || error)) || t("Could not delete this mind."));
     disarmMindDelete();
   } finally {
     mindEditDelete.disabled = false;
@@ -370,12 +371,12 @@ export async function submitFeedMind(event) {
   const title = mindFeedTitle.value.trim();
   const text = mindFeedText.value.trim();
   if (title === "" || text === "") {
-    setMindFeedError("Both a title and some material are needed.");
+    setMindFeedError(t("Both a title and some material are needed."));
     return;
   }
   mindState.feeding = true;
   setMindFeedError("");
-  setMindFeedStatus("Teaching…");
+  setMindFeedStatus(t("Teaching…"));
   if (mindFeedButton) mindFeedButton.disabled = true;
   try {
     const result = parseDesktopBridgeResult(await bridge.feed(mind.id, { title, text }), "mind.feed");
@@ -383,13 +384,18 @@ export async function submitFeedMind(event) {
     const chunks = result.data?.chunks ?? 0;
     mindFeedTitle.value = "";
     mindFeedText.value = "";
-    setMindFeedStatus(`Learned "${title}" as ${chunks} ${chunks === 1 ? "passage" : "passages"}.`);
+    setMindFeedStatus(
+      t('Learned "{title}" as {passages}.', {
+        title,
+        passages: countLabel(chunks, "passage", "passages"),
+      })
+    );
     // The one place the icon's motion is earned by something other than the
     // model: the memory genuinely just grew.
     noteMindActivity("learning");
   } catch (error) {
     setMindFeedStatus("");
-    setMindFeedError(sanitizeErrorMessage(String(error.message || error)) || "This material could not be taught.");
+    setMindFeedError(sanitizeErrorMessage(String(error.message || error)) || t("This material could not be taught."));
   } finally {
     mindState.feeding = false;
     if (mindFeedButton) mindFeedButton.disabled = false;
@@ -397,8 +403,10 @@ export async function submitFeedMind(event) {
   await loadMindStatus();
 }
 
+// The count and its noun. Both nouns are catalog keys — Chinese has one
+// form, so the plural branch simply resolves to the same entry.
 function countLabel(count, singular, plural) {
-  return `${count} ${count === 1 ? singular : plural}`;
+  return t("{n} {noun}", { n: count, noun: t(count === 1 ? singular : plural) });
 }
 
 function renderMindRoster() {
@@ -444,8 +452,8 @@ function renderMindRoster() {
     const edit = document.createElement("button");
     edit.type = "button";
     edit.className = "mind-roster-edit reveal-on-hover";
-    edit.textContent = "Edit";
-    edit.setAttribute("aria-label", `Edit ${mind.name}`);
+    edit.textContent = t("Edit");
+    edit.setAttribute("aria-label", t("Edit {name}", { name: mind.name }));
     edit.addEventListener("click", () => openMindEditor(mind.id));
     row.appendChild(edit);
     row.className = "mind-roster-row reveal-on-hover-host";
@@ -490,8 +498,8 @@ export function renderMindPanel() {
   // apart — and this line goes back to saying what the panel is.
   if (mindSubtitle) {
     mindSubtitle.textContent = mind
-      ? "What this identity thinks with, and what it has been taught."
-      : "No mind is available on this identity yet.";
+      ? t("What this identity thinks with, and what it has been taught.")
+      : t("No mind is available on this identity yet.");
   }
   if (mindAnatomyMeta) {
     mindAnatomyMeta.textContent = mind ? mind.name : "";
@@ -509,9 +517,9 @@ export function renderMindPanel() {
     if (!status) {
       mindBrainNote.textContent = "";
     } else if (status.model.source === "mind") {
-      mindBrainNote.textContent = `Chosen for this mind · ${status.model.route} route`;
+      mindBrainNote.textContent = t("Chosen for this mind · {route} route", { route: status.model.route });
     } else {
-      mindBrainNote.textContent = `From your account · ${status.model.route} route`;
+      mindBrainNote.textContent = t("From your account · {route} route", { route: status.model.route });
     }
   }
 
@@ -524,7 +532,7 @@ export function renderMindPanel() {
   }
   if (mindSkillsNote) {
     mindSkillsNote.textContent =
-      skillCount > 0 ? "Practised through this workspace's skills" : "No skills are available yet";
+      skillCount > 0 ? t("Practised through this workspace's skills") : t("No skills are available yet");
   }
 
   // The memory: the chunk count is the store's own, and the retrieval line
@@ -538,9 +546,9 @@ export function renderMindPanel() {
       mindMemoryNote.textContent = "";
     } else if (status.retrieval === "local") {
       mindMemoryNote.textContent =
-        chunks === 0 ? "Nothing taught yet · recalled on this machine" : "Recalled on this machine";
+        chunks === 0 ? t("Nothing taught yet · recalled on this machine") : t("Recalled on this machine");
     } else {
-      mindMemoryNote.textContent = "Local recall is unavailable on this build";
+      mindMemoryNote.textContent = t("Local recall is unavailable on this build");
     }
   }
 

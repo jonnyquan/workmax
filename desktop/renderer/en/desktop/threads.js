@@ -8,6 +8,7 @@
 // list is already in memory); message bodies live in SQLite, so those come
 // from the sidecar behind a debounce and a fence.
 import { fences } from "./fence.js";
+import { currentLocale, t } from "./i18n.js";
 import {
   emptyState,
   messageList,
@@ -61,17 +62,20 @@ export function relativeTime(value) {
   const then = new Date(value).getTime();
   if (Number.isNaN(then)) return "";
   const minutes = Math.floor((Date.now() - then) / 60000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1) return t("now");
+  if (minutes < 60) return t("{n}m", { n: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
+  if (hours < 24) return t("{n}h", { n: hours });
   const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d`;
+  if (days < 7) return t("{n}d", { n: days });
   const date = new Date(then);
   const sameYear = date.getFullYear() === new Date().getFullYear();
+  // The window's language, not the OS's: a zh window on an en machine (or the
+  // reverse) should date its rows in the language the rest of the row speaks.
+  const dateLocale = currentLocale() === "zh" ? "zh-CN" : "en-US";
   return sameYear
-    ? date.toLocaleDateString([], { month: "short", day: "numeric" })
-    : date.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+    ? date.toLocaleDateString(dateLocale, { month: "short", day: "numeric" })
+    : date.toLocaleDateString(dateLocale, { year: "numeric", month: "short", day: "numeric" });
 }
 
 export function localCalendarDay(date) {
@@ -141,7 +145,7 @@ export function groupThreads(threads, now) {
 // — the threads that happen to be open — which is worse than not offering it.
 function threadMatchesQuery(thread, query) {
   if (!query) return true;
-  return (thread.name || "Untitled thread").toLowerCase().includes(query);
+  return (thread.name || t("Untitled thread")).toLowerCase().includes(query);
 }
 
 async function toggleThreadPin(thread) {
@@ -155,7 +159,7 @@ async function toggleThreadPin(thread) {
     );
     if (!result.ok) {
       const raw = isRecord(result.error) ? result.error.error : result.error;
-      throw new Error(sanitizeErrorMessage(raw) || "Could not update the pin");
+      throw new Error(sanitizeErrorMessage(raw) || t("Could not update the pin"));
     }
   } catch (error) {
     setStatus(String(error.message || error), "error");
@@ -185,7 +189,7 @@ async function commitThreadProject(thread, projectKey) {
     );
     if (!result.ok) {
       const raw = isRecord(result.error) ? result.error.error : result.error;
-      throw new Error(sanitizeErrorMessage(raw) || "Could not set the project");
+      throw new Error(sanitizeErrorMessage(raw) || t("Could not set the project"));
     }
   } catch (error) {
     setStatus(String(error.message || error), "error");
@@ -208,10 +212,10 @@ function openProjectEditor(thread, item) {
   input.type = "text";
   input.className = "thread-project-input";
   input.value = thread.project || "";
-  input.setAttribute("placeholder", "Project name");
+  input.setAttribute("placeholder", t("Project name"));
   input.setAttribute(
     "aria-label",
-    `Project for ${thread.name || "Untitled thread"}`
+    t("Project for {name}", { name: thread.name || t("Untitled thread") })
   );
   // A flag, not a DOM probe: blur fires again when the editor is torn down
   // (Enter or Escape), and without it the second blur would double-commit or
@@ -275,8 +279,8 @@ async function toggleThreadCloudSync(thread) {
       const raw = isRecord(result.error) ? result.error.error : result.error;
       throw new Error(
         raw === "thread_not_synced"
-          ? "That conversation has never left this machine."
-          : sanitizeErrorMessage(raw) || "Could not change the sync setting"
+          ? t("That conversation has never left this machine.")
+          : sanitizeErrorMessage(raw) || t("Could not change the sync setting")
       );
     }
   } catch (error) {
@@ -285,8 +289,8 @@ async function toggleThreadCloudSync(thread) {
   }
   setStatus(
     next === "paused"
-      ? "Kept on this machine. Existing cloud copies are untouched."
-      : "Syncing to WorkMax again."
+      ? t("Kept on this machine. Existing cloud copies are untouched.")
+      : t("Syncing to WorkMax again.")
   );
   // Reload rather than patch: the sidecar owns cloud_sync_state, and the
   // sidebar should show what it would answer.
@@ -313,14 +317,14 @@ async function deleteThread(thread) {
       const code = isRecord(result.error) ? result.error.error : "";
       setStatus(
         code === "thread_busy"
-          ? "That conversation still has a response in flight. Stop it first."
-          : "Could not delete the conversation.",
+          ? t("That conversation still has a response in flight. Stop it first.")
+          : t("Could not delete the conversation."),
         "error"
       );
       return;
     }
   } catch {
-    setStatus("Could not delete the conversation.", "error");
+    setStatus(t("Could not delete the conversation."), "error");
     return;
   }
   state.threads = state.threads.filter((t) => t.uuid !== thread.uuid);
@@ -339,7 +343,7 @@ async function deleteThread(thread) {
   renderThreads();
   renderTaskContext();
   updateComposerState();
-  setStatus("Conversation deleted from this machine.");
+  setStatus(t("Conversation deleted from this machine."));
 }
 
 function renderThreadButton(thread, inProject = false) {
@@ -355,11 +359,11 @@ function renderThreadButton(thread, inProject = false) {
   button.className = "thread-button";
   button.classList.toggle("active", thread.uuid === state.selectedThreadUUID);
   const title = document.createElement("strong");
-  title.textContent = thread.name || "Untitled thread";
+  title.textContent = thread.name || t("Untitled thread");
   // One line per conversation: the title, and a short relative time at the
   // right end — visible, not behind a tooltip, the way Codex places it. The
   // tooltip keeps the full sentence for when the short form is not enough.
-  title.title = `${formatMessageTime(thread.updated_at) || formatDate(thread.updated_at)} · ${thread.message_count || 0} messages`;
+  title.title = `${formatMessageTime(thread.updated_at) || formatDate(thread.updated_at)} · ${t("{n} messages", { n: thread.message_count || 0 })}`;
   const when = document.createElement("span");
   when.className = "thread-when";
   when.textContent = relativeTime(thread.updated_at);
@@ -367,7 +371,7 @@ function renderThreadButton(thread, inProject = false) {
   if (state.recoverableTurns.some((turn) => turn.thread_uuid === thread.uuid)) {
     const badge = document.createElement("span");
     badge.className = "thread-recovery-badge";
-    badge.textContent = "Interrupted";
+    badge.textContent = t("Interrupted");
     button.appendChild(badge);
   }
   button.addEventListener("click", () => {
@@ -378,10 +382,12 @@ function renderThreadButton(thread, inProject = false) {
   pin.type = "button";
   pin.className = "thread-pin reveal-on-hover";
   pin.classList.toggle("pinned", thread.pinned === true);
-  pin.textContent = thread.pinned ? "Unpin" : "Pin";
+  pin.textContent = thread.pinned ? t("Unpin") : t("Pin");
   pin.setAttribute(
     "aria-label",
-    (thread.pinned ? "Unpin " : "Pin ") + (thread.name || "Untitled thread")
+    t(thread.pinned ? "Unpin {name}" : "Pin {name}", {
+      name: thread.name || t("Untitled thread"),
+    })
   );
   pin.addEventListener("click", () => {
     pin.disabled = true;
@@ -394,10 +400,10 @@ function renderThreadButton(thread, inProject = false) {
     const project = document.createElement("button");
     project.type = "button";
     project.className = "thread-project reveal-on-hover";
-    project.textContent = "Project";
+    project.textContent = t("Project");
     project.setAttribute(
       "aria-label",
-      `Set project for ${thread.name || "Untitled thread"}`
+      t("Set project for {name}", { name: thread.name || t("Untitled thread") })
     );
     project.addEventListener("click", () => {
       openProjectEditor(thread, item);
@@ -410,11 +416,12 @@ function renderThreadButton(thread, inProject = false) {
     sync.type = "button";
     sync.className = "thread-sync reveal-on-hover";
     sync.classList.toggle("paused", paused);
-    sync.textContent = paused ? "Local only" : "Syncing";
+    sync.textContent = paused ? t("Local only") : t("Syncing");
     sync.setAttribute(
       "aria-label",
-      (paused ? "Resume syncing " : "Stop syncing ") +
-        (thread.name || "Untitled thread")
+      t(paused ? "Resume syncing {name}" : "Stop syncing {name}", {
+        name: thread.name || t("Untitled thread"),
+      })
     );
     sync.addEventListener("click", () => {
       sync.disabled = true;
@@ -429,15 +436,18 @@ function renderThreadButton(thread, inProject = false) {
     const del = document.createElement("button");
     del.type = "button";
     del.className = "thread-delete reveal-on-hover";
-    del.textContent = "Delete";
-    del.setAttribute("aria-label", `Delete ${thread.name || "Untitled thread"}`);
+    del.textContent = t("Delete");
+    del.setAttribute(
+      "aria-label",
+      t("Delete {name}", { name: thread.name || t("Untitled thread") })
+    );
     del.addEventListener("click", () => {
       if (!del.classList.contains("armed")) {
         del.classList.add("armed", "revealed");
-        del.textContent = "Confirm";
+        del.textContent = t("Confirm");
         setTimeout(() => {
           del.classList.remove("armed", "revealed");
-          del.textContent = "Delete";
+          del.textContent = t("Delete");
         }, DELETE_ARM_MS);
         return;
       }
@@ -481,7 +491,7 @@ export function renderThreads() {
   threadList.textContent = "";
   if (state.threads.length === 0) {
     const item = document.createElement("li");
-    item.appendChild(renderNotice("No cached threads yet."));
+    item.appendChild(renderNotice(t("No cached threads yet.")));
     threadList.appendChild(item);
     renderEmptyState();
     return;
@@ -492,7 +502,7 @@ export function renderThreads() {
   if (groups.pinned.length > 0) {
     const heading = document.createElement("li");
     heading.className = "thread-group";
-    heading.textContent = PINNED_GROUP_LABEL;
+    heading.textContent = t(PINNED_GROUP_LABEL);
     threadList.appendChild(heading);
     for (const thread of groups.pinned) {
       threadList.appendChild(renderThreadButton(thread));
@@ -539,7 +549,7 @@ export function renderThreads() {
     if (bucket.length === 0) continue;
     const heading = document.createElement("li");
     heading.className = "thread-group";
-    heading.textContent = group.label;
+    heading.textContent = t(group.label);
     threadList.appendChild(heading);
     for (const thread of bucket) {
       threadList.appendChild(renderThreadButton(thread));
@@ -577,31 +587,31 @@ function quickSwitcherCommands(query) {
   if (canOpenNewThread() || (state.selectedThreadUUID && canSendTurn())) {
     commands.push({
       kind: "command",
-      label: "New chat",
-      hint: "Start a conversation",
+      label: t("New chat"),
+      hint: t("Start a conversation"),
       run: () => handleNewChat(),
     });
   }
   if (current) {
     commands.push({
       kind: "command",
-      label: current.pinned ? "Unpin this conversation" : "Pin this conversation",
-      hint: current.name || "Untitled thread",
+      label: current.pinned ? t("Unpin this conversation") : t("Pin this conversation"),
+      hint: current.name || t("Untitled thread"),
       run: () => void toggleThreadPin(current),
     });
     if ((current.message_count || 0) > 0 && typeof agent?.exportThread === "function") {
       commands.push({
         kind: "command",
-        label: "Export as Markdown",
-        hint: current.name || "Untitled thread",
+        label: t("Export as Markdown"),
+        hint: current.name || t("Untitled thread"),
         run: () => void exportSelectedThread(),
       });
     }
   }
   commands.push({
     kind: "command",
-    label: "Open model settings",
-    hint: "Local route, protocol, API key",
+    label: t("Open model settings"),
+    hint: t("Local route, protocol, API key"),
     run: () => void openModelSettings(),
   });
   // Appearance. Three named entries rather than one cycling toggle: a toggle
@@ -612,8 +622,8 @@ function quickSwitcherCommands(query) {
   for (const choice of THEME_CHOICES) {
     commands.push({
       kind: "command",
-      label: `Appearance: ${THEME_LABELS[choice]}`,
-      hint: choice === themeChoice ? "Current" : THEME_HINTS[choice],
+      label: t("Appearance: {label}", { label: t(THEME_LABELS[choice]) }),
+      hint: choice === themeChoice ? t("Current") : t(THEME_HINTS[choice]),
       run: () => setTheme(choice),
     });
   }
@@ -644,6 +654,7 @@ function quickSwitcherCandidates() {
 }
 
 const QUICK_SWITCHER_HEADINGS = { command: "Actions", match: "In messages" };
+// Values above are catalog keys; translated at render time (renderQuickSwitcher).
 
 export function renderQuickSwitcher() {
   if (!quickSwitcherList) return;
@@ -653,7 +664,7 @@ export function renderQuickSwitcher() {
   if (candidates.length === 0) {
     const empty = document.createElement("li");
     empty.className = "quick-switcher-empty";
-    empty.textContent = "Nothing matches.";
+    empty.textContent = t("Nothing matches.");
     quickSwitcherList.appendChild(empty);
     return;
   }
@@ -664,7 +675,7 @@ export function renderQuickSwitcher() {
       headingShown = candidate.kind;
       const label = document.createElement("li");
       label.className = "quick-switcher-heading";
-      label.textContent = heading;
+      label.textContent = t(heading);
       quickSwitcherList.appendChild(label);
     }
     const item = document.createElement("li");
@@ -675,8 +686,8 @@ export function renderQuickSwitcher() {
     const meta = document.createElement("span");
     if (candidate.kind === "thread") {
       button.className = "quick-switcher-item" + active;
-      title.textContent = candidate.thread.name || "Untitled thread";
-      meta.textContent = `${candidate.thread.message_count || 0} messages`;
+      title.textContent = candidate.thread.name || t("Untitled thread");
+      meta.textContent = t("{n} messages", { n: candidate.thread.message_count || 0 });
     } else if (candidate.kind === "match") {
       // The conversation the words are in, then the words. Named first
       // because "where was that said" is the question this group answers.
@@ -685,9 +696,9 @@ export function renderQuickSwitcher() {
         (isRecord(candidate.match) &&
           typeof candidate.match.thread_name === "string" &&
           candidate.match.thread_name) ||
-        "Untitled thread";
+        t("Untitled thread");
       meta.textContent =
-        (candidate.match.role === "you" ? "You: " : "") + candidate.match.snippet;
+        (candidate.match.role === "you" ? t("You: ") : "") + candidate.match.snippet;
     } else {
       button.className = "quick-switcher-command" + active;
       title.textContent = candidate.label;

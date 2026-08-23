@@ -62,7 +62,11 @@ export function formatDate(value) {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
+  // The window's language, not the OS's. Read from <html lang> directly:
+  // protocol.js is the layer the other modules import, so it repeats the
+  // two-line locale read instead of pulling in i18n.js.
+  const lang = globalThis.document?.documentElement?.lang === "zh" ? "zh-CN" : "en-US";
+  return date.toLocaleString(lang);
 }
 
 export function isRecord(value) {

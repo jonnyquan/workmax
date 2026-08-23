@@ -268,9 +268,9 @@ func withAppearance(base string, renderer fs.FS, sidecarPort int, sidecarToken s
 			next.ServeHTTP(w, r)
 			return
 		}
-		appearance, density, language := readDisplay(
+		appearance, density, language, languageChoice := readDisplay(
 			r.Context(), client, sidecar, sidecarToken, r.Header.Get("Accept-Language"))
-		document = applyDisplay(document, appearance, density, language)
+		document = applyDisplay(document, appearance, density, language, languageChoice)
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		// Never cached: the document now carries a preference that changes,
@@ -293,10 +293,10 @@ func withAppearance(base string, renderer fs.FS, sidecarPort int, sidecarToken s
 // One request for both, because this runs while index.html is being served and
 // a second round trip would be spent on the first frame's latency. They live
 // in one row on the sidecar for the same reason.
-func readDisplay(ctx context.Context, client *http.Client, url, token, acceptLanguage string) (appearance, density, language string) {
+func readDisplay(ctx context.Context, client *http.Client, url, token, acceptLanguage string) (appearance, density, language, languageChoice string) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	req.Header.Set("X-Local-Token", token)
 	// The webview's own Accept-Language, forwarded so the sidecar can resolve
@@ -308,23 +308,28 @@ func readDisplay(ctx context.Context, client *http.Client, url, token, acceptLan
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
 	if err != nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	var payload struct {
 		Appearance string `json:"appearance"`
 		Density    string `json:"density"`
 		Language   string `json:"language"`
+		// The sidecar's per-request resolution of "system" — see
+		// resolveDisplayLanguage. The raw preference still travels so the
+		// document can carry the CHOICE for the settings control, while lang
+		// carries the ANSWER for everything that reads the language.
+		ResolvedLanguage string `json:"resolved_language"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	// The vocabularies are repeated here rather than trusted from the sidecar,
 	// because this is the step that turns a stored string into markup. The
@@ -338,27 +343,37 @@ func readDisplay(ctx context.Context, client *http.Client, url, token, acceptLan
 	case "compact", "comfortable":
 		density = payload.Density
 	}
-	// "system" is absent from this list for a different reason than the other
-	// two defaults: it is not "write nothing", it is "the sidecar already
-	// resolved it from the Accept-Language we forwarded". An empty answer here
-	// leaves lang="en" as shipped, which is the honest fallback.
-	switch payload.Language {
+	// The resolved language is what the document speaks; the raw preference
+	// rides along only so the settings control can show which of the three
+	// states is chosen. Both re-validated here — this is the step that turns
+	// sidecar strings into markup.
+	switch payload.ResolvedLanguage {
 	case "en", "zh":
-		language = payload.Language
+		language = payload.ResolvedLanguage
 	}
-	return appearance, density, language
+	switch payload.Language {
+	case "system", "en", "zh":
+		languageChoice = payload.Language
+	}
+	return appearance, density, language, languageChoice
 }
 
 // applyDisplay writes data-theme and data-density onto <html>. Each default —
 // and every failure upstream of it — leaves that attribute off entirely, which
 // is what the stylesheet already answers correctly on its own.
-func applyDisplay(document []byte, appearance, density, language string) []byte {
+func applyDisplay(document []byte, appearance, density, language, languageChoice string) []byte {
 	attributes := ""
 	if appearance == "light" || appearance == "dark" {
 		attributes += ` data-theme="` + appearance + `"`
 	}
 	if density == "compact" || density == "comfortable" {
 		attributes += ` data-density="` + density + `"`
+	}
+	// The CHOICE, for the settings control. Like the other two, the default
+	// ("system") is the absence of the attribute; unlike them, the resolved
+	// answer also lands on lang below, because a document always has one.
+	if languageChoice == "en" || languageChoice == "zh" {
+		attributes += ` data-language="` + languageChoice + `"`
 	}
 	// The lang attribute is not like the other two: it is always present and
 	// always says something, so "leave it off" is not available as a default.

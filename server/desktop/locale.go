@@ -138,6 +138,20 @@ func localeFromAcceptLanguage(header string) string {
 	return candidates[0].locale
 }
 
+// resolveDisplayLanguage answers what the window should speak: the stored
+// choice when there is one, otherwise whatever the request's Accept-Language
+// says the machine speaks, otherwise English — the shipped markup's language
+// and the catalogs' own fallback, so every layer agrees when nothing resolves.
+func resolveDisplayLanguage(preference, acceptLanguage string) string {
+	if preference == LanguageEN || preference == LanguageZH {
+		return preference
+	}
+	if picked := localeFromAcceptLanguage(acceptLanguage); picked != "" {
+		return picked
+	}
+	return LanguageEN
+}
+
 // languagePreferenceOrSystem reads the stored language, answering "system" for
 // any state where the preference cannot be read. Failing to reach the database
 // must degrade to following the machine, never to pinning a language.

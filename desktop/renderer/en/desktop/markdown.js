@@ -15,6 +15,12 @@
 // from createElement and createTextNode cannot execute anything, whatever the
 // model was talked into writing. That is the whole security argument, and it
 // is structural rather than a matter of escaping correctly.
+//
+// The one import is the message catalog, which is the same kind of module as
+// this one: pure lookup, no application state. The button labels this file
+// draws are copy like any other, and a second translation path for three
+// strings would be worse than the import.
+import { t } from "./i18n.js";
 
 // Above this the text is rendered plain. A wall this large is not made
 // readable by formatting, and it keeps a single parse bounded.
@@ -191,7 +197,7 @@ function buildCodeBlock(code, language) {
         return badge;
       })()
     : null;
-  const copy = buildCopyButton(code, "Copy code");
+  const copy = buildCopyButton(code, t("Copy code"));
   if (!copy && !tag) return pre;
   // A header strip, the shape every reader already knows from code hosts:
   // what it is on the left, what you can do with it on the right.
@@ -757,13 +763,13 @@ export function buildCopyButton(text, label) {
     // every copy look like an application event.
     Promise.resolve(clipboard.writeText(text)).then(
       () => {
-        button.textContent = "Copied";
+        button.textContent = t("Copied");
         setTimeout(() => {
           button.textContent = label;
         }, COPY_FEEDBACK_MS);
       },
       () => {
-        button.textContent = "Copy failed";
+        button.textContent = t("Copy failed");
         setTimeout(() => {
           button.textContent = label;
         }, COPY_FEEDBACK_MS);

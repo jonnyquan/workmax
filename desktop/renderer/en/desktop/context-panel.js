@@ -5,6 +5,7 @@
 // events.js is already narrating — this module owns no turn state of its own,
 // which is why it can be re-rendered at any moment without consulting anyone.
 import { messageList } from "./dom.js";
+import { t } from "./i18n.js";
 import {
   MAX_TURN_TEXT_BYTES,
   isRecord,
@@ -210,8 +211,8 @@ function renderWorkLog(wrapper, steps, produced, live = false, duration = "") {
     const toggle = document.createElement("button");
     toggle.type = "button";
     toggle.className = "worklog-toggle";
-    const parts = [`${steps.length} steps`];
-    if (denied > 0) parts.push(`${denied} blocked`);
+    const parts = [t("{n} steps", { n: steps.length })];
+    if (denied > 0) parts.push(t("{n} blocked", { n: denied }));
     if (duration) parts.push(duration);
     toggle.textContent = `${expanded ? "▾" : "▸"} ${parts.join(" · ")}`;
     toggle.addEventListener("click", () => {
@@ -232,7 +233,7 @@ function renderWorkLog(wrapper, steps, produced, live = false, duration = "") {
     row.className = "worklog-step produced";
     const verb = document.createElement("span");
     verb.className = "worklog-verb";
-    verb.textContent = "Produced";
+    verb.textContent = t("Produced");
     const target = document.createElement("span");
     target.className = "worklog-target";
     target.textContent = file.path;
@@ -355,7 +356,7 @@ function renderWorkLogFold(entry) {
   if (hidden > 0) {
     const more = document.createElement("span");
     more.className = "worklog-fold-more";
-    more.textContent = `+${hidden} more`;
+    more.textContent = t("+{n} more", { n: hidden });
     row.appendChild(more);
   }
   return row;
@@ -384,12 +385,14 @@ function renderWorkLogStep(step) {
   if (step.denied) {
     const why = document.createElement("span");
     why.className = "worklog-denied";
-    why.textContent = step.reason ? `blocked — ${step.reason}` : "blocked";
+    why.textContent = step.reason
+      ? t("blocked — {reason}", { reason: step.reason })
+      : t("blocked");
     row.appendChild(why);
   } else if (step.failed) {
     const why = document.createElement("span");
     why.className = "worklog-denied";
-    why.textContent = "failed";
+    why.textContent = t("failed");
     row.appendChild(why);
   }
   if (!approval) return row;
@@ -397,7 +400,7 @@ function renderWorkLogStep(step) {
   if (awaiting) {
     const ask = document.createElement("span");
     ask.className = "approval-ask";
-    ask.textContent = "Awaiting approval";
+    ask.textContent = t("Awaiting approval");
     row.appendChild(ask);
     row.appendChild(buildApprovalActions(approval));
     if (approval.note) {
@@ -553,8 +556,8 @@ export function paintReasoningCaption(activeTurn) {
   if (!strip) return;
   const line = reasoningCaptionLine(activeTurn.reasoningText || "");
   activeTurn.reasoningCaption.textContent = line
-    ? `Thinking… ${line}`
-    : "Thinking…";
+    ? t("Thinking… {line}", { line })
+    : t("Thinking…");
 }
 
 // The live subtitle folds as soon as the turn is no longer reasoning —
@@ -602,9 +605,9 @@ function settleReasoningStrip(activeTurn) {
   const paint = () => {
     toggle.textContent = detail.hidden
       ? summary
-        ? `▸ Thought · ${summary}`
-        : "▸ Thought"
-      : "▾ Thought";
+        ? `▸ ${t("Thought")} · ${summary}`
+        : `▸ ${t("Thought")}`
+      : `▾ ${t("Thought")}`;
   };
   paint();
   toggle.addEventListener("click", () => {
@@ -640,20 +643,20 @@ const MAX_APPROVAL_CARDS_PER_TURN = 40;
 const APPROVAL_DECISIONS = (tool) => {
   const named = tool ? ` ${tool}` : "";
   return [
-    ["allow_once", "once", "Allow once", "Allowed once"],
+    ["allow_once", "once", t("Allow once"), t("Allowed once")],
     [
       "allow_session",
       "broad",
-      `Allow${named} this session`,
-      `Allowed${named} for this session`,
+      t("Allow{named} this session", { named }),
+      t("Allowed{named} for this session", { named }),
     ],
     [
       "allow_always",
       "broad",
-      `Always allow${named}`,
-      `Always allowed${named}`,
+      t("Always allow{named}", { named }),
+      t("Always allowed{named}", { named }),
     ],
-    ["deny", "deny", "Deny", "Denied"],
+    ["deny", "deny", t("Deny"), t("Denied")],
   ];
 };
 
@@ -757,8 +760,11 @@ function buildApprovalCard(wrapper, entry) {
   const title = document.createElement("div");
   title.className = "approval-title";
   title.textContent = entry.target
-    ? `Agent requests to run ${entry.name} · ${entry.target}`
-    : `Agent requests to run ${entry.name}`;
+    ? t("Agent requests to run {name} · {target}", {
+        name: entry.name,
+        target: entry.target,
+      })
+    : t("Agent requests to run {name}", { name: entry.name });
   const note = document.createElement("div");
   note.className = "approval-note";
   note.hidden = true;
@@ -839,7 +845,7 @@ function submitApprovalDecision(entry, decision, settledLabel) {
   if (entry.answered) return;
   const agent = desktopAgentApprovalBridge();
   if (!agent || !entry.turn.turnID) {
-    settleApproval(entry, "Approvals are unavailable", "expired");
+    settleApproval(entry, t("Approvals are unavailable"), "expired");
     return;
   }
   // Answered the moment the click lands: a second click while the request is
@@ -867,7 +873,7 @@ function submitApprovalDecision(entry, decision, settledLabel) {
       if (result.status === 404) {
         // The pending set no longer knows this id: the turn moved on
         // (timeout, cancel, completion). Expired, not an error.
-        settleApproval(entry, "Expired", "expired");
+        settleApproval(entry, t("Expired"), "expired");
         return;
       }
       throw new Error("Approval delivery failed");
@@ -877,7 +883,7 @@ function submitApprovalDecision(entry, decision, settledLabel) {
       // turn already settled it as expired while the request was out.
       if (entry.settled) return;
       entry.answered = false;
-      entry.note = "The decision could not be delivered. Try again.";
+      entry.note = t("The decision could not be delivered. Try again.");
       refreshApproval(entry);
     });
 }
@@ -890,7 +896,7 @@ function expireApprovalCards(activeTurn) {
   if (!activeTurn.approvalCards) return;
   for (const entry of activeTurn.approvalCards.values()) {
     if (entry.answered) continue;
-    settleApproval(entry, "Expired", "expired");
+    settleApproval(entry, t("Expired"), "expired");
   }
 }
 
@@ -944,13 +950,13 @@ function renderRunLine() {
   const detail = document.createElement("span");
   detail.className = "context-run-detail";
   if (asking) {
-    label.textContent = "Needs your approval";
+    label.textContent = t("Needs your approval");
     detail.textContent = asking.target ? `${asking.name} · ${asking.target}` : asking.name;
   } else if (last) {
-    label.textContent = `Step ${activity.length}`;
+    label.textContent = t("Step {n}", { n: activity.length });
     detail.textContent = last.target ? `${last.name} · ${last.target}` : last.name;
   } else {
-    label.textContent = "Running";
+    label.textContent = t("Running");
     detail.textContent = "";
   }
   line.append(label, detail);
@@ -1047,9 +1053,9 @@ function renderSources() {
           file.on_disk === false
             // The row survives but the bytes do not, which is a different
             // problem from "no attachments" and needs to be visible.
-            ? "Missing on disk"
+            ? t("Missing on disk")
             : file.pending
-              ? "Uploading…"
+              ? t("Uploading…")
               : formatFileSize(file.file_size)
         )
       )
@@ -1064,14 +1070,19 @@ function renderSources() {
     const chosen = contextState.selectedFileIDs.size;
     ctxEl("sources-selected").hidden = chosen === 0;
     ctxEl("sources-selected").textContent =
-      `${chosen} selected for the next request`;
+      t("{n} selected for the next request", { n: chosen });
   }
   if (ctxEl("context-sources")) ctxEl("context-sources").hidden = items.length === 0;
   return items.length;
 }
 
+// The plural branch stays in code rather than in the catalog: English needs
+// it, and a language that does not (Chinese) simply maps both keys to the
+// same entry. A single "{n} file(s)" key would have made the English read
+// like a form letter.
 function fileCountLabel(count, truncated = false) {
-  return `${count}${truncated ? "+" : ""} file${count === 1 && !truncated ? "" : "s"}`;
+  const n = `${count}${truncated ? "+" : ""}`;
+  return count === 1 && !truncated ? t("{n} file", { n }) : t("{n} files", { n });
 }
 
 // What the answer was actually grounded in. Until this existed the retrieval
@@ -1164,7 +1175,7 @@ function buildDeliverableRow(file, isNew) {
   const row = document.createElement("button");
   row.type = "button";
   row.className = "context-line deliverable-row";
-  row.setAttribute("title", "Open the workspace folder");
+  row.setAttribute("title", t("Open the workspace folder"));
 
   const name = document.createElement("span");
   name.className = "context-item-name";
@@ -1184,7 +1195,7 @@ function buildDeliverableRow(file, isNew) {
   if (isNew) {
     const tag = document.createElement("span");
     tag.className = "context-tag";
-    tag.textContent = "New";
+    tag.textContent = t("New");
     name.appendChild(tag);
   }
   row.addEventListener("click", () => {

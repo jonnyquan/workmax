@@ -210,6 +210,14 @@ export type AppearanceChoice = "system" | "light" | "dark";
 export type DensityChoice = "compact" | "standard" | "comfortable";
 
 /**
+ * The three language states. Unlike the two above, "system" is not the
+ * absence of an attribute — <html lang> always says something — it means the
+ * shell resolves the machine's own language from the Accept-Language the
+ * webview already sends.
+ */
+export type LanguageChoice = "system" | "en" | "zh";
+
+/**
  * The machine's appearance preference. Machine-scoped rather than
  * per-identity: it describes this screen, not who is signed in. There is
  * deliberately no `getAppearance` here — the shell resolves the preference
@@ -219,6 +227,9 @@ export type DensityChoice = "compact" | "standard" | "comfortable";
 export interface AppearanceSettings {
   appearance: AppearanceChoice;
   density: DensityChoice;
+  language: LanguageChoice;
+  /** What the window should speak: the choice, or the machine's answer. */
+  resolved_language: "en" | "zh";
   updated_at: string;
 }
 
@@ -782,6 +793,9 @@ export interface DesktopBridge {
     ) => Promise<DesktopBridgeResult<AppearanceSettings>>;
     putDensity: (
       choice: DensityChoice
+    ) => Promise<DesktopBridgeResult<AppearanceSettings>>;
+    putLanguage: (
+      choice: LanguageChoice
     ) => Promise<DesktopBridgeResult<AppearanceSettings>>;
   };
   mind: {
@@ -1536,6 +1550,20 @@ export function createDesktopBridge(
         );
         return validateAppearanceSettingsResult(result);
       },
+      putLanguage: async (choice) => {
+        if (choice !== "system" && choice !== "en" && choice !== "zh") {
+          throw new TypeError(
+            'settings.putLanguage choice must be "system", "en" or "zh"'
+          );
+        }
+        const result = await execute<unknown>(
+          deps,
+          ROUTES.settingsPutAppearance,
+          undefined,
+          { language: choice }
+        );
+        return validateAppearanceSettingsResult(result);
+      },
     },
     mind: {
       list: async () => {
@@ -1662,6 +1690,7 @@ function buildCapabilities(): DesktopBridgeCapabilities {
           "getModelCatalog",
           "putAppearance",
           "putDensity",
+          "putLanguage",
         ],
       },
       mind: {
@@ -1884,9 +1913,12 @@ function validateAppearanceSettingsResult(
     throw new TypeError("settings appearance response is malformed");
   }
   const record = data as Record<string, unknown>;
+  // "language" joined the row with migration 0016. The exact-keys list moved
+  // the same day — the create-thread contract has already demonstrated twice
+  // what a validator that lags the server's row does to the feature above it.
   assertExactKeys(
     record,
-    ["appearance", "density", "updated_at"],
+    ["appearance", "density", "language", "resolved_language", "updated_at"],
     "settings appearance response"
   );
   const appearance = record.appearance;
@@ -1905,6 +1937,14 @@ function validateAppearanceSettingsResult(
   ) {
     throw new TypeError("settings density value is malformed");
   }
+  const language = record.language;
+  if (language !== "system" && language !== "en" && language !== "zh") {
+    throw new TypeError("settings language value is malformed");
+  }
+  const resolvedLanguage = record.resolved_language;
+  if (resolvedLanguage !== "en" && resolvedLanguage !== "zh") {
+    throw new TypeError("settings resolved_language value is malformed");
+  }
   if (
     typeof record.updated_at !== "string" ||
     record.updated_at === "" ||
@@ -1914,7 +1954,13 @@ function validateAppearanceSettingsResult(
   }
   return {
     ...result,
-    data: { appearance, density, updated_at: record.updated_at as string },
+    data: {
+      appearance,
+      density,
+      language,
+      resolved_language: resolvedLanguage,
+      updated_at: record.updated_at as string,
+    },
   };
 }
 

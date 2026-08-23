@@ -458,7 +458,11 @@ func TestUIAppearanceLeavesOtherAssetsAlone(t *testing.T) {
 func TestUIIndexCarriesTheStoredLanguage(t *testing.T) {
 	const document = "<!doctype html>\n<html lang=\"en\">\n  <head></head>\n</html>\n"
 	var forwarded []string
-	preference := `{"appearance":"system","density":"standard","language":"zh","updated_at":"2026-08-22T00:00:00Z"}`
+	// The real shape, pasted from a live GET /settings/appearance: the stored
+	// choice AND the answer the sidecar resolved it to on THIS request.
+	// resolved_language is what reaches <html lang> — a fixture carrying only
+	// "language" would be testing a response the server never sends.
+	preference := `{"appearance":"system","density":"standard","language":"zh","resolved_language":"zh","updated_at":"2026-08-22T00:00:00Z"}`
 	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		forwarded = append(forwarded, r.Header.Get("Accept-Language"))
 		w.Header().Set("Content-Type", "application/json")
@@ -478,8 +482,14 @@ func TestUIIndexCarriesTheStoredLanguage(t *testing.T) {
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.6")
 	handler.ServeHTTP(rec, req)
 
-	if !strings.Contains(rec.Body.String(), `<html lang="zh">`) {
+	// Prefix, not the whole tag: data-language rides on the same element, so a
+	// closing bracket in this pattern asserts attribute ORDER rather than the
+	// language.
+	if !strings.Contains(rec.Body.String(), `<html lang="zh"`) {
 		t.Fatalf("served document did not carry the stored language:\n%s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `data-language="zh"`) {
+		t.Fatalf("served document did not carry the raw choice the control renders:\n%s", rec.Body.String())
 	}
 	if len(forwarded) != 1 || forwarded[0] != "zh-CN,zh;q=0.9,en;q=0.6" {
 		t.Fatalf("Accept-Language forwarded = %v; the sidecar cannot resolve \"system\" without it", forwarded)
@@ -491,9 +501,13 @@ func TestUIIndexCarriesTheStoredLanguage(t *testing.T) {
 // English, which is both the shipped markup and the catalogs' own fallback.
 func TestUIIndexFallsBackToEnglishWhenTheLanguageIsUnusable(t *testing.T) {
 	const document = "<!doctype html>\n<html lang=\"en\">\n  <head></head>\n</html>\n"
+	// Unusable means unusable as an ANSWER: resolved_language is the field the
+	// lang attribute comes from, so these are the ways it can fail to name a
+	// language this build speaks.
 	for _, body := range []string{
-		`{"appearance":"system","density":"standard","language":"klingon"}`,
-		`{"appearance":"system","density":"standard","language":"system"}`,
+		`{"appearance":"system","density":"standard","language":"zh","resolved_language":"klingon"}`,
+		`{"appearance":"system","density":"standard","language":"system","resolved_language":"system"}`,
+		`{"appearance":"system","density":"standard","language":"zh"}`,
 		`{"appearance":"system","density":"standard"}`,
 		`not json at all`,
 	} {

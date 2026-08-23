@@ -62,8 +62,14 @@ type AppearanceSettingsDTO struct {
 	Density    string `json:"density"`
 	// Language is the third preference on the same row for the same reason:
 	// the shell needs it before the first frame, and it costs no extra read.
-	Language  string `json:"language"`
-	UpdatedAt string `json:"updated_at"`
+	Language string `json:"language"`
+	// ResolvedLanguage is what the window should actually speak: the
+	// preference itself when it names a language, or the machine's answer
+	// when the preference is "system". Computed by the handler from the
+	// request's own Accept-Language — the store cannot fill it, because a
+	// database has no way to know what the machine speaks today.
+	ResolvedLanguage string `json:"resolved_language"`
+	UpdatedAt        string `json:"updated_at"`
 }
 
 // AppearanceSettingsPut is the PUT body. Each field is a closed vocabulary,

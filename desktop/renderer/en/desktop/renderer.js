@@ -14,6 +14,7 @@
 // negotiable is that no module may assign to a binding it imported — see
 // fence.js for how the counters that used to do exactly that are shared now.
 import { fences } from "./fence.js";
+import { t, translatePage } from "./i18n.js";
 import {
   aboutVersionRow,
   agentMode,
@@ -21,6 +22,9 @@ import {
   appearanceLightButton,
   appearanceSystemButton,
   densityComfortableButton,
+  languageSystemButton,
+  languageEnButton,
+  languageZhButton,
   densityCompactButton,
   densityStandardButton,
   attachButton,
@@ -319,7 +323,7 @@ async function persistTheme(choice) {
   } catch {
     // A failure here is silent by nature — the window already looks right, and
     // the surprise lands on the next launch. Better to say it now.
-    setStatus("Appearance changed for now, but it could not be saved.", "error");
+    setStatus(t("Appearance changed for now, but it could not be saved."), "error");
   }
 }
 
@@ -340,6 +344,11 @@ function renderAppearanceChoice() {
 }
 
 applyTheme(readAppliedTheme());
+
+// Rewrite the static copy before anything dynamic paints. The document's lang
+// was resolved by the shell before the first byte reached us, so this is a
+// pure lookup pass — no fetch, no flash, no reflow the reader can see.
+translatePage();
 
 // --- Density -----------------------------------------------------------------
 //
@@ -391,7 +400,7 @@ async function persistDensity(choice) {
     );
     if (!result.ok) throw new Error("density not saved");
   } catch {
-    setStatus("Density changed for now, but it could not be saved.", "error");
+    setStatus(t("Density changed for now, but it could not be saved."), "error");
   }
 }
 
@@ -410,6 +419,76 @@ function renderDensityChoice() {
 }
 
 applyDensity(readAppliedDensity());
+
+// --- Language ----------------------------------------------------------------
+//
+// The third machine-scoped preference, and the odd one out in how it applies:
+// theme and density are one attribute the stylesheet reacts to, so they switch
+// live. Language is every string on the page, static and dynamic, so a switch
+// PERSISTS first and then RELOADS — the shell re-serves index.html with the
+// new lang, translatePage() rewrites the static copy, and every dynamic
+// string is simply produced fresh in the new language. One honest reload
+// beats keeping replay inputs for four hundred call sites.
+//
+// The document carries two facts: <html lang> is the ANSWER (what to speak,
+// "system" already resolved by the sidecar), data-language is the CHOICE
+// (which of the three states the user picked, absent = system). This control
+// renders the choice; i18n.js reads the answer.
+export const LANGUAGE_CHOICES = ["system", "en", "zh"];
+export let languageChoice = readAppliedLanguageChoice();
+
+function readAppliedLanguageChoice() {
+  const root = document.documentElement;
+  const applied = root ? root.getAttribute("data-language") : null;
+  return LANGUAGE_CHOICES.includes(applied) ? applied : "system";
+}
+
+export function setLanguage(choice) {
+  if (!LANGUAGE_CHOICES.includes(choice) || choice === languageChoice) return;
+  languageChoice = choice;
+  renderLanguageChoice();
+  void persistLanguageAndReload(choice);
+}
+
+async function persistLanguageAndReload(choice) {
+  const settings = window.desktopBridge?.settings;
+  if (!isRecord(settings) || typeof settings.putLanguage !== "function") {
+    setStatus(t("This build cannot store a language preference."), "error");
+    return;
+  }
+  try {
+    const result = parseDesktopBridgeResult(
+      await settings.putLanguage(choice),
+      "settings.putLanguage"
+    );
+    if (!result.ok) throw new Error("language not saved");
+  } catch {
+    // Unlike theme, nothing has visibly changed yet — so a failed write is a
+    // failed switch, and saying so IS the outcome.
+    languageChoice = readAppliedLanguageChoice();
+    renderLanguageChoice();
+    setStatus(t("The language could not be saved."), "error");
+    return;
+  }
+  // Persisted; the reload serves the document in the new language.
+  globalThis.location?.reload?.();
+}
+
+const LANGUAGE_BUTTONS = () => [
+  ["system", languageSystemButton],
+  ["en", languageEnButton],
+  ["zh", languageZhButton],
+];
+
+function renderLanguageChoice() {
+  for (const [choice, button] of LANGUAGE_BUTTONS()) {
+    if (!button) continue;
+    button.classList.toggle("active", choice === languageChoice);
+    button.setAttribute("aria-pressed", choice === languageChoice ? "true" : "false");
+  }
+}
+
+renderLanguageChoice();
 
 export const state = {
   auth: null,
@@ -642,6 +721,8 @@ const MODEL_PROTOCOL_HINTS = {
   // for the Anthropic Messages API). This copy said "Chat only" for months
   // after the pi runtime shipped, which is the worst kind of stale string:
   // it talks a user out of a capability the build already has.
+  // Hints are catalog keys (translated at the sink); placeholders are literal
+  // example values the user might type, so they stay as they are.
   openai_compatible: {
     hint: "Works with Ollama, LM Studio, vLLM and similar. Enables the agent tool loop when the pi runtime is available.",
     placeholder: "http://127.0.0.1:11434/v1",
@@ -657,7 +738,7 @@ function updateModelProtocolHint() {
   const protocolEl = document.querySelector("#model-protocol");
   if (!protocolEl) return;
   const info = MODEL_PROTOCOL_HINTS[protocolEl.value];
-  if (hintEl) hintEl.textContent = info ? info.hint : "";
+  if (hintEl) hintEl.textContent = info ? t(info.hint) : "";
   if (modelBaseURL && info) modelBaseURL.placeholder = info.placeholder;
 }
 
@@ -705,9 +786,11 @@ function modelCatalogBridgeAvailable() {
 function officialModelOptionLabel(item) {
   const name = item.displayName || item.modelId;
   if (item.permissions.includes("use")) {
-    return item.default ? `${name} (default)` : name;
+    return item.default ? t("{name} (default)", { name }) : name;
   }
-  return item.requiredTier ? `${name} — needs ${item.requiredTier}` : `${name} — unavailable`;
+  return item.requiredTier
+    ? t("{name} — needs {tier}", { name, tier: item.requiredTier })
+    : t("{name} — unavailable", { name });
 }
 
 function renderOfficialModelOptions(selectedModelID) {
@@ -715,7 +798,7 @@ function renderOfficialModelOptions(selectedModelID) {
   modelOfficialID.textContent = "";
   const accountDefault = document.createElement("option");
   accountDefault.value = "";
-  accountDefault.textContent = "Account default";
+  accountDefault.textContent = t("Account default");
   modelOfficialID.appendChild(accountDefault);
   for (const item of modelCatalogState.items) {
     const option = document.createElement("option");
@@ -735,7 +818,7 @@ function renderOfficialModelOptions(selectedModelID) {
   ) {
     const orphan = document.createElement("option");
     orphan.value = selectedModelID;
-    orphan.textContent = `${selectedModelID} — no longer offered`;
+    orphan.textContent = t("{name} — no longer offered", { name: selectedModelID });
     orphan.disabled = true;
     modelOfficialID.appendChild(orphan);
   }
@@ -744,24 +827,24 @@ function renderOfficialModelOptions(selectedModelID) {
 
 function officialModelNote() {
   if (!modelCatalogBridgeAvailable()) {
-    return "Model choice needs a newer desktop shell.";
+    return t("Model choice needs a newer desktop shell.");
   }
   switch (modelCatalogState.state) {
     case "unbound":
-      return "Connect an account to choose a model.";
+      return t("Connect an account to choose a model.");
     case "unavailable":
-      return "Could not reach WorkMax; the model list may be out of date.";
+      return t("Could not reach WorkMax; the model list may be out of date.");
     default:
       break;
   }
   switch (modelCatalogState.selectionState) {
     case "not_allowed":
-      return "Your plan no longer includes the model you picked. Choose another one to continue on the official route.";
+      return t("Your plan no longer includes the model you picked. Choose another one to continue on the official route.");
     case "unknown":
-      return "The model you picked is no longer offered. Choose another one.";
+      return t("The model you picked is no longer offered. Choose another one.");
     default:
       return modelCatalogState.tier
-        ? `Plan: ${modelCatalogState.tier}.`
+        ? t("Plan: {tier}.", { tier: modelCatalogState.tier })
         : "";
   }
 }
@@ -833,8 +916,8 @@ function fillModelSettingsForm(settings) {
   renderOfficialModelSection(settings.official_model_id);
   if (modelKeyStatus) {
     modelKeyStatus.textContent = settings.local.api_key_configured
-      ? "API key: stored in Keychain"
-      : "API key: not stored";
+      ? t("API key: stored in Keychain")
+      : t("API key: not stored");
   }
   updateModelLocalFieldsVisibility();
   setModelSettingsError("");
@@ -940,7 +1023,7 @@ async function loadModelSettingsIntoForm() {
     // Said in the section that cannot work rather than on the status strip:
     // the strip is for what just happened, and this is a property of the
     // build, still true the next time the panel opens.
-    setModelSettingsError("Model settings need a newer Desktop shell (desktopBridge.settings, alpha.7+).");
+    setModelSettingsError(t("Model settings need a newer Desktop shell (desktopBridge.settings, alpha.7+)."));
     if (modelSettingsSubmitButton) modelSettingsSubmitButton.disabled = true;
     return;
   }
@@ -972,7 +1055,7 @@ async function submitModelSettings(event) {
   if (!modelPreferredRoute) return;
   const settings = desktopSettingsBridge();
   if (!settings) {
-    setModelSettingsError("Model settings bridge unavailable");
+    setModelSettingsError(t("Model settings bridge unavailable"));
     return;
   }
   if (modelSettingsSubmitButton) modelSettingsSubmitButton.disabled = true;
@@ -989,7 +1072,7 @@ async function submitModelSettings(event) {
     if (chosen !== "" && !(item && item.permissions.includes("use"))) {
       // Saving it would store a choice the account cannot run, and the next
       // turn would fail somewhere far from here.
-      setModelSettingsError("That model is not available on your plan. Pick one that is.");
+      setModelSettingsError(t("That model is not available on your plan. Pick one that is."));
       if (modelSettingsSubmitButton) modelSettingsSubmitButton.disabled = false;
       return;
     }
@@ -1014,7 +1097,7 @@ async function submitModelSettings(event) {
     );
     clearModelAPIKeyField();
     if (!result.ok) {
-      throw new Error(sanitizeErrorMessage(result.error) || "Could not save model settings");
+      throw new Error(sanitizeErrorMessage(result.error) || t("Could not save model settings"));
     }
     const saved = parseModelRouteSettings(result.data);
     await loadModelCatalog(saved.official_model_id);
@@ -1030,9 +1113,9 @@ async function submitModelSettings(event) {
     setStatus(
       preferred === "local"
         ? isLocalOnlySession()
-          ? "Saved. Local model route — you can work without signing in."
-          : "Saved local model route."
-        : "Saved official model route preference."
+          ? t("Saved. Local model route — you can work without signing in.")
+          : t("Saved local model route.")
+        : t("Saved official model route preference.")
     );
   } catch (error) {
     setModelSettingsError(String(error.message || error));
@@ -1275,12 +1358,12 @@ export function renderLocalAccountArea() {
     // Settings › Account, the onboarding card, and the composer's own hint.
     localAccountHint.textContent =
       effectiveCloudBinding().state === "bound"
-        ? "Connected to WorkMax"
+        ? t("Connected to WorkMax")
         : effectiveCloudBinding().state === "expired"
-          ? "Sign-in expired"
+          ? t("Sign-in expired")
           : state.localRoute
-            ? "Local model · this machine"
-            : "This machine only";
+            ? t("Local model · this machine")
+            : t("This machine only");
   }
   // Everything below paints the identity list, which lives in Settings ›
   // Account. A closed dialog is not a reason to rebuild it — and while a
@@ -1298,7 +1381,7 @@ export function renderLocalAccountArea() {
     localAccountSwitchNote.hidden = switchable;
     localAccountSwitchNote.textContent = switchable
       ? ""
-      : "While an account is connected, new conversations belong to it. Disconnect to work as this machine's own identities again.";
+      : t("While an account is connected, new conversations belong to it. Disconnect to work as this machine's own identities again.");
   }
   localAccountListEl.hidden = !switchable;
   if (localAccountCreateForm) localAccountCreateForm.hidden = !switchable;
@@ -1339,10 +1422,10 @@ function renderLocalAccountBinding() {
   if (localAccountBindingState) {
     localAccountBindingState.textContent =
       binding.state === "bound"
-        ? "Connected to a WorkMax account" + named + " — cloud models and sync are available."
+        ? t("Connected to a WorkMax account{named} — cloud models and sync are available.", { named })
         : binding.state === "expired"
-          ? "The connected WorkMax account" + named + " needs signing in again. Local work is unaffected."
-          : "No WorkMax account connected. Everything here is local to this machine.";
+          ? t("The connected WorkMax account{named} needs signing in again. Local work is unaffected.", { named })
+          : t("No WorkMax account connected. Everything here is local to this machine.");
   }
   if (localAccountConnectButton) {
     // While the credential form is open it is the form's own Continue that
@@ -1350,13 +1433,13 @@ function renderLocalAccountBinding() {
     localAccountConnectButton.hidden =
       binding.state === "bound" || state.loginFormOpen === true;
     localAccountConnectButton.textContent =
-      binding.state === "expired" ? "Sign in again" : "Connect account";
+      binding.state === "expired" ? t("Sign in again") : t("Connect account");
   }
   if (localAccountDisconnectButton) {
     localAccountDisconnectButton.hidden = binding.state === "unbound";
     localAccountDisconnectButton.textContent = state.disconnecting
-      ? "Disconnecting..."
-      : "Disconnect";
+      ? t("Disconnecting...")
+      : t("Disconnect");
     localAccountDisconnectButton.disabled = state.disconnecting === true;
   }
 }
@@ -1391,10 +1474,13 @@ function renderModelChip() {
   }
   chip.textContent = label;
   const where = state.localRoute
-    ? (state.toolLoop ? "local, with tools" : "local")
-    : "cloud";
-  chip.title = "Model: " + label + " (" + where + "). Click to change.";
-  chip.setAttribute("aria-label", "Model: " + label + " (" + where + "). Open settings");
+    ? (state.toolLoop ? t("local, with tools") : t("local"))
+    : t("cloud");
+  chip.title = t("Model: {label} ({where}). Click to change.", { label, where });
+  chip.setAttribute(
+    "aria-label",
+    t("Model: {label} ({where}). Open settings", { label, where })
+  );
   chip.hidden = false;
 }
 
@@ -1409,10 +1495,10 @@ function renderToolModeChip() {
     chip.hidden = true;
     return;
   }
-  chip.textContent = state.toolMode === "auto" ? "Auto" : "Ask";
+  chip.textContent = state.toolMode === "auto" ? t("Auto") : t("Ask");
   chip.title = state.toolMode === "auto"
-    ? "Auto: tool calls are approved without asking. Click to require approval."
-    : "Ask: each tool call asks before running. Click to auto-approve.";
+    ? t("Auto: tool calls are approved without asking. Click to require approval.")
+    : t("Ask: each tool call asks before running. Click to auto-approve.");
   chip.setAttribute("aria-pressed", state.toolMode === "auto" ? "true" : "false");
   chip.hidden = false;
 }
@@ -1445,7 +1531,7 @@ export function renderMindChip() {
   }
   chip.textContent = mind.name;
   chip.title = mind.role_hint || mind.description || mind.name;
-  chip.setAttribute("aria-label", `Mind: ${mind.name}. Open the mind panel`);
+  chip.setAttribute("aria-label", t("Mind: {name}. Open the mind panel", { name: mind.name }));
   chip.hidden = false;
 }
 
@@ -1457,7 +1543,9 @@ function renderLocalAccountItem(account) {
   button.className = "local-account-item";
   button.classList.toggle("active", account.active);
   button.dataset.accountId = String(account.id);
-  button.textContent = account.active ? account.name + " · active" : account.name;
+  button.textContent = account.active
+    ? t("{name} · active", { name: account.name })
+    : account.name;
   button.addEventListener("click", () => {
     void selectLocalAccountByID(account.id);
   });
@@ -1466,8 +1554,8 @@ function renderLocalAccountItem(account) {
   const rename = document.createElement("button");
   rename.type = "button";
   rename.className = "local-account-action";
-  rename.textContent = "Rename";
-  rename.setAttribute("aria-label", "Rename " + account.name);
+  rename.textContent = t("Rename");
+  rename.setAttribute("aria-label", t("Rename {name}", { name: account.name }));
   rename.addEventListener("click", () => {
     startLocalAccountRename(item, account);
   });
@@ -1479,15 +1567,18 @@ function renderLocalAccountItem(account) {
     const del = document.createElement("button");
     del.type = "button";
     del.className = "local-account-action danger";
-    del.textContent = "Delete";
-    del.setAttribute("aria-label", "Delete " + account.name + " and all its data");
+    del.textContent = t("Delete");
+    del.setAttribute(
+      "aria-label",
+      t("Delete {name} and all its data", { name: account.name })
+    );
     del.addEventListener("click", () => {
       if (!del.classList.contains("armed")) {
         del.classList.add("armed");
-        del.textContent = "Delete all its data?";
+        del.textContent = t("Delete all its data?");
         setTimeout(() => {
           del.classList.remove("armed");
-          del.textContent = "Delete";
+          del.textContent = t("Delete");
         }, DELETE_ARM_MS);
         return;
       }
@@ -1510,14 +1601,14 @@ function startLocalAccountRename(item, account) {
   input.type = "text";
   input.value = account.name;
   input.maxLength = 64;
-  input.setAttribute("aria-label", "New name for " + account.name);
+  input.setAttribute("aria-label", t("New name for {name}", { name: account.name }));
   const save = document.createElement("button");
   save.type = "submit";
   save.className = "primary";
-  save.textContent = "Save";
+  save.textContent = t("Save");
   const cancel = document.createElement("button");
   cancel.type = "button";
-  cancel.textContent = "Cancel";
+  cancel.textContent = t("Cancel");
   cancel.addEventListener("click", () => {
     state.localAccountRenamingID = null;
     renderLocalAccountArea();
@@ -1552,8 +1643,8 @@ async function submitLocalAccountRename(account, rawName) {
       const reason = sanitizeErrorMessage(raw);
       throw new Error(
         reason === "name_taken"
-          ? "An account with that name already exists"
-          : reason || "Could not rename account"
+          ? t("An account with that name already exists")
+          : reason || t("Could not rename account")
       );
     }
   } catch (error) {
@@ -1561,7 +1652,7 @@ async function submitLocalAccountRename(account, rawName) {
     renderLocalAccountArea();
     return;
   }
-  setStatus('Renamed to "' + name + '"');
+  setStatus(t('Renamed to "{name}"', { name }));
   await loadLocalAccounts();
 }
 
@@ -1578,17 +1669,23 @@ async function deleteLocalAccountByID(account) {
       const reason = sanitizeErrorMessage(raw);
       throw new Error(
         reason === "account_busy"
-          ? "That account has a turn running — stop it first"
+          ? t("That account has a turn running — stop it first")
           : reason === "account_active"
-            ? "Switch away from an account before deleting it"
-            : reason || "Could not delete account"
+            ? t("Switch away from an account before deleting it")
+            : reason || t("Could not delete account")
       );
     }
     const data = isRecord(result.data) ? result.data : {};
     const threads = Number.isInteger(data.threads) ? data.threads : 0;
     setStatus(
-      'Deleted "' + account.name + '"' +
-        (threads > 0 ? " and its " + threads + " conversation" + (threads === 1 ? "" : "s") : "")
+      threads === 0
+        ? t('Deleted "{name}"', { name: account.name })
+        : threads === 1
+          ? t('Deleted "{name}" and its 1 conversation', { name: account.name })
+          : t('Deleted "{name}" and its {n} conversations', {
+              name: account.name,
+              n: threads,
+            })
     );
   } catch (error) {
     setStatus(String(error.message || error), "error");
@@ -1605,7 +1702,7 @@ async function disconnectCloudAccount() {
   const desktop = window.desktopBridge;
   const auth = isRecord(desktop) ? desktop.auth : null;
   if (!isRecord(auth) || typeof auth.logout !== "function") {
-    setStatus("Disconnecting is unavailable in this Desktop build", "error");
+    setStatus(t("Disconnecting is unavailable in this Desktop build"), "error");
     return;
   }
   if (state.disconnecting) return;
@@ -1615,7 +1712,7 @@ async function disconnectCloudAccount() {
     const result = parseDesktopBridgeResult(await auth.logout(), "logout result");
     if (!result.ok) {
       const raw = isRecord(result.error) ? result.error.error : result.error;
-      throw new Error(sanitizeErrorMessage(raw) || "Could not disconnect the account");
+      throw new Error(sanitizeErrorMessage(raw) || t("Could not disconnect the account"));
     }
   } catch (error) {
     state.disconnecting = false;
@@ -1624,7 +1721,7 @@ async function disconnectCloudAccount() {
     return;
   }
   state.disconnecting = false;
-  setStatus("Account disconnected. You are working as this machine's identity again.");
+  setStatus(t("Account disconnected. You are working as this machine's identity again."));
   // A full reload, for the same reason an account switch is: every loaded
   // thread belonged to the identity that just left.
   await refresh();
@@ -1661,7 +1758,7 @@ async function selectLocalAccountByID(id) {
     );
     if (!result.ok) {
       const raw = isRecord(result.error) ? result.error.error : result.error;
-      throw new Error(sanitizeErrorMessage(raw) || "Could not switch account");
+      throw new Error(sanitizeErrorMessage(raw) || t("Could not switch account"));
     }
   } catch (error) {
     setStatus(String(error.message || error), "error");
@@ -1671,7 +1768,7 @@ async function selectLocalAccountByID(id) {
   // the identity that just left — so the dialog gets out of the way.
   closeSettingsPanel();
   const chosen = state.localAccounts.find((account) => account.id === id);
-  setStatus(chosen ? 'Switched to "' + chosen.name + '"' : "Switched account");
+  setStatus(chosen ? t('Switched to "{name}"', { name: chosen.name }) : t("Switched account"));
   await refresh();
 }
 
@@ -1681,7 +1778,7 @@ async function submitCreateLocalAccount(event) {
   if (!local || !localAccountNameInput) return;
   const name = localAccountNameInput.value.trim();
   if (!name) {
-    setStatus("Account name cannot be empty", "error");
+    setStatus(t("Account name cannot be empty"), "error");
     return;
   }
   try {
@@ -1694,10 +1791,10 @@ async function submitCreateLocalAccount(event) {
       const reason = sanitizeErrorMessage(raw);
       throw new Error(
         reason === "name_taken"
-          ? "An account with that name already exists"
+          ? t("An account with that name already exists")
           : reason === "account_limit"
-            ? "Account limit reached"
-            : reason || "Could not create account"
+            ? t("Account limit reached")
+            : reason || t("Could not create account")
       );
     }
   } catch (error) {
@@ -1705,7 +1802,7 @@ async function submitCreateLocalAccount(event) {
     return;
   }
   localAccountNameInput.value = "";
-  setStatus('Created "' + name + '" — click it to switch');
+  setStatus(t('Created "{name}" — click it to switch', { name }));
   await loadLocalAccounts();
 }
 
@@ -1777,14 +1874,16 @@ export async function exportSelectedThread() {
       const reason = sanitizeErrorMessage(raw);
       throw new Error(
         reason === "thread_empty"
-          ? "Nothing to export yet — this conversation has no messages"
-          : reason || "Could not export the conversation"
+          ? t("Nothing to export yet — this conversation has no messages")
+          : reason || t("Could not export the conversation")
       );
     }
     const data = isRecord(result.data) ? result.data : {};
     const count = Number.isInteger(data.messages) ? data.messages : 0;
     setStatus(
-      "Exported " + count + " message" + (count === 1 ? "" : "s") + " as Markdown — opening the folder"
+      count === 1
+        ? t("Exported 1 message as Markdown — opening the folder")
+        : t("Exported {n} messages as Markdown — opening the folder", { n: count })
     );
     if (typeof agent.revealWorkspace === "function") {
       await agent.revealWorkspace(threadUUID);
@@ -1839,7 +1938,7 @@ async function submitRename() {
   if (!threadUUID || !input || !agent) return;
   const name = input.value.trim();
   if (name === "" || utf8ByteLength(name) > MAX_THREAD_NAME_BYTES) {
-    setStatus("Enter a name up to 200 characters.", "error");
+    setStatus(t("Enter a name up to 200 characters."), "error");
     return;
   }
   let result;
@@ -1849,11 +1948,11 @@ async function submitRename() {
       "agent rename result"
     );
   } catch {
-    setStatus("Could not rename the conversation.", "error");
+    setStatus(t("Could not rename the conversation."), "error");
     return;
   }
   if (!result.ok) {
-    setStatus("Could not rename the conversation.", "error");
+    setStatus(t("Could not rename the conversation."), "error");
     return;
   }
   // The selection may have moved while the request was in flight; the rename
@@ -1870,7 +1969,7 @@ async function submitRename() {
   if (state.selectedThreadUUID === threadUUID) {
     updateSelectedThreadHeading();
   }
-  setStatus("Conversation renamed.");
+  setStatus(t("Conversation renamed."));
 }
 
 export function chooseModeForThread(thread) {
@@ -1898,7 +1997,7 @@ export function renderSkillOptions() {
     for (const select of [agentMode, newThreadMode]) {
       const option = document.createElement("option");
       option.value = "";
-      option.textContent = state.skillsLoading ? "Loading..." : "Unavailable";
+      option.textContent = state.skillsLoading ? t("Loading...") : t("Unavailable");
       select.appendChild(option);
       select.value = "";
     }
@@ -1994,7 +2093,7 @@ function clearWorkbenchForSessionChange() {
   state.createFormOpen = false;
   state.creatingThread = false;
   state.createDraft = null;
-  newThreadName.value = "New chat";
+  newThreadName.value = t("New chat");
   setCreateFeedback("");
   fences.selection.bump();
   state.selectedThreadUUID = null;
@@ -2030,7 +2129,7 @@ export async function handleSessionChanged() {
   setTurnState("Session changed");
   renderTaskContext();
   setStatus(
-    "Your signed-in account changed. Select a thread again; the previous prompt was not resent and thread creation was not replayed.",
+    t("Your signed-in account changed. Select a thread again; the previous prompt was not resent and thread creation was not replayed."),
     "error"
   );
   updateComposerState();
@@ -2079,7 +2178,7 @@ export async function handleSessionChanged() {
       renderSkillOptions();
       updateComposerState();
       setStatus(
-        "Your signed-in account changed. Select a thread again; the previous prompt was not resent and thread creation was not replayed.",
+        t("Your signed-in account changed. Select a thread again; the previous prompt was not resent and thread creation was not replayed."),
         "error"
       );
     }
@@ -2200,7 +2299,7 @@ function startChatTurn(userText) {
             } catch {
               failActiveTurnProtocol(
                 activeTurn,
-                "The Agent stream returned an invalid event."
+                t("The Agent stream returned an invalid event.")
               );
             }
             return;
@@ -2221,7 +2320,7 @@ function startChatTurn(userText) {
       handleParsedTurnEvent(activeTurn, pendingEvent);
     }
   } catch {
-    failTurnOpen(activeTurn, userText, "The Agent turn could not be started.");
+    failTurnOpen(activeTurn, userText, t("The Agent turn could not be started."));
   }
 }
 
@@ -2284,7 +2383,7 @@ function resumeRecoverableTurn() {
   };
   state.activeTurn = activeTurn;
   state.resumingTurn = true;
-  state.recoveryFeedback = "Retrying the interrupted request safely...";
+  state.recoveryFeedback = t("Retrying the interrupted request safely...");
   state.recoveryFeedbackKind = "default";
   setTurnState("Resuming");
   renderTaskContext();
@@ -2300,7 +2399,7 @@ function resumeRecoverableTurn() {
           } catch {
             failActiveTurnProtocol(
               activeTurn,
-              "The recovered Agent stream returned an invalid event."
+              t("The recovered Agent stream returned an invalid event.")
             );
           }
           return;
@@ -2314,7 +2413,7 @@ function resumeRecoverableTurn() {
     if (openResult.turnID !== recoverable.turn_uuid) {
       failActiveTurnProtocol(
         activeTurn,
-        "The recovered Agent stream returned an invalid turn identifier."
+        t("The recovered Agent stream returned an invalid turn identifier.")
       );
       return;
     }
@@ -2333,13 +2432,13 @@ function resumeRecoverableTurn() {
     state.activeTurn = null;
     fences.turn.bump();
     state.resumingTurn = false;
-    state.recoveryFeedback = "Recovery could not connect. Select Resume to try again.";
+    state.recoveryFeedback = t("Recovery could not connect. Select Resume to try again.");
     state.recoveryFeedbackKind = "error";
-    activeTurn.assistantBubble.textContent = "Response recovery is waiting to retry.";
+    activeTurn.assistantBubble.textContent = t("Response recovery is waiting to retry.");
     setTurnState("Interrupted");
   updateThreadRunning(state.selectedThreadUUID, false);
     updateComposerState();
-    setStatus("The interrupted response could not be resumed yet.", "error");
+    setStatus(t("The interrupted response could not be resumed yet."), "error");
     turnRecoveryResumeButton.focus();
   }
 }
@@ -2360,7 +2459,7 @@ async function dismissRecoverableTurn() {
   fences.recovery.bump();
   const context = recoveryContext(recoverable.turn_uuid);
   state.dismissingRecovery = true;
-  state.recoveryFeedback = "Canceling the interrupted response...";
+  state.recoveryFeedback = t("Canceling the interrupted response...");
   state.recoveryFeedbackKind = "default";
   updateComposerState();
   try {
@@ -2377,18 +2476,18 @@ async function dismissRecoverableTurn() {
   updateThreadRunning(state.selectedThreadUUID, false);
     setStatus(
       result.canceled
-        ? "Interrupted response dismissed."
-        : "Interrupted response was already dismissed."
+        ? t("Interrupted response dismissed.")
+        : t("Interrupted response was already dismissed.")
     );
     updateComposerState();
     if (!chatInput.disabled) chatInput.focus();
   } catch {
     if (!isCurrentRecovery(context)) return;
     state.dismissingRecovery = false;
-    state.recoveryFeedback = "Dismiss failed. Try again when the Sidecar is available.";
+    state.recoveryFeedback = t("Dismiss failed. Try again when the Sidecar is available.");
     state.recoveryFeedbackKind = "error";
     updateComposerState();
-    setStatus("The interrupted response could not be dismissed.", "error");
+    setStatus(t("The interrupted response could not be dismissed."), "error");
     turnRecoveryDismissButton.focus();
   }
 }
@@ -2402,7 +2501,7 @@ export function keepRecoverableTurnForRetry(activeTurn, feedback, statusMessage)
   state.recoveryFeedback = feedback;
   state.recoveryFeedbackKind = "error";
   if (!activeTurn.assistantText) {
-    activeTurn.assistantBubble.textContent = "Response recovery is waiting to retry.";
+    activeTurn.assistantBubble.textContent = t("Response recovery is waiting to retry.");
   }
   setTurnState("Interrupted");
   updateThreadRunning(state.selectedThreadUUID, false);
@@ -2461,13 +2560,13 @@ async function refreshRecoveryAfterInitialBusy(activeTurn, fallback) {
   }
   if (!isTurnContextCurrent(activeTurn)) return;
   state.recoveryFeedback = discovered
-    ? "The same request is ready for an explicit recovery attempt."
-    : "Persistent recovery was not visible yet; the same request is retained locally.";
+    ? t("The same request is ready for an explicit recovery attempt.")
+    : t("Persistent recovery was not visible yet; the same request is retained locally.");
   state.recoveryFeedbackKind = discovered ? "default" : "error";
   setStatus(
     discovered
-      ? "This request is still busy. Select Resume to retry the same request; nothing was started again."
-      : "This request is still busy. Its local recovery intent was retained; select Resume to retry the same request. Nothing was started again.",
+      ? t("This request is still busy. Select Resume to retry the same request; nothing was started again.")
+      : t("This request is still busy. Its local recovery intent was retained; select Resume to retry the same request. Nothing was started again."),
     "error"
   );
   updateComposerState();
@@ -2481,16 +2580,16 @@ export function handleInitialTurnBusy(activeTurn) {
   fences.recovery.bump();
   retainLocalRecoverableTurn(fallback);
   state.recoveryFeedback =
-    "This request is still busy. Checking its persistent recovery state...";
+    t("This request is still busy. Checking its persistent recovery state...");
   state.recoveryFeedbackKind = "error";
   if (!activeTurn.assistantText) {
     activeTurn.assistantBubble.textContent =
-      "Response interrupted before it produced text.";
+      t("Response interrupted before it produced text.");
   }
   setTurnState("Interrupted");
   updateThreadRunning(state.selectedThreadUUID, false);
   setStatus(
-    "This request is still busy; no new execution was started. Checking recovery state...",
+    t("This request is still busy; no new execution was started. Checking recovery state..."),
     "error"
   );
   updateComposerState();
@@ -2500,8 +2599,8 @@ export function handleInitialTurnBusy(activeTurn) {
 export function recoveredTurnErrorMessage(result) {
   const label = [result.code, result.subtype].filter(Boolean).join(" · ");
   return label
-    ? `The recovered response failed (${label}).`
-    : "The recovered response failed.";
+    ? t("The recovered response failed ({label}).", { label })
+    : t("The recovered response failed.");
 }
 
 export function finishActiveTurn(activeTurn, label, canceled) {
@@ -2513,8 +2612,8 @@ export function finishActiveTurn(activeTurn, label, canceled) {
   state.activeTurn = null;
   if (!activeTurn.assistantText) {
     activeTurn.assistantBubble.textContent = canceled
-      ? "Generation stopped."
-      : "Response completed without text.";
+      ? t("Generation stopped.")
+      : t("Response completed without text.");
   } else {
     // Completed blocks were typeset as their closing blank lines streamed
     // past; only the still-raw tail is parsed here. A block is never
@@ -2587,7 +2686,7 @@ export function finishActiveTurnWithError(activeTurn, message) {
   state.activeTurn = null;
   if (activeTurn.recoveryTurn) state.resumingTurn = false;
   const errorDuration = activeTurn.startedAt ? formatTurnDuration(Date.now() - activeTurn.startedAt) : "";
-  const safeMessage = sanitizeErrorMessage(message || "The Agent turn failed.");
+  const safeMessage = sanitizeErrorMessage(message || t("The Agent turn failed."));
   if (!activeTurn.assistantText) {
     activeTurn.assistantBubble.textContent = safeMessage;
   } else {
@@ -2607,7 +2706,7 @@ export function failActiveTurnProtocol(activeTurn, message) {
   if (activeTurn.recoveryTurn) {
     keepRecoverableTurnForRetry(
       activeTurn,
-      "Recovery returned invalid data. Select Resume to try the same request again.",
+      t("Recovery returned invalid data. Select Resume to try the same request again."),
       message
     );
     return;
@@ -2659,11 +2758,11 @@ async function refreshRecoveryAfterUnconfirmedCancel(activeTurn) {
   }
   if (!isTurnContextCurrent(activeTurn)) return;
   state.recoveryFeedback = discovered
-    ? "Local stop completed; persistent dismissal was not confirmed."
-    : "Persistent dismissal was not confirmed; the request is retained locally.";
+    ? t("Local stop completed; persistent dismissal was not confirmed.")
+    : t("Persistent dismissal was not confirmed; the request is retained locally.");
   state.recoveryFeedbackKind = "error";
   setStatus(
-    "The stream stopped locally, but persistent dismissal was not confirmed. Review the interrupted response; it was not replayed.",
+    t("The stream stopped locally, but persistent dismissal was not confirmed. Review the interrupted response; it was not replayed."),
     "error"
   );
   updateComposerState();
@@ -2714,7 +2813,7 @@ async function stopActiveTurn() {
           activeTurn.startedAt ? formatTurnDuration(Date.now() - activeTurn.startedAt) : ""
         );
         setStatus(
-          "The stream stopped locally, but persistent dismissal was not confirmed. Checking interrupted responses...",
+          t("The stream stopped locally, but persistent dismissal was not confirmed. Checking interrupted responses..."),
           "error"
         );
       }
@@ -2731,7 +2830,7 @@ async function stopActiveTurn() {
   if (state.activeTurn?.threadUUID) updateThreadRunning(state.activeTurn.threadUUID, true);
     renderTaskContext();
     updateComposerState();
-    setStatus("The Agent turn could not be stopped yet.", "error");
+    setStatus(t("The Agent turn could not be stopped yet."), "error");
   }
 }
 
@@ -2756,12 +2855,12 @@ function signedOutStatusMessage(authState = state.auth?.state) {
     return "";
   }
   if (authState === "expired") {
-    return "The connected account needs signing in again. Your local work is still here.";
+    return t("The connected account needs signing in again. Your local work is still here.");
   }
   const identity = activeLocalAccount();
   return identity
-    ? `Working as ${identity.name} on this machine. Connect an account or a local model to start a conversation.`
-    : "Working on this machine. Connect an account or a local model to start a conversation.";
+    ? t("Working as {name} on this machine. Connect an account or a local model to start a conversation.", { name: identity.name })
+    : t("Working on this machine. Connect an account or a local model to start a conversation.");
 }
 
 function setLoginFormState(visible, submitting = false) {
@@ -2784,7 +2883,7 @@ function setLoginFormState(visible, submitting = false) {
 function showLoginFailure(result) {
   const keepForm = result.state === "awaiting_password" || result.state === "submitting";
   setLoginFormState(keepForm, result.state === "submitting");
-  setStatus(LOGIN_ERROR_MESSAGES[result.error], "error");
+  setStatus(t(LOGIN_ERROR_MESSAGES[result.error]), "error");
   if (keepForm && result.state === "awaiting_password") {
     loginPassword.focus();
   }
@@ -2805,7 +2904,7 @@ async function applyLoginTransactionResult(result, pollSubmitting = false, gener
     case "idle":
       setLoginFormState(false);
       if (state.modesParseSkew) {
-        setStatus("App and sidecar are out of sync: the sidecar's answers no longer match this UI. Restart the app; if this persists, reinstall.", "error");
+        setStatus(t("App and sidecar are out of sync: the sidecar's answers no longer match this UI. Restart the app; if this persists, reinstall."), "error");
       } else {
         // The login machinery has the last word on this path, so it must say
         // the same thing boot does: no account connected is a state of the
@@ -2815,7 +2914,7 @@ async function applyLoginTransactionResult(result, pollSubmitting = false, gener
       return;
     case "awaiting_password":
       setLoginFormState(true);
-      setStatus("Enter your WorkMax email and password to continue.");
+      setStatus(t("Enter your WorkMax email and password to continue."));
       if (loginEmail.value) {
         loginPassword.focus();
       } else {
@@ -2824,14 +2923,14 @@ async function applyLoginTransactionResult(result, pollSubmitting = false, gener
       return;
     case "submitting":
       setLoginFormState(true, true);
-      setStatus("Completing sign-in securely...");
+      setStatus(t("Completing sign-in securely..."));
       if (pollSubmitting) {
         await waitForLoginTransaction(generation);
       }
       return;
     case "authenticated":
       setLoginFormState(false);
-      setStatus("Sign-in complete. Loading your local history...");
+      setStatus(t("Sign-in complete. Loading your local history..."));
       await refresh();
       return;
   }
@@ -2870,12 +2969,12 @@ async function waitForLoginTransaction(generation) {
     return;
   }
   setLoginFormState(false);
-  setStatus(LOGIN_ERROR_MESSAGES.expired, "error");
+  setStatus(t(LOGIN_ERROR_MESSAGES.expired), "error");
 }
 
 function showLoginBridgeUnavailable() {
   setLoginFormState(false);
-  setStatus(LOGIN_ERROR_MESSAGES.unavailable, "error");
+  setStatus(t(LOGIN_ERROR_MESSAGES.unavailable), "error");
 }
 
 async function login() {
@@ -2886,7 +2985,7 @@ async function login() {
   }
   const generation = fences.loginOperation.bump();
   if (localAccountConnectButton) localAccountConnectButton.disabled = true;
-  setStatus("Preparing a secure sign-in session...");
+  setStatus(t("Preparing a secure sign-in session..."));
   try {
     const result = parseLoginTransactionResult(await auth.beginLogin());
     await applyLoginTransactionResult(result, true, generation);
@@ -2913,12 +3012,12 @@ async function submitLogin(event) {
     }
     if (!validLoginEmail(email) || !validLoginCredential(password, 1, 1024)) {
       setLoginFormState(true);
-      setStatus(LOGIN_ERROR_MESSAGES.invalid_request, "error");
+      setStatus(t(LOGIN_ERROR_MESSAGES.invalid_request), "error");
       return;
     }
     loginEmail.value = email;
     setLoginFormState(true, true);
-    setStatus("Checking your credentials...");
+    setStatus(t("Checking your credentials..."));
     let result;
     try {
       result = parseLoginTransactionResult(
@@ -2966,7 +3065,11 @@ async function reconcileAmbiguousLoginOutcome(generation) {
       return false;
     }
     setLoginFormState(false);
-    setStatus(`Authenticated${current.tier ? ` · ${current.tier}` : ""}. Reading local cache.`);
+    setStatus(
+      t("Authenticated{tier}. Reading local cache.", {
+        tier: current.tier ? ` · ${current.tier}` : "",
+      })
+    );
     await Promise.all([
       loadThreads(sessionGeneration),
       loadSkills(sessionGeneration),
@@ -2996,7 +3099,7 @@ async function cancelLogin() {
       return;
     }
     setLoginFormState(false);
-    setStatus(LOGIN_ERROR_MESSAGES.canceled);
+    setStatus(t(LOGIN_ERROR_MESSAGES.canceled));
   } catch {
     if (fences.loginOperation.isCurrent(generation)) {
       showLoginBridgeUnavailable();
@@ -3034,7 +3137,7 @@ export async function refresh() {
     state.agentAvailable = false;
     state.createAvailable = false;
     updateComposerState();
-    setStatus("This bundled renderer must run inside WorkMax Desktop.", "error");
+    setStatus(t("This bundled renderer must run inside WorkMax Desktop."), "error");
     return;
   }
   if (state.recoveringSession) {
@@ -3044,8 +3147,8 @@ export async function refresh() {
     const retryable = state.createDraft.retryable === true;
     setStatus(
       retryable
-        ? "Retry or cancel the current thread draft before refreshing."
-        : "Cancel the current thread draft before refreshing.",
+        ? t("Retry or cancel the current thread draft before refreshing.")
+        : t("Cancel the current thread draft before refreshing."),
       "error"
     );
     (retryable ? newThreadSubmitButton : newThreadCancelButton).focus();
@@ -3067,7 +3170,7 @@ export async function refresh() {
   state.createFormOpen = false;
   state.creatingThread = false;
   state.createDraft = null;
-  newThreadName.value = "New chat";
+  newThreadName.value = t("New chat");
   setCreateFeedback("");
   // A refresh empties the composer but must not lose its words: stash the
   // draft so re-selecting the thread restores it. Only a session change
@@ -3110,7 +3213,7 @@ export async function refresh() {
   // The whole About row goes with it: a "Version" label next to nothing is
   // the same claim of a fault, just with a heading on it.
   if (aboutVersionRow) aboutVersionRow.hidden = versions.length === 0;
-  setStatus("Checking auth status...");
+  setStatus(t("Checking auth status..."));
   try {
     const auth = await loadAuthStatus(generation);
     if (!auth || !fences.session.isCurrent(generation)) return;
@@ -3139,7 +3242,7 @@ export async function refresh() {
       // version skew is the thing the user actually needs to know about.
       if (state.modesParseSkew && fences.session.isCurrent(generation)) {
         setStatus(
-          "App and sidecar are out of sync: the sidecar's answers no longer match this UI. Restart the app; if this persists, reinstall.",
+          t("App and sidecar are out of sync: the sidecar's answers no longer match this UI. Restart the app; if this persists, reinstall."),
           "error"
         );
       }
@@ -3147,7 +3250,11 @@ export async function refresh() {
     }
     state.localRoute = false;
     setLoginFormState(false);
-    setStatus(`Authenticated${auth.tier ? ` · ${auth.tier}` : ""}. Reading local cache.`);
+    setStatus(
+      t("Authenticated{tier}. Reading local cache.", {
+        tier: auth.tier ? ` · ${auth.tier}` : "",
+      })
+    );
     // The local identity is loaded here too, not only on the signed-out path:
     // a connected account is a binding ON that identity, and the sidebar has
     // to be able to say which one it is bound to — and offer to disconnect.
@@ -3220,6 +3327,12 @@ for (const [choice, button] of DENSITY_BUTTONS()) {
   if (!button) continue;
   button.addEventListener("click", () => {
     setDensity(choice);
+  });
+}
+for (const [choice, button] of LANGUAGE_BUTTONS()) {
+  if (!button) continue;
+  button.addEventListener("click", () => {
+    setLanguage(choice);
   });
 }
 if (modelPreferredRoute) {
@@ -3332,7 +3445,9 @@ chatInput.addEventListener("input", () => {
     const used = utf8ByteLength(chatInput.value) / MAX_CHAT_TEXT_BYTES;
     if (used >= 0.8) {
       capacity.hidden = false;
-      capacity.textContent = `${Math.min(100, Math.round(used * 100))}% of the message limit used`;
+      capacity.textContent = t("{n}% of the message limit used", {
+        n: Math.min(100, Math.round(used * 100)),
+      });
     } else {
       capacity.hidden = true;
     }
@@ -3560,9 +3675,9 @@ if (openWorkspaceButton) {
     if (!threadUUID || typeof agent?.revealWorkspace !== "function") return;
     void agent.revealWorkspace(threadUUID).then(
       (result) => {
-        if (!result?.ok) setStatus("Could not open the workspace folder.", "error");
+        if (!result?.ok) setStatus(t("Could not open the workspace folder."), "error");
       },
-      () => setStatus("Could not open the workspace folder.", "error")
+      () => setStatus(t("Could not open the workspace folder."), "error")
     );
   });
 }
@@ -3599,9 +3714,9 @@ function applySidebarCollapsed() {
   // the verb.
   if (!sidebarCollapseButton) return;
   sidebarCollapseButton.setAttribute("aria-expanded", sidebarCollapsed ? "false" : "true");
-  const label = sidebarCollapsed ? "Show sidebar" : "Hide sidebar";
+  const label = sidebarCollapsed ? t("Show sidebar") : t("Hide sidebar");
   sidebarCollapseButton.setAttribute("aria-label", label);
-  sidebarCollapseButton.setAttribute("title", `${label} (⌘\\)`);
+  sidebarCollapseButton.setAttribute("title", t("{label} (⌘\\)", { label }));
 }
 
 export function toggleSidebar(next) {
@@ -3650,7 +3765,7 @@ let panelBeforeMind = "workspace";
 function applyRailToggle(button, shown, name) {
   if (!button) return;
   button.setAttribute("aria-expanded", shown ? "true" : "false");
-  const label = `${shown ? "Hide" : "Show"} ${name}`;
+  const label = t(shown ? "Hide {name}" : "Show {name}", { name: t(name) });
   button.setAttribute("aria-label", label);
   button.setAttribute("title", label);
 }

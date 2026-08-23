@@ -357,6 +357,25 @@
                     </span>
                   </span>
                 </div>
+                <!-- The language names name themselves: "English" and "中文"
+                     are spelled in their own language whatever the window
+                     currently speaks, because the reader most in need of the
+                     switch is the one who cannot read the current one. -->
+                <div class="setting-row">
+                  <span class="setting-label">
+                    <span class="setting-title">Language</span>
+                    <span class="setting-desc">
+                      Which language this window speaks. System follows the machine.
+                    </span>
+                  </span>
+                  <span class="setting-control">
+                    <span class="segmented" role="group" aria-label="Language">
+                      <button id="language-system" class="segment" type="button">System</button>
+                      <button id="language-en" class="segment" type="button">English</button>
+                      <button id="language-zh" class="segment" type="button">中文</button>
+                    </span>
+                  </span>
+                </div>
               </div>
             </section>
 

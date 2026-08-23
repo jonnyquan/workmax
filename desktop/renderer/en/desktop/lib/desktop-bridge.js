@@ -294,6 +294,13 @@ function createDesktopBridge(deps) {
                 const result = await execute(deps, ROUTES.settingsPutAppearance, undefined, { density: choice });
                 return validateAppearanceSettingsResult(result);
             },
+            putLanguage: async (choice) => {
+                if (choice !== "system" && choice !== "en" && choice !== "zh") {
+                    throw new TypeError('settings.putLanguage choice must be "system", "en" or "zh"');
+                }
+                const result = await execute(deps, ROUTES.settingsPutAppearance, undefined, { language: choice });
+                return validateAppearanceSettingsResult(result);
+            },
         },
         mind: {
             list: async () => {
@@ -409,6 +416,7 @@ function buildCapabilities() {
                     "getModelCatalog",
                     "putAppearance",
                     "putDensity",
+                    "putLanguage",
                 ],
             },
             mind: {
@@ -584,7 +592,10 @@ function validateAppearanceSettingsResult(result) {
         throw new TypeError("settings appearance response is malformed");
     }
     const record = data;
-    assertExactKeys(record, ["appearance", "density", "updated_at"], "settings appearance response");
+    // "language" joined the row with migration 0016. The exact-keys list moved
+    // the same day — the create-thread contract has already demonstrated twice
+    // what a validator that lags the server's row does to the feature above it.
+    assertExactKeys(record, ["appearance", "density", "language", "resolved_language", "updated_at"], "settings appearance response");
     const appearance = record.appearance;
     if (appearance !== "system" &&
         appearance !== "light" &&
@@ -597,6 +608,14 @@ function validateAppearanceSettingsResult(result) {
         density !== "comfortable") {
         throw new TypeError("settings density value is malformed");
     }
+    const language = record.language;
+    if (language !== "system" && language !== "en" && language !== "zh") {
+        throw new TypeError("settings language value is malformed");
+    }
+    const resolvedLanguage = record.resolved_language;
+    if (resolvedLanguage !== "en" && resolvedLanguage !== "zh") {
+        throw new TypeError("settings resolved_language value is malformed");
+    }
     if (typeof record.updated_at !== "string" ||
         record.updated_at === "" ||
         Number.isNaN(Date.parse(record.updated_at))) {
@@ -604,7 +623,13 @@ function validateAppearanceSettingsResult(result) {
     }
     return {
         ...result,
-        data: { appearance, density, updated_at: record.updated_at },
+        data: {
+            appearance,
+            density,
+            language,
+            resolved_language: resolvedLanguage,
+            updated_at: record.updated_at,
+        },
     };
 }
 // The catalog decides what the user is offered and whether their existing

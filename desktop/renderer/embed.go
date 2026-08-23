@@ -40,6 +40,7 @@ import (
 //go:embed en/desktop/renderer.js
 //go:embed en/desktop/dom.js
 //go:embed en/desktop/fence.js
+//go:embed en/desktop/i18n.js
 //go:embed en/desktop/protocol.js
 //go:embed en/desktop/events.js
 //go:embed en/desktop/markdown.js

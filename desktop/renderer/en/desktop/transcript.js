@@ -7,6 +7,7 @@
 // message therefore goes through here, so "is that turn actually in the DOM?"
 // has one answer and one place that knows it.
 import { fences } from "./fence.js";
+import { currentLocale, t } from "./i18n.js";
 import {
   chatInput,
   emptyState,
@@ -133,7 +134,9 @@ function buildEarlierControl(hiddenCount) {
   button.type = "button";
   button.className = "transcript-earlier";
   button.textContent =
-    hiddenCount === 1 ? "Show 1 earlier exchange" : `Show ${hiddenCount} earlier exchanges`;
+    hiddenCount === 1
+      ? t("Show 1 earlier exchange")
+      : t("Show {n} earlier exchanges", { n: hiddenCount });
   button.addEventListener("click", mountEarlierMessages);
   return button;
 }
@@ -198,7 +201,7 @@ function buildExchangeNodes(item, isLast) {
     options.persistent = isLast;
     const node = renderMessage(
       "assistant",
-      item.ai_text || "Response interrupted before text was cached.",
+      item.ai_text || t("Response interrupted before text was cached."),
       item.streaming_state,
       item.updated_at || item.created_at,
       options
@@ -323,7 +326,7 @@ function renderCachedMessages(items) {
   mountedFrom = Math.max(0, items.length - TRANSCRIPT_WINDOW_TURNS);
   messageList.textContent = "";
   if (items.length === 0) {
-    messageList.appendChild(renderNotice("No cached messages for this thread yet."));
+    messageList.appendChild(renderNotice(t("No cached messages for this thread yet.")));
     return;
   }
   syncEarlierControl();
@@ -360,8 +363,8 @@ export function selectThread(thread, options = {}) {
       const retryable = state.createDraft.retryable === true;
       setStatus(
         retryable
-          ? "Retry or cancel the current thread draft before switching."
-          : "Cancel the current thread draft before switching.",
+          ? t("Retry or cancel the current thread draft before switching.")
+          : t("Cancel the current thread draft before switching."),
         "error"
       );
       (retryable ? newThreadSubmitButton : newThreadCancelButton).focus();
@@ -416,7 +419,7 @@ export function selectThread(thread, options = {}) {
     mountedFrom = 0;
     return;
   }
-  messageList.appendChild(renderNotice("Loading cached messages..."));
+  messageList.appendChild(renderNotice(t("Loading cached messages...")));
   void loadMessagesForSelection(thread, context).catch((error) => {
     void handleScopedError(error, context);
   });
@@ -438,9 +441,12 @@ export function formatMessageTime(value) {
   if (Number.isNaN(date.getTime())) return "";
   const sameDay =
     localCalendarDay(date) === localCalendarDay(new Date());
+  // The window's language, not the OS's — the row around the time already
+  // speaks it.
+  const timeLocale = currentLocale() === "zh" ? "zh-CN" : "en-US";
   return sameDay
-    ? date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    ? date.toLocaleTimeString(timeLocale, { hour: "2-digit", minute: "2-digit" })
+    : date.toLocaleString(timeLocale, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function renderMessage(role, text, streamingState = "complete", timestamp = "", actionOptions = {}) {
@@ -463,7 +469,7 @@ function renderMessage(role, text, streamingState = "complete", timestamp = "", 
     label.appendChild(avatar);
     label.appendChild(document.createTextNode("WorkMax"));
   } else {
-    label.textContent = role === "user" ? "You" : role;
+    label.textContent = role === "user" ? t("You") : role;
   }
   // Cached messages carry their stored time; a streaming message shows none
   // until the post-turn reconcile repaints it from cache — which is when a
@@ -534,7 +540,7 @@ export function attachMessageActions(wrapper, role, text, options = {}) {
     }
     actions.classList.add("revealed");
   }
-  const copy = buildCopyButton(text, role === "assistant" ? "Copy answer" : "Copy");
+  const copy = buildCopyButton(text, role === "assistant" ? t("Copy answer") : t("Copy"));
   if (copy) actions.appendChild(copy);
   if (role === "assistant" && options.regenerateText) {
     actions.appendChild(buildRegenerateButton(options.regenerateText));
@@ -547,7 +553,7 @@ export function attachMessageActions(wrapper, role, text, options = {}) {
     const reuse = document.createElement("button");
     reuse.type = "button";
     reuse.className = "message-action";
-    reuse.textContent = "Edit and resend";
+    reuse.textContent = t("Edit and resend");
     reuse.addEventListener("click", () => {
       chatInput.value = text;
       updateComposerState();
@@ -609,7 +615,7 @@ function buildRegenerateButton(regenerateText) {
   const regen = document.createElement("button");
   regen.type = "button";
   regen.className = "message-action message-action-regenerate";
-  regen.textContent = "Regenerate";
+  regen.textContent = t("Regenerate");
   regen.addEventListener("click", () => {
     if (chatInput.disabled) return;
     chatInput.value = regenerateText;
@@ -656,7 +662,9 @@ export function setTurnState(label, detail = "") {
     return;
   }
   turnState.hidden = false;
-  turnState.textContent = detail ? `${label} · ${detail}` : label;
+  // The label is an English state key everywhere else (the tone branch below
+  // and callers compare against it); only the visible text is translated.
+  turnState.textContent = detail ? `${t(label)} · ${detail}` : t(label);
   const tone =
     label === "Working" || label === "Resuming" || label === "Stopping"
       ? "busy"
@@ -686,8 +694,8 @@ export function updateSelectedThreadHeading() {
     (candidate) => candidate.uuid === state.selectedThreadUUID
   );
   if (!thread) return;
-  const name = thread.name || "Untitled thread";
-  const meta = `${thread.agent_mode || "agent"} · ${thread.message_count || 0} messages · ${formatMessageTime(thread.updated_at) || formatDate(thread.updated_at)}`;
+  const name = thread.name || t("Untitled thread");
+  const meta = `${thread.agent_mode || "agent"} · ${t("{n} messages", { n: thread.message_count || 0 })} · ${formatMessageTime(thread.updated_at) || formatDate(thread.updated_at)}`;
   threadTitle.textContent = name;
   // The name is the chrome. Skill, count and clock are a tooltip — printing
   // them beside the title is the dashboard line every competitor dropped.

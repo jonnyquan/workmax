@@ -28,6 +28,7 @@ func (s *Server) handleGetAppearance(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ui preference read failed"})
 		return
 	}
+	dto.ResolvedLanguage = resolveDisplayLanguage(dto.Language, c.GetHeader("Accept-Language"))
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, dto)
 }
@@ -61,6 +62,7 @@ func (s *Server) handlePutAppearance(c *gin.Context) {
 	// launch. "system" is left to the request middleware, which is already
 	// watching the header this very request carried.
 	applyStoredLocale(dto.Language)
+	dto.ResolvedLanguage = resolveDisplayLanguage(dto.Language, c.GetHeader("Accept-Language"))
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, dto)
 }
