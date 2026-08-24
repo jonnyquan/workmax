@@ -66,6 +66,7 @@
   --warning-foreground: 30 5% 13%;
   --info: 185 38% 34%;
   --border: 30 4% 90%;
+  --rail-surface: 30 4% 96%;
   --input: 30 4% 90%;
   --ring: 158 34% 27%;
   --radius: 0.5rem;
@@ -122,6 +123,7 @@
     --warning-foreground: 30 5% 9%;
     --info: 185 38% 52%;
     --border: 30 4% 20%;
+    --rail-surface: 30 4% 12%;
     --input: 30 4% 20%;
     --ring: 150 36% 52%;
     --code-surface: 220 10% 14%;
@@ -169,6 +171,7 @@
   --warning-foreground: 30 5% 9%;
   --info: 185 38% 52%;
   --border: 30 4% 20%;
+  --rail-surface: 30 4% 12%;
   --input: 30 4% 20%;
   --ring: 150 36% 52%;
   --code-surface: 220 10% 14%;
@@ -254,6 +257,18 @@
   --h-control-sm: 24px;
 
   --rail: 300px;
+  /* Both rails are the same width and always have been, but they are no longer
+     the same VARIABLE: each one can now be folded to nothing on its own, and
+     one shared token cannot express "the left one is away". --rail stays the
+     width; --rail-left / --rail-right are the two columns, which is why the
+     narrow-window media queries below still only have to move --rail.
+     They live on :root rather than on .shell because TWO things are laid out
+     by them now — the grid that places the columns, and the title bar that
+     paints each column's colour up to its edge — and .shell is an ancestor of
+     only one. Every fold below sets these; nothing else needs to know how a
+     column comes and goes. */
+  --rail-left: var(--rail);
+  --rail-right: var(--rail);
   --measure: 720px;
 }
 
@@ -656,6 +671,26 @@ textarea::placeholder {
      starts them a small gap right of the green one. */
   height: 46px;
   padding: 0 var(--sp-2) 0 78px;
+  /* The bar spans the columns, so it paints like them.
+     A window whose title bar is one flat strip has its columns start 46px
+     down: each rail's tint begins below the bar, the traffic lights sit on a
+     band of their own, and the columns read as hanging from the chrome rather
+     than reaching the top of the window. Hard stops fix that — each rail's
+     colour up to that rail's edge, the page's colour between them — and the
+     seams that are left fall exactly where the columns already change
+     colour, which is no seam at all.
+     The stops are the SAME two variables the grid lays the columns out with,
+     so an edge cannot drift from the column it traces and a fold cannot
+     leave a band of colour over a column that is no longer there. That is
+     the whole reason they live on :root: a second set of conditions here,
+     mirroring the four that fold a rail, is how the bar and the grid would
+     come to disagree about which columns exist. */
+  background: linear-gradient(
+    to right,
+    hsl(var(--rail-surface)) 0 var(--rail-left),
+    hsl(var(--background)) var(--rail-left) calc(100% - var(--rail-right)),
+    hsl(var(--rail-surface)) calc(100% - var(--rail-right)) 100%
+  );
 }
 
 .titlebar button {
@@ -699,13 +734,6 @@ textarea::placeholder {
    lists and reading them is easier at a stable width. Both rails lost 40px in
    this pass; the middle column is where the words are. */
 .shell {
-  /* Both rails are the same width and always have been, but they are no longer
-     the same VARIABLE: each one can now be folded to nothing on its own, and
-     one shared token cannot express "the left one is away". --rail stays the
-     width; --rail-left / --rail-right are the two columns, which is why the
-     narrow-window media queries below still only have to move --rail. */
-  --rail-left: var(--rail);
-  --rail-right: var(--rail);
   display: grid;
   grid-template-columns: var(--rail-left) minmax(0, 1fr) var(--rail-right);
   width: 100%;
@@ -750,7 +778,7 @@ textarea::placeholder {
    The state lives on the document element rather than on .shell so the
    controls in the OTHER column can react to it too: the rail's collapse button
    is inside the rail it hides, so something outside has to bring it back. */
-:root[data-sidebar="collapsed"] .shell {
+:root[data-sidebar="collapsed"] {
   --rail-left: 0px;
 }
 
@@ -772,7 +800,7 @@ textarea::placeholder {
    the two title-bar icons already do — and one of those tabs would have to
    vanish whenever no conversation is open, which is a worse thing to watch
    than a button that comes and goes at the top of the window. */
-:root[data-right-panel="none"] .shell {
+:root[data-right-panel="none"] {
   --rail-right: 0px;
 }
 
@@ -812,7 +840,7 @@ textarea::placeholder {
   display: none;
 }
 
-:root:not([data-right-panel="mind"]) .shell:has(#thread-panel[hidden]) {
+:root:not([data-right-panel="mind"]):has(#thread-panel[hidden]) {
   --rail-right: 0px;
 }
 
@@ -829,13 +857,15 @@ textarea::placeholder {
    this size", which on a 900px window (the minimum this app opens at) would
    mean no way to create, switch or teach a mind at all. */
 @media (max-width: 1180px) {
-  .shell {
+  /* On :root, not on .shell. The width is read in two places now — the grid
+     that lays the columns out, and the title bar that paints the rail's
+     colour up to the same edge — and .shell is an ancestor of only one of
+     them. A second copy for the bar is how the two would come to disagree at
+     exactly one window width. */
+  :root {
     --rail: 272px;
   }
-  /* The .shell parent is not decoration: the column's own display:flex lives
-     further down the sheet at the same specificity a bare .context-panel
-     would have, and source order would hand it the win back. */
-  :root:not([data-right-panel="mind"]) .shell {
+  :root:not([data-right-panel="mind"]) {
     --rail-right: 0px;
   }
 
@@ -854,7 +884,7 @@ textarea::placeholder {
 }
 
 @media (max-width: 980px) {
-  .shell {
+  :root {
     --rail: 256px;
   }
 }
@@ -865,7 +895,11 @@ textarea::placeholder {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: hsl(var(--muted) / 0.4);
+  /* An opaque token rather than muted at 0.4 over the page. The two resolve
+     to the same colour, but only one of them can be named anywhere else — and
+     the title bar has to paint this exact colour above this exact column,
+     which an alpha blend over a backdrop it cannot see is unable to promise. */
+  background: hsl(var(--rail-surface));
 }
 
 /* One row: the product, and nothing else. The search and fold icons that used
@@ -3541,8 +3575,15 @@ button.composer-chip:hover {
   min-width: 0;
   padding-bottom: var(--sp-5);
   overflow-y: auto;
-  border-left: 1px solid hsl(var(--border));
-  background: hsl(var(--background));
+  /* The same surface as the other rail. The two columns are the window's
+     chrome and the middle one is the work, which is a thing three surfaces
+     can say and two cannot: this column used to be the page's own colour
+     with a hairline drawn down its edge, so it read as part of the
+     conversation that happened to have a line in front of it.
+     The line goes with the change. A border was the only thing separating
+     two identical surfaces; between two different ones it is a second answer
+     to a question the colours have already settled. */
+  background: hsl(var(--rail-surface));
 }
 
 /* --- Workspace panel --------------------------------------------------------

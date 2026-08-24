@@ -143,7 +143,7 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   // variable can be guarded; the template could not.
   assert.match(
     rendererCSS,
-    /:root:not\(\[data-right-panel="mind"\]\)\s*\.shell:has\(#thread-panel\[hidden\]\)\s*\{\s*--rail-right:\s*0px;/u,
+    /:root:not\(\[data-right-panel="mind"\]\):has\(#thread-panel\[hidden\]\)\s*\{\s*--rail-right:\s*0px;/u,
     "with no conversation the workspace half of the column must collapse — and only that half",
   );
   assert.doesNotMatch(
@@ -166,14 +166,29 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   // descendant — always less specific than :has(#thread-panel[hidden]), which
   // carries an id. So each one takes its column to zero through the custom
   // property nothing else declares, never by restating the template.
+  // The two widths live on :root, not on .shell. Two things are laid out by
+  // them — the grid that places the columns, and the title bar that paints
+  // each column's colour up to its edge — and .shell is an ancestor of only
+  // one of them. A second set of fold conditions for the bar is how the bar
+  // and the grid would come to disagree about which columns exist.
   assert.match(
     rendererCSS,
-    /\.shell\s*\{[^}]*--rail-left:\s*var\(--rail\);[^}]*--rail-right:\s*var\(--rail\);[^}]*grid-template-columns:\s*var\(--rail-left\) minmax\(0, 1fr\) var\(--rail-right\);/u,
-    "each rail must be its own grid track variable, or one cannot fold without the other",
+    /:root\s*\{[^}]*--rail-left:\s*var\(--rail\);\s*--rail-right:\s*var\(--rail\);/u,
+    "each rail must be its own width variable, or one cannot fold without the other",
+  );
+  assert.match(
+    rendererCSS,
+    /\.shell\s*\{[^}]*grid-template-columns:\s*var\(--rail-left\) minmax\(0, 1fr\) var\(--rail-right\);/u,
+    "and the grid reads them rather than restating the widths",
+  );
+  assert.match(
+    rendererCSS,
+    /\.titlebar\s*\{[^}]*var\(--rail-left\)[^}]*calc\(100% - var\(--rail-right\)\)/u,
+    "the bar paints to the same edges the grid places, from the same two variables",
   );
   for (const [selector, property] of [
-    [':root\\[data-sidebar="collapsed"\\] \\.shell', "--rail-left"],
-    [':root\\[data-right-panel="none"\\] \\.shell', "--rail-right"],
+    [':root\\[data-sidebar="collapsed"\\]', "--rail-left"],
+    [':root\\[data-right-panel="none"\\]', "--rail-right"],
   ]) {
     assert.match(
       rendererCSS,
@@ -219,7 +234,7 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   );
   assert.match(
     narrow[1],
-    /:root:not\(\[data-right-panel="mind"\]\)\s*\.shell\s*\{\s*--rail-right:\s*0px;/u,
+    /:root:not\(\[data-right-panel="mind"\]\)\s*\{\s*--rail-right:\s*0px;/u,
     "the narrow-window fold takes the workspace column, not an explicitly opened mind",
   );
   assert.doesNotMatch(
