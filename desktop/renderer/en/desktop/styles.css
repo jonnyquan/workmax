@@ -4013,6 +4013,56 @@ button.composer-chip:hover {
   padding-top: 0;
 }
 
+/* --- Pinned and Projects, side by side in the hierarchy ------------------
+   Two sections at one level. Pinned used to be the first GROUP inside the
+   thread list, which put it under the Projects heading and had the rail
+   claim a containment that does not exist: a pin and a project are
+   orthogonal facts about a conversation, and a pinned row is not filed
+   anywhere by being pinned.
+
+   The shared left edge is what says "peer". Both labels start where the nav
+   rows start; only their contents indent. */
+.rail-section,
+.rail-section-row {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  padding: 0 var(--sp-3);
+}
+
+.rail-section-heading {
+  display: flex;
+  align-items: center;
+  height: var(--h-control);
+  margin: 0;
+  padding: 0 var(--sp-2);
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+}
+
+/* The pinned list sizes to its rows rather than sharing the column's spare
+   height. Everything left over belongs to the conversations below: a rail
+   with two pinned threads should not hold half its height for them. */
+.rail-pinned-list {
+  flex: none;
+  /* The bottom inset is not decoration. A row's action icons are absolutely
+     positioned and centred on it, and they reach a couple of pixels past the
+     row's own box — which counts as scrollable overflow. The long list
+     absorbs that in the padding it already had; a list of one row has nothing
+     to absorb it with, and answers by growing a scrollbar for two pixels. */
+  padding: 0 var(--sp-2) var(--sp-1);
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+/* No uppercase micro-heading inside this list — the section already has a
+   heading, and a "PINNED" label under a "Pinned" label is the rail saying
+   the same word twice. */
+.rail-pinned-list .thread-group {
+  display: none;
+}
+
 .rail-empty {
   margin: 0;
   color: hsl(var(--foreground));

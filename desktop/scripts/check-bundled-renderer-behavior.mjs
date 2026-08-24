@@ -284,46 +284,70 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   assert.doesNotMatch(rendererSource, /sidebarExpandButton/u);
 }
 
-// --- Projects sits on top of the list it governs -----------------------------
+// --- Pinned beside Projects, Projects on top of its list ---------------------
 //
-// A conversation belongs to a project, and adjacency is the only way a column
-// says "belongs to". Projects used to lead the nav, which left Plugins as the
-// row immediately above the thread list — so the list read as the plugins'
-// contents. Two things hold that fix in place, and both are the kind that rot
-// quietly: the ORDER (Projects last, nothing between it and the list) and the
-// INITIAL STATE (this row ships current, and must ship looking current).
+// Two claims about hierarchy, and both are made by ORDER and INDENT rather
+// than by anything a reader could be told, which is why they need holding
+// down here.
+//
+// Pinned is a PEER of Projects. It used to be the first group inside the
+// thread list, which put it under the Projects heading and had the rail claim
+// a containment that does not exist: a pin and a project are orthogonal facts
+// about a conversation, and pinning files it nowhere.
+//
+// Projects still sits directly on top of the list it governs — nothing
+// between them — because a conversation does belong to a project, and
+// adjacency is the only way a column says "belongs to".
 {
   const navAt = rendererHTML.indexOf('<nav class="rail-nav"');
   const navEnd = rendererHTML.indexOf("</nav>", navAt);
   assert.ok(navAt > 0 && navEnd > navAt, "the rail nav is in the markup");
   const navHTML = rendererHTML.slice(navAt, navEnd);
 
+  // The nav is destinations that are NOT conversations. Projects left it so
+  // that Pinned could stand beside Projects rather than under it.
   const order = [...navHTML.matchAll(/id=["']rail-nav-([a-z]+)["']/gu)].map((m) => m[1]);
   assert.deepEqual(
     order,
-    ["schedule", "plugins", "projects"],
-    "Projects is the last nav row, so nothing sits between it and the thread list",
+    ["schedule", "plugins"],
+    "the nav holds the two destinations that are not conversations",
   );
+
+  const pinnedAt = rendererHTML.indexOf('id="pinned-section"');
+  const pinnedListAt = rendererHTML.indexOf('id="pinned-list"');
+  const projectsAt = rendererHTML.indexOf('id="rail-nav-projects"');
   const viewAt = rendererHTML.indexOf('id="rail-view-projects"');
   const listAt = rendererHTML.indexOf('id="thread-list"');
-  assert.ok(navEnd < viewAt && viewAt < listAt, "the list is inside the view the row names");
+  assert.ok(pinnedAt > navEnd, "Pinned is a section of the rail, not a row of the nav");
+  assert.ok(pinnedListAt > pinnedAt, "its rows are inside it");
+  assert.ok(projectsAt > pinnedListAt, "Pinned comes first, the way Codex stacks the two");
+  assert.ok(viewAt > projectsAt && viewAt < listAt, "the list is inside the view Projects names");
+  // Nothing between the Projects row and its list but the view wrapper.
+  const between = rendererHTML.slice(projectsAt, listAt);
+  assert.doesNotMatch(
+    between,
+    /id=["']pinned-/u,
+    "Pinned does not sit between Projects and the conversations it heads",
+  );
+
+  // Peers share a left edge. Both labels start where the nav rows start, and
+  // only their contents indent — that shared edge IS the claim.
+  assert.match(
+    rendererCSS,
+    /\.rail-section,\s*\.rail-section-row\s*\{[^}]*?padding:\s*0 var\(--sp-3\);/u,
+    "the two sections start at the same edge as the nav rows above them",
+  );
 
   // The initial state is the markup's job — showRailView is never called at
   // boot, so a row wearing only aria-current paints as an inactive peer until
-  // something is clicked. Both marks, or the header of the list looks like a
-  // destination nobody is on.
-  const projectsRow = navHTML.slice(navHTML.indexOf('id="rail-nav-projects"'));
+  // something is clicked.
+  const projectsRow = rendererHTML.slice(projectsAt, viewAt);
   assert.match(projectsRow, /class=["'][^"']*\bactive\b/u, "the current row ships with the active class");
   assert.match(projectsRow, /aria-current=["']page["']/u, "the current row ships with aria-current");
   assert.equal(
-    (navHTML.match(/aria-current=/gu) || []).length,
+    (rendererHTML.match(/class=["'][^"']*\brail-nav-item active\b/gu) || []).length,
     1,
-    "exactly one nav row is current",
-  );
-  assert.equal(
-    (navHTML.match(/class=["'][^"']*\brail-nav-item active\b/gu) || []).length,
-    1,
-    "exactly one nav row ships active",
+    "exactly one rail row ships active",
   );
 
   // And the gap is closed: the full rail-view inset under the row that names
@@ -6735,6 +6759,57 @@ async function testSidebarSearchIconOpensThePalette() {
   assert.equal(document.byId.get("quick-switcher").hidden, true, "pressing it again dismisses");
 }
 
+// Pinned belongs to the conversations, not to the rail. It is a peer of
+// Projects rather than a destination of its own, so it comes and goes with
+// the view Projects switches to — and it must survive a repaint arriving
+// while another view has the column, which is the direction that breaks:
+// the rail paints far more often than it switches.
+async function testPinnedSectionFollowsTheViewItBelongsTo() {
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "unauthenticated", updated_at: "2026-08-08T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        return response({
+          items: [{ ...thread("pinned-one", "Kept to hand"), pinned: true, updated_at: new Date().toISOString() }],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const { desktopBridge } = localModeBridge({ localRoute: true });
+  const { document, ns } = await runRenderer(bridge, desktopBridge);
+  await settle();
+
+  const section = document.byId.get("pinned-section");
+  assert.equal(section.hidden, false, "a pinned conversation shows its section");
+
+  document.byId.get("rail-nav-schedule").click();
+  assert.equal(
+    section.hidden,
+    true,
+    "switching away takes it with the conversations — a pinned row over the Schedule panel is filed under nothing",
+  );
+
+  // The direction that breaks: something repaints the rail while Schedule has
+  // the column. A repaint that only asked "is anything pinned?" would push
+  // the section back on top of a view it does not belong to.
+  ns.renderThreads();
+  assert.equal(section.hidden, true, "a repaint under another view does not bring it back");
+
+  document.byId.get("rail-nav-projects").click();
+  assert.equal(section.hidden, false, "switching back restores it");
+
+  // And switching back must not resurrect an EMPTY one.
+  ns.state.threads = [];
+  ns.renderThreads();
+  document.byId.get("rail-nav-schedule").click();
+  document.byId.get("rail-nav-projects").click();
+  assert.equal(section.hidden, true, "with nothing pinned there is nothing to head");
+}
+
 // --- The row's two icons, and the menu behind the third click ----------------
 //
 // Codex's shape: hover puts two icons on the row, right-click opens the rest.
@@ -6976,6 +7051,12 @@ async function testPinnedThreadsLeadTheSidebar() {
     walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-group"))
       .map((n) => n.textContent);
   assert.deepEqual(groupLabels(), ["Today", "Older"], "no pins, no Pinned group");
+  // Nothing pinned, no section: a heading standing over nothing is a
+  // permanent advertisement for a feature rather than a place with contents.
+  const pinnedSection = () => document.byId.get("pinned-section");
+  const pinnedRows = () =>
+    walk(document.byId.get("pinned-list"), (n) => n.classList?.contains("thread-button"));
+  assert.equal(pinnedSection().hidden, true, "no pins, no Pinned section");
 
   const pinButtons = walk(
     document.byId.get("thread-list"),
@@ -6988,20 +7069,26 @@ async function testPinnedThreadsLeadTheSidebar() {
   await settle();
 
   assert.deepEqual(pinCalls, ["old-thread"]);
-  assert.equal(
-    groupLabels()[0],
-    "Pinned",
-    "a pinned thread must lead the sidebar under its own heading",
+  // The pinned thread leaves the conversations list entirely and appears in
+  // the section beside Projects. Pinning is not filing: a pinned row that
+  // stayed under the Projects heading would say it had been put somewhere.
+  assert.equal(pinnedSection().hidden, false, "the section appears with its first pin");
+  assert.equal(pinnedRows().length, 1, "the pinned thread is in the pinned list");
+  assert.match(pinnedRows()[0].textContent, /Old favourite/, "and it is the one that was pinned");
+  assert.doesNotMatch(
+    document.byId.get("thread-list").textContent,
+    /Old favourite/,
+    "a pinned conversation is in one place, not two",
   );
-  const firstTitle = walk(
-    document.byId.get("thread-list"),
-    (n) => n.classList?.contains("thread-button"),
-  )[0].textContent;
-  assert.match(firstTitle, /Old favourite/, "the pin overrides the calendar");
+  assert.deepEqual(
+    groupLabels(),
+    ["Today"],
+    "and the calendar group it left behind goes with it",
+  );
 
-  // Unpin from the (now first) row's toggle.
+  // Unpin from the pinned row's own toggle.
   const unpinButton = walk(
-    document.byId.get("thread-list"),
+    document.byId.get("pinned-list"),
     (n) => n.classList?.contains("thread-pin"),
   )[0];
   // The toggle is an icon now, so what it says it will do lives in the two
@@ -11403,6 +11490,7 @@ await testPaletteRunsCommands();
 await testPaletteOpensWithoutThreads();
 await testColumnFolds();
 await testSidebarSearchIconOpensThePalette();
+await testPinnedSectionFollowsTheViewItBelongsTo();
 await testRowMenuHasTwoDoorsAndOneRoom();
 await testRowMenuRenamesAndExportsWithoutOpeningTheThread();
 await testPinnedThreadsLeadTheSidebar();

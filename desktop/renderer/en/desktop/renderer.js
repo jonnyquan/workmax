@@ -3900,6 +3900,19 @@ const RAIL_VIEWS = [
 ];
 
 function showRailView(name) {
+  // Pinned belongs to the conversations, not to the rail: it is a peer of
+  // Projects rather than a destination of its own, so it comes and goes with
+  // the view Projects switches to. Without this a pinned conversation would
+  // hover above the Schedule panel, filed under nothing.
+  //
+  // Its own emptiness still wins — renderPinnedSection hides the section when
+  // nothing is pinned, and switching back must not un-hide an empty one.
+  const pinned = document.querySelector("#pinned-section");
+  if (pinned) {
+    const list = document.querySelector("#pinned-list");
+    const hasPins = (list?.children?.length || 0) > 0;
+    pinned.hidden = name !== "projects" || !hasPins;
+  }
   for (const [view, navSel, viewSel] of RAIL_VIEWS) {
     const nav = document.querySelector(navSel);
     const panel = document.querySelector(viewSel);

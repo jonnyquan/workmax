@@ -604,16 +604,9 @@
         <!-- No brand row: the window names itself, and Codex's rail starts
              straight in with its destinations. The vertical space the banner
              took belongs to the list. -->
-        <!-- The rail's destinations, stacked vertically the way Codex stacks
-             them: New chat first (the primary action), then Schedule and
-             Plugins, and Projects LAST — directly above the list it governs.
-             The order is not alphabetical or by importance: a conversation
-             belongs to a project, and the only way a column says "belongs to"
-             is adjacency. Projects sat first here, which left Plugins as the
-             row immediately above the thread list and made the list read as
-             the plugins' contents. It is still the same view switcher — when
-             Schedule or Plugins is showing it is the way back — it just sits
-             where the thing it names begins. -->
+        <!-- The rail's destinations: New chat first (the primary action),
+             then the two places that are not conversations. Projects used to
+             sit here too and no longer does — see below. -->
         <nav class="rail-nav" aria-label="Sidebar sections">
           <button id="new-thread-button" class="rail-nav-new" type="button" disabled>
             <span class="rail-new-icon" aria-hidden="true">+</span>
@@ -621,14 +614,33 @@
           </button>
           <button id="rail-nav-schedule" class="rail-nav-item" type="button">Schedule</button>
           <button id="rail-nav-plugins" class="rail-nav-item" type="button">Plugins</button>
-          <!-- The markup carries the initial state, not a boot-time call: the
-               other two views ship hidden, and this row ships current. It
-               needs the class as well as the attribute — showRailView sets
-               both on every switch, so a row wearing only aria-current paints
-               as an inactive peer until the first click, which is exactly the
-               row that must not look like one now that the list hangs off it. -->
-          <button id="rail-nav-projects" class="rail-nav-item active" type="button" aria-current="page">Projects</button>
         </nav>
+
+        <!-- Pinned is a PEER of Projects, not a group inside it.
+             A pin and a project are orthogonal facts about a conversation:
+             pinning says "keep this to hand", filing says "this belongs with
+             those". Pinned rows were rendered as the first group inside the
+             thread list, which put them under the Projects heading and made
+             the rail claim a containment that does not exist — and made a
+             pinned conversation look like it had been filed somewhere.
+             Its own section, above Projects, at the same indent. -->
+        <section id="pinned-section" class="rail-section" hidden>
+          <h2 class="rail-section-heading">Pinned</h2>
+          <ol id="pinned-list" class="thread-list rail-pinned-list" aria-label="Pinned conversations"></ol>
+        </section>
+
+        <!-- Projects: still the switcher that brings the conversations back
+             when Schedule or Plugins has the column, and still directly above
+             the list it governs — it just sits outside the nav now, so that
+             Pinned can be beside it rather than under it.
+             The markup carries the initial state, not a boot-time call: the
+             other two views ship hidden, and this row ships current. It needs
+             the class as well as the attribute — showRailView sets both on
+             every switch, so a row wearing only aria-current paints as an
+             inactive peer until the first click. -->
+        <div class="rail-section-row">
+          <button id="rail-nav-projects" class="rail-nav-item active" type="button" aria-current="page">Projects</button>
+        </div>
 
         <div id="rail-view-projects" class="rail-view rail-view-grow">
 

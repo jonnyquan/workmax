@@ -15,6 +15,8 @@ import {
   quickSwitcher,
   quickSwitcherInput,
   quickSwitcherList,
+  pinnedList,
+  pinnedSection,
   sidebarSearchButton,
   threadList,
   threadMenu,
@@ -725,6 +727,27 @@ function toggleProjectGroup(heading, indicator) {
 // why it had a second empty state ("No conversations match …"); searching
 // happens in the palette now, and a list that quietly shortens itself while
 // another window has focus is not something this column should do.
+// The Pinned section, which exists only while something is pinned. An empty
+// section would be a heading standing over nothing — a permanent reminder of
+// a feature rather than a place with contents — so the whole thing stands
+// down, heading included, and Projects moves up to meet the nav.
+function renderPinnedSection(pinned) {
+  if (!pinnedList || !pinnedSection) return;
+  pinnedList.textContent = "";
+  // Two conditions, and both have to hold. Emptiness is this function's own
+  // answer; visibility belongs to whichever view has the column, and a
+  // repaint that arrives while Schedule is showing — a sync worker landing, a
+  // turn settling — must not push pinned conversations up over it. The rail
+  // paints far more often than it switches, so the one that forgets is this
+  // one.
+  const view = document.querySelector("#rail-view-projects");
+  const onConversations = view ? view.hidden !== true : true;
+  pinnedSection.hidden = pinned.length === 0 || !onConversations;
+  for (const thread of pinned) {
+    pinnedList.appendChild(renderThreadButton(thread));
+  }
+}
+
 export function renderThreads() {
   // The menu belongs to a row that is about to be replaced, and a menu whose
   // row is gone is a menu whose Delete points at nothing. Every path that
@@ -732,6 +755,7 @@ export function renderThreads() {
   // that has to remember.
   closeThreadMenu();
   threadList.textContent = "";
+  renderPinnedSection([]);
   if (state.threads.length === 0) {
     const item = document.createElement("li");
     item.appendChild(renderNotice(t("No cached threads yet.")));
@@ -741,16 +765,10 @@ export function renderThreads() {
   }
   const groups = groupThreads(state.threads, new Date());
 
-  // Pinned leads. A pin overrides project and calendar alike.
-  if (groups.pinned.length > 0) {
-    const heading = document.createElement("li");
-    heading.className = "thread-group";
-    heading.textContent = t(PINNED_GROUP_LABEL);
-    threadList.appendChild(heading);
-    for (const thread of groups.pinned) {
-      threadList.appendChild(renderThreadButton(thread));
-    }
-  }
+  // Pinned leads, in a section of its own above Projects rather than as the
+  // first group inside it. A pin overrides project and calendar alike — which
+  // is exactly why it cannot be rendered as one of their groups.
+  renderPinnedSection(groups.pinned);
 
   // Projects: each project key gets its own collapsible section, in the order
   // the keys were first seen (insertion order of the plain object, which is the
@@ -803,12 +821,18 @@ export function renderThreads() {
 // Update the running indicator on the thread that has an active turn, without
 // re-rendering the whole list. Called when a turn starts and when it settles.
 export function updateThreadRunning(threadUUID, running) {
-  if (!threadList) return;
-  for (const item of threadList.children) {
-    const button = item.querySelector?.(".thread-button");
-    if (!button) continue;
-    const isActive = item.dataset?.threadUuid === threadUUID;
-    button.classList.toggle("thread-running", isActive && running);
+  // Both lists. A pinned conversation is the likeliest one to be running —
+  // pinning is what you do to the thing you are working on — and it lives in
+  // the other list now, so a walk over the thread list alone would leave the
+  // running mark off exactly the rows that most need it.
+  for (const list of [pinnedList, threadList]) {
+    if (!list) continue;
+    for (const item of list.children) {
+      const button = item.querySelector?.(".thread-button");
+      if (!button) continue;
+      const isActive = item.dataset?.threadUuid === threadUUID;
+      button.classList.toggle("thread-running", isActive && running);
+    }
   }
 }
 
@@ -1056,11 +1080,12 @@ document.addEventListener("keydown", (event) => {
 function activeMenuItem() {
   return globalThis.document?.activeElement ?? null;
 }
-if (threadList) {
-  // Scrolling moves the row out from under a menu pinned to viewport
-  // coordinates. Closing is the honest answer; re-anchoring on every scroll
-  // frame is machinery for a gesture that means "I am looking elsewhere".
-  threadList.addEventListener("scroll", () => closeThreadMenu());
+// Scrolling moves the row out from under a menu pinned to viewport
+// coordinates. Closing is the honest answer; re-anchoring on every scroll
+// frame is machinery for a gesture that means "I am looking elsewhere".
+// Both lists scroll, and a menu opened on a pinned row is no less stranded.
+for (const list of [pinnedList, threadList]) {
+  if (list) list.addEventListener("scroll", () => closeThreadMenu());
 }
 
 if (quickSwitcherInput) {

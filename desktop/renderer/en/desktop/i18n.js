@@ -127,6 +127,7 @@ const ZH = new Map(Object.entries({
   "Plugins": "插件",
   "Sidebar sections": "侧栏分区",
   "Cached threads": "本地缓存的对话",
+  "Pinned conversations": "置顶的对话",
   "Local": "本地",
   "On this machine": "在这台机器上",
   "Settings…": "设置…",
