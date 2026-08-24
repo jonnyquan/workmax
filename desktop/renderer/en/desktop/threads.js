@@ -9,6 +9,7 @@
 // from the sidecar behind a debounce and a fence.
 import { fences } from "./fence.js";
 import { currentLocale, t } from "./i18n.js";
+import { MORE_ICON, PIN_ICON, buildIcon } from "./icons.js";
 import {
   emptyState,
   messageList,
@@ -486,31 +487,6 @@ function buildThreadActions(thread, item) {
   });
   actions.appendChild(more);
   return actions;
-}
-
-// Icons are hand-written paths on the app's 16-unit grid, drawn with
-// createElementNS — not innerHTML. The whole renderer holds the line that
-// markup is never parsed from a string, and an icon is not a good enough
-// reason to open that door for the first time.
-const PIN_ICON = [
-  "M6 1.9h4",
-  "M6.6 1.9v3.5a2.6 2.6 0 0 1-1.4 2.3l-.8.5a1.2 1.2 0 0 0-.6 1v.3h8.4v-.3a1.2 1.2 0 0 0-.6-1l-.8-.5a2.6 2.6 0 0 1-1.4-2.3V1.9",
-  "M8 9.5v4.6",
-];
-const MORE_ICON = ["M3.6 8h.01", "M8 8h.01", "M12.4 8h.01"];
-
-function buildIcon(paths) {
-  const ns = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(ns, "svg");
-  svg.setAttribute("viewBox", "0 0 16 16");
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("focusable", "false");
-  for (const d of paths) {
-    const path = document.createElementNS(ns, "path");
-    path.setAttribute("d", d);
-    svg.appendChild(path);
-  }
-  return svg;
 }
 
 // --- The row menu ------------------------------------------------------------

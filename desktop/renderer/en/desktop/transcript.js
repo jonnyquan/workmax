@@ -8,6 +8,7 @@
 // has one answer and one place that knows it.
 import { fences } from "./fence.js";
 import { currentLocale, t } from "./i18n.js";
+import { EDIT_ICON, REGENERATE_ICON, buildIcon } from "./icons.js";
 import {
   chatInput,
   emptyState,
@@ -553,7 +554,9 @@ export function attachMessageActions(wrapper, role, text, options = {}) {
     const reuse = document.createElement("button");
     reuse.type = "button";
     reuse.className = "message-action";
-    reuse.textContent = t("Edit and resend");
+    reuse.title = t("Edit and resend");
+    reuse.setAttribute("aria-label", t("Edit and resend"));
+    reuse.appendChild(buildIcon(EDIT_ICON));
     reuse.addEventListener("click", () => {
       chatInput.value = text;
       updateComposerState();
@@ -615,7 +618,9 @@ function buildRegenerateButton(regenerateText) {
   const regen = document.createElement("button");
   regen.type = "button";
   regen.className = "message-action message-action-regenerate";
-  regen.textContent = t("Regenerate");
+  regen.title = t("Regenerate");
+  regen.setAttribute("aria-label", t("Regenerate"));
+  regen.appendChild(buildIcon(REGENERATE_ICON));
   regen.addEventListener("click", () => {
     if (chatInput.disabled) return;
     chatInput.value = regenerateText;

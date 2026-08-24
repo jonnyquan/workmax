@@ -30,6 +30,7 @@ var shippedRendererFiles = []string{
 	"dom.js",
 	"fence.js",
 	"i18n.js",
+	"icons.js",
 	"protocol.js",
 	"events.js",
 	"markdown.js",

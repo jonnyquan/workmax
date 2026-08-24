@@ -21,6 +21,7 @@
 // draws are copy like any other, and a second translation path for three
 // strings would be worse than the import.
 import { t } from "./i18n.js";
+import { CHECK_ICON, COPY_ICON, buildIcon } from "./icons.js";
 
 // Above this the text is rendered plain. A wall this large is not made
 // readable by formatting, and it keeps a single parse bounded.
@@ -756,23 +757,36 @@ export function buildCopyButton(text, label) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "message-action";
-  button.textContent = label;
+  // The words move to the two places an icon can carry them. Both, not one:
+  // title is the tooltip a pointer gets and aria-label is what a screen
+  // reader reads, and a glyph with only one of them is unlabelled for half
+  // the people using it.
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.appendChild(buildIcon(COPY_ICON));
+  // What the button says after the click. An icon has no text to swap, so
+  // the answer is drawn — a tick, which needs no tooltip to be read — and
+  // the tooltip follows it for the moment it is up.
+  const say = (paths, tooltip) => {
+    button.textContent = "";
+    button.appendChild(buildIcon(paths));
+    button.title = tooltip;
+    button.setAttribute("aria-label", tooltip);
+  };
   button.addEventListener("click", () => {
     // The result is reported on the button itself rather than in the status
     // card: this is a per-message action, and a global status line would make
     // every copy look like an application event.
     Promise.resolve(clipboard.writeText(text)).then(
       () => {
-        button.textContent = t("Copied");
-        setTimeout(() => {
-          button.textContent = label;
-        }, COPY_FEEDBACK_MS);
+        say(CHECK_ICON, t("Copied"));
+        setTimeout(() => say(COPY_ICON, label), COPY_FEEDBACK_MS);
       },
       () => {
-        button.textContent = t("Copy failed");
-        setTimeout(() => {
-          button.textContent = label;
-        }, COPY_FEEDBACK_MS);
+        // No tick for a failure, and no second glyph invented for it: the
+        // sheets stay, and the tooltip is the whole message.
+        say(COPY_ICON, t("Copy failed"));
+        setTimeout(() => say(COPY_ICON, label), COPY_FEEDBACK_MS);
       }
     );
   });

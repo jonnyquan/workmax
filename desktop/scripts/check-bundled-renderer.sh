@@ -41,6 +41,7 @@ const allowed = new Set([
   "dom.js",
   "fence.js",
   "i18n.js",
+  "icons.js",
   "protocol.js",
   "events.js",
   "markdown.js",

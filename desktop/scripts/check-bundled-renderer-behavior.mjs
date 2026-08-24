@@ -46,6 +46,7 @@ const RENDERER_MODULES = [
   "mind.js",
   "fence.js",
   "i18n.js",
+  "icons.js",
 ];
 const moduleSources = new Map(
   RENDERER_MODULES.map((name) => [name, fs.readFileSync(path.join(rendererDir, name), "utf8")]),
@@ -1786,9 +1787,12 @@ async function testNewestAnswerKeepsItsActionsVisible() {
     n.classList?.contains("message-actions"));
   const revealed = rows.filter((row) => row.classList.contains("revealed"));
   assert.equal(revealed.length, 1, "exactly one action row stands, never two");
-  assert.match(
-    revealed[0].textContent,
-    /Regenerate/u,
+  // Identified by the control it carries, which is the class the in-place
+  // reconcile already uses to find and retire it. Not by text: the row is
+  // icons, and its words live in the tooltip.
+  assert.equal(
+    walk(revealed[0], (n) => n.classList?.contains("message-action-regenerate")).length,
+    1,
     "the standing row belongs to the newest ANSWER — a question's actions stay on hover",
   );
   // And the older answer's row exists but waits to be asked for.
@@ -3430,10 +3434,14 @@ async function testRegenerateRunsTheLastPromptAgain() {
   walk(document.byId.get("thread-list"), (n) => n.classList?.contains("thread-button"))[0].click();
   await settle();
 
+  // By class, and the tooltip that carries the word. An icon button has no
+  // text to match on, which is the point — the label is read once, on hover,
+  // rather than sitting under every answer.
   const regens = walk(
     document.byId.get("message-list"),
-    (n) => n.tagName === "BUTTON" && n.textContent === "Regenerate",
+    (n) => n.tagName === "BUTTON" && n.classList?.contains("message-action-regenerate"),
   );
+  assert.equal(regens[0]?.title, "Regenerate", "and it says so where an icon can");
   assert.equal(regens.length, 1, "only the final answer offers Regenerate");
   regens[0].click();
   await settle();
@@ -5453,7 +5461,21 @@ async function testMessageActionsCopyAndReuse() {
     document.byId.get("message-list"),
     (n) => n.tagName === "BUTTON" && n.classList?.contains("message-action"),
   );
-  const byLabel = (label) => buttons.find((b) => b.textContent === label);
+  // The row is icons, so a label is found where an icon can carry one — and
+  // it has to be in BOTH places, because a tooltip is invisible to a screen
+  // reader and an aria-label is invisible to a pointer. Asserting the pair
+  // here is what stops one of them being dropped later.
+  const byLabel = (label) => {
+    const found = buttons.find((b) => b.title === label);
+    if (found) {
+      assert.equal(
+        found.getAttribute("aria-label"),
+        label,
+        `${label}: an icon button needs the label as well as the tooltip`,
+      );
+    }
+    return found;
+  };
 
   const copyAnswer = byLabel("Copy answer");
   assert.ok(copyAnswer, "a finished answer must offer a copy");
@@ -5548,12 +5570,12 @@ async function testMessageActionsAbsentWithoutAClipboard() {
   );
   const copyButtons = walk(
     document.byId.get("message-list"),
-    (n) => n.tagName === "BUTTON" && /^Copy/u.test(n.textContent || ""),
+    (n) => n.tagName === "BUTTON" && /^Copy/u.test(n.title || ""),
   );
   assert.equal(copyButtons.length, 0, "no clipboard, no copy button");
   // "Edit and resend" does not touch the clipboard, so it must survive.
   assert.equal(
-    walk(document.byId.get("message-list"), (n) => n.tagName === "BUTTON" && n.textContent === "Edit and resend").length,
+    walk(document.byId.get("message-list"), (n) => n.tagName === "BUTTON" && n.title === "Edit and resend").length,
     1,
     "reuse does not depend on a clipboard and must still be offered",
   );
@@ -5617,7 +5639,7 @@ async function testStreamedAnswerGainsActionsWhenReconcileFails() {
 
   const copy = walk(
     document.byId.get("message-list"),
-    (n) => n.tagName === "BUTTON" && n.textContent === "Copy answer",
+    (n) => n.tagName === "BUTTON" && n.title === "Copy answer",
   );
   assert.equal(copy.length, 1, "the finished answer must offer exactly one copy");
   copy[0].click();
@@ -11042,7 +11064,10 @@ async function testShowEarlierHoldsTheScrollAnchorAndRetiresItselfAtTheTop() {
   }
   const all = messageArticles(document);
   assert.equal(all.length, 200, "everything is mounted at the top");
-  assert.ok(all[0].textContent.includes("Prompt 0Edit"), "the very first exchange is mounted");
+  // The message's own words, not the message plus whatever its action row
+  // happened to spell. That row is icons now; a row of text under every
+  // message was a toolbar in the middle of a document.
+  assert.ok(all[0].textContent.includes("Prompt 0"), "the very first exchange is mounted");
   assert.equal(earlierButton(document), null);
   void window;
 }

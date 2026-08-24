@@ -2795,15 +2795,33 @@ body:has(#thread-panel[hidden]) #context-panel-button {
   justify-content: flex-end;
 }
 
+/* Icons, on the same terms as the row actions in the rail: one grid, one
+   stroke weight, currentColor. Three words under every answer — Copy answer,
+   Regenerate — is a toolbar sitting in the middle of a document, and the
+   words are the same three on every message, which teaches the reader to
+   stop reading them. The glyphs keep the words in the tooltip, where they
+   are read once. */
 .message-action {
+  display: grid;
+  place-items: center;
+  width: var(--h-control-sm);
   height: var(--h-control-sm);
-  padding: 0 var(--sp-2);
+  padding: 0;
   border-color: transparent;
   border-radius: var(--r-control);
   background: transparent;
   color: hsl(var(--muted-foreground));
-  font-size: var(--fs-micro);
-  font-weight: var(--fw-normal);
+}
+
+.message-action svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .message-action:hover:not(:disabled) {
