@@ -66,7 +66,18 @@
   --warning-foreground: 30 5% 13%;
   --info: 185 38% 34%;
   --border: 30 4% 90%;
-  --rail-surface: 30 4% 96%;
+  /* The chrome surface, and its own interactive step. They come as a PAIR,
+     and the pair is the whole reason the rails can be a real block of colour
+     rather than a hint of one.
+     --muted is the step away from the PAGE: every hover, every filled chip,
+     measured from the surface the middle column is painted in. The rails were
+     kept within a point of the page so that one step could serve both, which
+     is why they barely read as separate surfaces at all in light. Move a rail
+     far enough to read as chrome and --muted lands on the wrong side of it —
+     a hover LIGHTER than the row it lifts off. So a rail-hosted control steps
+     from the rail instead, and everything else keeps stepping from the page. */
+  --rail-surface: 30 4% 93%;
+  --rail-hover: 30 4% 89%;
   --input: 30 4% 90%;
   --ring: 158 34% 27%;
   --radius: 0.5rem;
@@ -124,6 +135,7 @@
     --info: 185 38% 52%;
     --border: 30 4% 20%;
     --rail-surface: 30 4% 12%;
+    --rail-hover: 30 4% 17%;
     --input: 30 4% 20%;
     --ring: 150 36% 52%;
     --code-surface: 220 10% 14%;
@@ -172,6 +184,7 @@
   --info: 185 38% 52%;
   --border: 30 4% 20%;
   --rail-surface: 30 4% 12%;
+  --rail-hover: 30 4% 17%;
   --input: 30 4% 20%;
   --ring: 150 36% 52%;
   --code-surface: 220 10% 14%;
@@ -1068,7 +1081,7 @@ textarea::placeholder {
 }
 
 .thread-button:hover:not(:disabled) {
-  background: hsl(var(--muted));
+  background: hsl(var(--rail-hover));
 }
 
 /* The open conversation. A tinted fill rather than a card plus a rule plus a
@@ -1145,7 +1158,7 @@ textarea::placeholder {
 }
 
 .thread-action:hover {
-  background: hsl(var(--muted));
+  background: hsl(var(--rail-hover));
   color: hsl(var(--foreground));
 }
 
@@ -1195,7 +1208,7 @@ textarea::placeholder {
   margin-left: var(--sp-1);
   padding: 0 6px;
   border-radius: 999px;
-  background: hsl(var(--muted));
+  background: hsl(var(--rail-hover));
   color: hsl(var(--muted-foreground));
   font-size: var(--fs-micro);
   font-weight: var(--fw-normal);
@@ -1327,7 +1340,7 @@ textarea::placeholder {
 }
 
 .local-account-row:hover:not(:disabled) {
-  background: hsl(var(--muted));
+  background: hsl(var(--rail-hover));
 }
 
 .local-account-avatar {
@@ -2013,7 +2026,7 @@ textarea::placeholder {
 }
 
 .mind-roster-item:hover {
-  background: hsl(var(--muted));
+  background: hsl(var(--rail-hover));
 }
 
 .mind-roster-item.active {
@@ -3866,11 +3879,11 @@ button.composer-chip:hover {
 }
 
 .diff-file-row:hover {
-  background: hsl(var(--muted));
+  background: hsl(var(--rail-hover));
 }
 
 .diff-file-row.expanded {
-  background: hsl(var(--muted));
+  background: hsl(var(--rail-hover));
 }
 
 .diff-file-name {
@@ -3986,7 +3999,7 @@ button.composer-chip:hover {
 }
 
 .rail-nav-new:hover:not(:disabled) {
-  background: hsl(var(--muted));
+  background: hsl(var(--rail-hover));
 }
 
 .rail-nav-new:disabled {
@@ -4012,12 +4025,12 @@ button.composer-chip:hover {
 }
 
 .rail-nav-item:hover {
-  background: hsl(var(--muted));
+  background: hsl(var(--rail-hover));
   color: hsl(var(--foreground));
 }
 
 .rail-nav-item.active {
-  background: hsl(var(--muted));
+  background: hsl(var(--rail-hover));
   color: hsl(var(--foreground));
 }
 
