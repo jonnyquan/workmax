@@ -335,6 +335,101 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
   );
 }
 
+// --- Copy reaches the screen through the catalog, or not at all --------------
+//
+// The bug that started the translation work was two languages on one screen:
+// an English shell narrating a Chinese sentence the sidecar had produced. The
+// fix was to route every string through t(), and the thing that will undo it
+// is not a decision — nobody will decide to hard-code English again — but a
+// hurry. One setStatus("…") written the old way ships English into a window
+// the reader set to Chinese, silently, because English IS the fallback and a
+// missing translation looks exactly like a working one.
+//
+// So the sinks are the gate. Every place a string becomes something a person
+// reads is listed here, and a literal arriving at one of them must have come
+// from t(). This cannot know whether the WORDS are user-facing — that is the
+// author's judgement — but it can insist the question was asked.
+{
+  // Where copy lands. Each entry is a sink and the shape of its argument;
+  // adding a sink is how this stays true as the renderer grows.
+  // setTurnState is deliberately NOT here. Its argument is a state KEY, not
+  // copy: it translates the label itself (t(label) at the one place the pill's
+  // text is written) and its callers compare against the English key, so a
+  // literal at those call sites is the correct spelling rather than a missed
+  // one. A sink that translates internally is a sink this gate is already
+  // satisfied by.
+  const SINKS = [
+    // fn("literal") — the status strip and the per-form feedback lines
+    /\b(setStatus|setCreateFeedback|setMindEditNote|setMindFeedError|setMindFeedStatus|setMindRosterError|setModelSettingsError|renderNotice)\(\s*(["'`])/gu,
+    // el.textContent = "literal" / el.title = "literal" / el.placeholder = …
+    /\.(textContent|title|placeholder)\s*=\s*(["'`])/gu,
+    // setAttribute("aria-label" | "title" | "placeholder", "literal")
+    /setAttribute\(\s*["'](?:aria-label|title|placeholder)["']\s*,\s*(["'`])/gu,
+  ];
+
+  // Literals that are not copy: glyphs, the brand mark, an empty reset. A
+  // string here is exempt because it says nothing in any language, not
+  // because translating it was inconvenient.
+  const NOT_COPY = /^[\s+▾▸↓↑·—–✓✗×⋯…v]*$/u;
+
+  // Drop a template's ${…} holes, counting braces rather than matching to the
+  // first "}". The holes nest — ${t("{n} messages", { n: count })} closes
+  // three times — and a regex that stops at the first one leaves half an
+  // expression behind, which then reads as untranslated prose.
+  const withoutHoles = (template) => {
+    let out = "";
+    for (let i = 0; i < template.length; i += 1) {
+      if (template[i] !== "$" || template[i + 1] !== "{") {
+        out += template[i];
+        continue;
+      }
+      let depth = 0;
+      for (i += 1; i < template.length; i += 1) {
+        if (template[i] === "{") depth += 1;
+        else if (template[i] === "}" && (depth -= 1) === 0) break;
+      }
+    }
+    return out;
+  };
+
+  const offenders = [];
+  for (const [name, source] of moduleSources) {
+    // i18n.js is the catalog itself: its literals ARE the translations.
+    if (name === "i18n.js") continue;
+    for (const pattern of SINKS) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(source)) !== null) {
+        const quote = match[match.length - 1];
+        const start = match.index + match[0].length;
+        const end = source.indexOf(quote, start);
+        if (end < 0) continue;
+        const literal = source.slice(start, end);
+        // A template's ${…} holes are code, not copy, and what they hold is
+        // usually a t() call or a number. Only the text BETWEEN the holes is
+        // this gate's business — a row's tooltip built from a translated
+        // count and a formatted date is assembled correctly and would
+        // otherwise be flagged for the identifiers inside its own holes.
+        const spoken = quote === "`" ? withoutHoles(literal) : literal;
+        if (NOT_COPY.test(spoken)) continue;
+        // A word and a space, or a capitalised word: the shape of a sentence
+        // rather than of a class name, a key or a protocol token.
+        const looksLikeCopy = /[A-Za-z]{3}/u.test(spoken) && /[A-Z]|\s/u.test(spoken);
+        if (!looksLikeCopy) continue;
+        const line = source.slice(0, match.index).split("\n").length;
+        offenders.push(`${name}:${line}  ${match[0]}${literal}${quote}`);
+      }
+    }
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    "copy reaching the screen must come from t() — a literal here ships English into a window the reader set to Chinese, and looks exactly like a working translation while it does it:\n  " +
+      offenders.join("\n  "),
+  );
+}
+
 // --- Density is one number, or it is three sets of rules that drift ----------
 //
 // The mechanism only pays for itself if EVERY spacing step goes through the

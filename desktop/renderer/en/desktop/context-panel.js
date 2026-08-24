@@ -1114,7 +1114,9 @@ function renderRetrieved() {
   }
   if (ctxEl("retrieved-meta")) {
     ctxEl("retrieved-meta").textContent =
-      `${items.length} passage${items.length === 1 ? "" : "s"}`;
+      items.length === 1
+        ? t("{n} passage", { n: items.length })
+        : t("{n} passages", { n: items.length });
   }
   // The whole section stands down when there is nothing retrieved: it is
   // per-turn transient, and an empty module whose body explains its own

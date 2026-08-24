@@ -725,6 +725,8 @@ const ZH = new Map(Object.entries({
   "Chosen for this mind · {route} route": "为这个 mind 选定 · {route} 路由",
   "From your account · {route} route": "来自你的账号 · {route} 路由",
   "{n} {noun}": "{n} {noun}",
+  "{n} passage": "{n} 段",
+  "{n} passages": "{n} 段",
   "skill": "个技能",
   "skills": "个技能",
   "passage": "段",

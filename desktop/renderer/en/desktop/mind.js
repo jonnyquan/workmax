@@ -306,7 +306,7 @@ export async function submitEditMind(event) {
   if (!bridge || !id || !mindEditName) return;
   const name = mindEditName.value.trim();
   if (name === "") {
-    setMindEditNote("A mind needs a name.");
+    setMindEditNote(t("A mind needs a name."));
     return;
   }
   if (mindEditSave) mindEditSave.disabled = true;
