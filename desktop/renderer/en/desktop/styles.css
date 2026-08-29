@@ -66,16 +66,30 @@
   --warning-foreground: 30 5% 13%;
   --info: 185 38% 34%;
   --border: 30 4% 90%;
-  /* The chrome surface, and its own interactive step. They come as a PAIR,
-     and the pair is the whole reason the rails can be a real block of colour
-     rather than a hint of one.
-     --muted is the step away from the PAGE: every hover, every filled chip,
-     measured from the surface the middle column is painted in. The rails were
-     kept within a point of the page so that one step could serve both, which
-     is why they barely read as separate surfaces at all in light. Move a rail
-     far enough to read as chrome and --muted lands on the wrong side of it —
-     a hover LIGHTER than the row it lifts off. So a rail-hosted control steps
-     from the rail instead, and everything else keeps stepping from the page. */
+  /* The window's two surfaces, each named for what it IS rather than for
+     what it happens to equal today.
+       --work-surface  the conversation column, and the band of the title bar
+                       that covers it
+       --rail-surface  both rails, and the bands of the title bar over them
+     The chrome is the DARKER of the two in both themes: the work surface is
+     where the reading happens and it takes the light. That direction used to
+     be stated only in light, because in dark the column and the rails were
+     both --card and there was no direction to state.
+     --rail-hover is the chrome's own interactive step, and it exists because
+     --muted is the step away from the WORK surface: every hover and every
+     filled chip is measured from there. One step cannot serve two surfaces
+     that are four points apart — on the rail it lands on the wrong side and
+     lifts a row by going lighter than the thing under it. So a rail-hosted
+     control steps from the rail, and everything else steps from the work. */
+  /* The one token that holds a whole colour rather than an "H S% L%" triple,
+     because the alpha is the point. A divider that crosses more than one
+     surface cannot be a solid: pick a lightness and it reads as a strong line
+     on the surface it contrasts with and as nothing on the surface it nearly
+     matches — the rule under the title bar crosses three, and would have
+     faded out over the rails. A translucent overlay darkens each of them by
+     the same proportion instead, so one line reads as one line. */
+  --divider: hsl(0 0% 0% / 0.12);
+  --work-surface: 0 0% 100%;
   --rail-surface: 30 4% 93%;
   --rail-hover: 30 4% 89%;
   --input: 30 4% 90%;
@@ -115,30 +129,32 @@
 /* (2) dark because the system says so — unless the user forced light. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --background: 30 5% 9%;
+    --background: 30 5% 13%;
     --foreground: 30 5% 92%;
-    --card: 30 4% 12%;
+    --card: 30 4% 17%;
     --card-foreground: 30 5% 92%;
     --primary: 150 36% 52%;
-    --primary-foreground: 30 5% 9%;
-    --secondary: 30 4% 16%;
+    --primary-foreground: 30 5% 13%;
+    --secondary: 30 4% 20%;
     --secondary-foreground: 30 5% 92%;
-    --muted: 30 4% 16%;
+    --muted: 30 4% 20%;
     --muted-foreground: 30 4% 62%;
     --accent: 150 36% 52%;
-    --accent-foreground: 30 5% 9%;
+    --accent-foreground: 30 5% 13%;
     --destructive: 0 72% 62%;
     --destructive-foreground: 0 0% 98%;
     --success: 150 36% 52%;
     --warning: 38 78% 58%;
-    --warning-foreground: 30 5% 9%;
+    --warning-foreground: 30 5% 13%;
     --info: 185 38% 52%;
-    --border: 30 4% 20%;
-    --rail-surface: 30 4% 12%;
+    --border: 30 4% 24%;
+    --divider: hsl(0 0% 100% / 0.10);
+    --work-surface: 30 4% 17%;
+    --rail-surface: 30 4% 13%;
     --rail-hover: 30 4% 17%;
-    --input: 30 4% 20%;
+    --input: 30 4% 24%;
     --ring: 150 36% 52%;
-    --code-surface: 220 10% 14%;
+    --code-surface: 220 10% 12%;
     --code-surface-foreground: 220 8% 88%;
     --cb-comment: 220 6% 50%;
     --cb-keyword: 292 45% 72%;
@@ -164,30 +180,32 @@
 /* (3) dark because the user said so, whatever the system says. Must stay
    byte-identical to (2) — the behaviour suite checks it. */
 :root[data-theme="dark"] {
-  --background: 30 5% 9%;
+  --background: 30 5% 13%;
   --foreground: 30 5% 92%;
-  --card: 30 4% 12%;
+  --card: 30 4% 17%;
   --card-foreground: 30 5% 92%;
   --primary: 150 36% 52%;
-  --primary-foreground: 30 5% 9%;
-  --secondary: 30 4% 16%;
+  --primary-foreground: 30 5% 13%;
+  --secondary: 30 4% 20%;
   --secondary-foreground: 30 5% 92%;
-  --muted: 30 4% 16%;
+  --muted: 30 4% 20%;
   --muted-foreground: 30 4% 62%;
   --accent: 150 36% 52%;
-  --accent-foreground: 30 5% 9%;
+  --accent-foreground: 30 5% 13%;
   --destructive: 0 72% 62%;
   --destructive-foreground: 0 0% 98%;
   --success: 150 36% 52%;
   --warning: 38 78% 58%;
-  --warning-foreground: 30 5% 9%;
+  --warning-foreground: 30 5% 13%;
   --info: 185 38% 52%;
-  --border: 30 4% 20%;
-  --rail-surface: 30 4% 12%;
+  --border: 30 4% 24%;
+  --divider: hsl(0 0% 100% / 0.10);
+  --work-surface: 30 4% 17%;
+  --rail-surface: 30 4% 13%;
   --rail-hover: 30 4% 17%;
-  --input: 30 4% 20%;
+  --input: 30 4% 24%;
   --ring: 150 36% 52%;
-  --code-surface: 220 10% 14%;
+  --code-surface: 220 10% 12%;
   --code-surface-foreground: 220 8% 88%;
   --cb-comment: 220 6% 50%;
   --cb-keyword: 292 45% 72%;
@@ -701,9 +719,16 @@ textarea::placeholder {
   background: linear-gradient(
     to right,
     hsl(var(--rail-surface)) 0 var(--rail-left),
-    hsl(var(--background)) var(--rail-left) calc(100% - var(--rail-right)),
+    hsl(var(--work-surface)) var(--rail-left) calc(100% - var(--rail-right)),
     hsl(var(--rail-surface)) calc(100% - var(--rail-right)) 100%
   );
+  /* The rule under the bar, drawn as an inset shadow rather than a border.
+     Everything here is border-box, so a 1px border would come out of the 46px
+     — and that 46 is not a round number anyone chose: it centres the controls
+     on traffic lights AppKit parks 23.5pt down. A border moves them half a
+     pixel off the lights they are aligned to; a shadow is painted inside the
+     box and moves nothing. */
+  box-shadow: inset 0 -1px 0 var(--divider);
 }
 
 .titlebar button {
@@ -2361,7 +2386,15 @@ button.mind-button[data-mind-activity] {
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
-  background: hsl(var(--card));
+  /* The work surface, named. This was --card, which is the token for things
+     that sit ON a surface — a menu, an editor, the composer — and a column
+     is not one of those. Two costs came out of the confusion: the title bar
+     painted its middle band in --background, a colour the column it covers
+     never used, so the strip above the conversation was a shade darker than
+     the conversation in both themes; and in dark --card and --rail-surface
+     held the same value, so the rails and the conversation were the same
+     colour and the three surfaces were two. */
+  background: hsl(var(--work-surface));
 }
 
 .content > .empty-state,

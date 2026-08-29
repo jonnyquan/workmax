@@ -187,6 +187,73 @@ const rendererCSS = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8"
     /\.titlebar\s*\{[^}]*var\(--rail-left\)[^}]*calc\(100% - var\(--rail-right\)\)/u,
     "the bar paints to the same edges the grid places, from the same two variables",
   );
+  // And in the same COLOURS. Each band has to name the token the column
+  // under it is painted with, not one that merely resembles it: the middle
+  // band was --background while .content was --card, so the strip above the
+  // conversation sat a shade darker than the conversation in both themes,
+  // and nothing said the two were supposed to agree.
+  const titlebarRule = rendererCSS.match(/\.titlebar\s*\{[\s\S]*?\n\}/u);
+  assert.ok(titlebarRule, "the title bar has a rule");
+  // The column is declared twice — once for its grid track, once for how it
+  // lays out and paints. Take the one that paints.
+  const contentRule = [...rendererCSS.matchAll(/\n\.content \{[\s\S]*?\n\}/gu)]
+    .find((m) => m[0].includes("background:"));
+  assert.ok(contentRule, "the conversation column paints a surface");
+  const surfaceOf = (rule) => (rule[0].match(/background:[^;]*hsl\(var\((--[a-z-]+)\)\)/u) || [])[1];
+  // The GRADIENT's stops, not every colour the rule mentions: the bar also
+  // draws its bottom rule, and that is not a band.
+  const gradient = titlebarRule[0].match(/linear-gradient\([\s\S]*?\);/u);
+  assert.ok(gradient, "the bar paints its bands with a gradient");
+  const bands = [...gradient[0].matchAll(/hsl\(var\((--[a-z-]+)\)\)/gu)].map((m) => m[1]);
+  assert.deepEqual(
+    bands,
+    ["--rail-surface", "--work-surface", "--rail-surface"],
+    "rail colour, work colour, rail colour — the columns the bar covers, in order",
+  );
+  assert.equal(
+    surfaceOf(contentRule),
+    "--work-surface",
+    "and the middle band names the very token the column under it paints with",
+  );
+  assert.match(
+    rendererCSS,
+    /\.sidebar\s*\{[^}]*background:\s*hsl\(var\(--rail-surface\)\);/u,
+    "the left rail too",
+  );
+
+  // Three palettes state the surfaces — light, dark-by-system, dark-by-choice
+  // — and a token missing from one of them is invisible until somebody uses
+  // that third path. --divider went in twice on the second and not at all on
+  // the third, which would have been a rule under the title bar that vanished
+  // for anyone who picked dark by hand.
+  const PALETTES = [
+    [":root {", "light"],
+    [':root:not([data-theme="light"]) {', "dark by system"],
+    [':root[data-theme="dark"] {', "dark by choice"],
+  ];
+  const bounds = PALETTES.map(([open, name]) => {
+    const at = rendererCSS.indexOf(open);
+    assert.ok(at > 0, `the ${name} palette exists`);
+    return { at, name };
+  }).sort((a, b) => a.at - b.at);
+  for (const surface of ["--work-surface", "--rail-surface", "--rail-hover", "--divider"]) {
+    for (const [i, block] of bounds.entries()) {
+      const end = bounds[i + 1]?.at ?? rendererCSS.length;
+      const declared = rendererCSS
+        .slice(block.at, end)
+        .match(new RegExp(`${surface}:`, "gu")) || [];
+      assert.equal(
+        declared.length,
+        1,
+        `${surface} is declared exactly once in the ${block.name} palette (found ${declared.length})`,
+      );
+    }
+  }
+  assert.match(
+    rendererCSS,
+    /\.right-rail\s*\{[^}]*background:\s*hsl\(var\(--rail-surface\)\);/u,
+    "and the right one",
+  );
   for (const [selector, property] of [
     [':root\\[data-sidebar="collapsed"\\]', "--rail-left"],
     [':root\\[data-right-panel="none"\\]', "--rail-right"],
