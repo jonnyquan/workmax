@@ -61,8 +61,15 @@ func ValidApprovalDecision(s string) bool {
 // (pi_agent.TestEveryEnabledPiToolHasAHomeInTheVocabulary and
 // local_agent.TestEveryClaudeToolHasAHomeInTheVocabulary), so a tool added to
 // either runtime cannot quietly land outside the policy again.
+// TodoWrite is on the READ side despite the verb in its name. The split is
+// not reading versus writing, it is "does this need a person's consent" —
+// and the tool touches nothing: no file, no command, no workspace. What it
+// writes is the agent's own list of what it intends to do, which the task
+// panel then shows. A card asking permission for that would be a card that
+// never means anything, once per step, which is how a reader learns to
+// dismiss the cards that do.
 var (
-	ApprovalReadSurface  = []string{"Read", "Glob", "Grep", "Find", "Ls"}
+	ApprovalReadSurface  = []string{"Read", "Glob", "Grep", "Find", "Ls", "TodoWrite"}
 	ApprovalWriteSurface = []string{"Write", "Edit"}
 )
 

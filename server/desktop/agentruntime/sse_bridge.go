@@ -112,6 +112,21 @@ func (b *SSEBridge) Emit(ev Event) error {
 			Type: "approval_request",
 			Data: mustJSON(payload),
 		})
+	case EventPlan:
+		// The whole list, every time. A renderer that had to apply deltas
+		// would need the previous list to be right, and the one place it
+		// could get that from is a frame it may not have seen.
+		items := make([]map[string]string, 0, len(ev.Plan))
+		for _, item := range ev.Plan {
+			items = append(items, map[string]string{"text": item.Text, "state": item.State})
+		}
+		if b.cache != nil {
+			b.cache.RecordPlan(items)
+		}
+		return b.dst.WriteEvent(cloudproxy.SSEEvent{
+			Type: "plan",
+			Data: mustPlanJSON(items),
+		})
 	case EventTurnMeta:
 		// An engine with no name is not a fact worth sending; a model with no
 		// name is an engine default nobody chose, and saying nothing is the
@@ -178,6 +193,16 @@ func boundedMeta(value string, maxRunes int) string {
 		return string(runes[:maxRunes])
 	}
 	return trimmed
+}
+
+// The plan's own encoder: mustJSON takes the flat string map every other
+// frame is, and a list of items is not that shape.
+func mustPlanJSON(items []map[string]string) string {
+	blob, err := json.Marshal(map[string]any{"items": items})
+	if err != nil {
+		return `{"items":[]}`
+	}
+	return string(blob)
 }
 
 func mustJSON(v map[string]string) string {

@@ -72,6 +72,14 @@ export const contextState = {
   // none of this — without a survivor copy the story would vanish whenever
   // the fallback runs.
   lastTurnLog: null,
+  // The agent's own task list, as it last said it. Whole list, not a delta:
+  // the tool writes it that way and the panel shows what it was told.
+  //
+  // NOT per-turn, unlike retrieval and tool activity. A plan outlives the
+  // turn that wrote it — that is what a plan is — and it is stored on the
+  // message so a reopened conversation still shows what the agent set out to
+  // do. Cleared when the SELECTION changes, not when a turn ends.
+  plan: [],
   // File ids the user has checked in the Sources panel to send with the NEXT
   // request. Per-request on purpose — the label says "next request", so the
   // set clears once a turn owns the ids, exactly like the upload tray.
@@ -85,6 +93,14 @@ export const contextState = {
 // saw, which is worse than showing nothing.
 export function setRetrievedContext(sources) {
   contextState.retrieved = Array.isArray(sources) ? sources : [];
+  renderTaskContext();
+}
+
+// The agent's task list changed. Replaces rather than merges: the tool sends
+// the whole list on every update, so anything kept from the previous one
+// would be a line the agent has already stopped saying.
+export function setPlan(items) {
+  contextState.plan = Array.isArray(items) ? items : [];
   renderTaskContext();
 }
 
@@ -1218,13 +1234,58 @@ function renderContextEmpty(sourceCount) {
   if (!note) return;
   note.hidden =
     Boolean(state.activeTurn) ||
+    contextState.plan.length > 0 ||
     sourceCount > 0 ||
     contextState.deliverables.length > 0 ||
     contextState.retrieved.length > 0;
 }
 
+// The agent's task list. Numbered, because the order is the agent's own and
+// a plan read out of order is a different plan; the state of each line is a
+// glyph rather than a word, so the LINE is what the eye reads and the status
+// is what it checks.
+function renderPlan() {
+  const section = ctxEl("context-plan");
+  const list = ctxEl("plan-list");
+  if (!section || !list) return;
+  const items = contextState.plan;
+  section.hidden = items.length === 0;
+  list.textContent = "";
+  if (items.length === 0) return;
+
+  const done = items.filter((item) => item.state === "done").length;
+  const meta = ctxEl("plan-meta");
+  // "3/7" rather than "7 tasks": a count of the list says nothing a reader
+  // cannot see, and how far along it is is the whole question.
+  if (meta) meta.textContent = t("{done}/{total}", { done, total: items.length });
+
+  for (const item of items) {
+    const row = document.createElement("li");
+    row.className = `context-plan-item is-${item.state}`;
+    const mark = document.createElement("span");
+    mark.className = "context-plan-mark";
+    mark.setAttribute("aria-hidden", "true");
+    mark.textContent = item.state === "done" ? "✓" : item.state === "active" ? "▸" : "○";
+    const text = document.createElement("span");
+    text.className = "context-plan-text";
+    text.textContent = item.text;
+    // The glyph is decoration; the state has to reach a screen reader as a
+    // word, and on the row rather than beside it.
+    row.setAttribute(
+      "aria-label",
+      t("{state}: {text}", {
+        state: item.state === "done" ? t("Done") : item.state === "active" ? t("In progress") : t("To do"),
+        text: item.text,
+      })
+    );
+    row.append(mark, text);
+    list.appendChild(row);
+  }
+}
+
 export function renderTaskContext() {
   renderRunLine();
+  renderPlan();
   const sourceCount = renderSources();
   renderRetrieved();
   renderDeliverables();
@@ -1266,6 +1327,12 @@ export async function loadThreadSources(threadUUID) {
   // documents. The selection likewise: these ids name another thread's files.
   contextState.retrieved = [];
   contextState.toolActivity = [];
+  // The plan is cleared HERE and nowhere else. Everything above it is
+  // per-turn and is also dropped when a new question is asked; a plan is not
+  // — the agent writes one and then works through it across several turns,
+  // and a panel that emptied itself at every prompt would be showing the
+  // list only while it was being written.
+  contextState.plan = [];
   contextState.deliverables = [];
   contextState.deliverablesTruncated = false;
   contextState.lastTurnLog = null;

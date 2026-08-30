@@ -2,6 +2,8 @@
 
 package agentruntime
 
+import "strings"
+
 // EventKind discriminates Event. The vocabulary is the union of what both
 // engines can produce, mapped from their native streams:
 //
@@ -30,6 +32,7 @@ const (
 	EventSessionRef    EventKind = "session_ref"
 	EventApprovalReq   EventKind = "approval_request"
 	EventTurnMeta      EventKind = "turn_meta"
+	EventPlan          EventKind = "plan"
 )
 
 // Event is one unified runtime event. Exactly the fields for its Kind are
@@ -53,6 +56,98 @@ type Event struct {
 
 	// Turn carries EventTurnMeta.
 	Turn TurnMeta
+
+	// Plan carries EventPlan: the agent's own task list, as it stands after
+	// the update that produced this event. Whole list every time, not a
+	// delta — the tool writes it that way, and a panel that has to
+	// reconstruct a list from patches is a panel that can be wrong about
+	// what the agent thinks it is doing.
+	Plan []PlanItem
+}
+
+// PlanItem is one line of the agent's task list.
+//
+// This is the ONE tool input that reaches the renderer, and the exception is
+// deliberate rather than an erosion of the rule beside it. ToolEvent carries
+// a name and a file's basename because inputs can hold anything — a Write's
+// whole body, a key someone pasted into a prompt. A task list is different in
+// kind: it is model-authored prose written to be read by a person, the same
+// class of content as the answer itself, which already streams verbatim.
+// What does NOT come through is the input as it arrived: the shape below is
+// parsed out of it, bounded, and anything unrecognised is dropped.
+type PlanItem struct {
+	Text  string
+	State string
+}
+
+// The three states a task can be in. Anything the tool says that is not one
+// of these becomes PlanPending: a list that renders is worth more than a
+// list that refuses over a word it did not expect, and "not started" is the
+// least wrong thing to say about a state nobody here understands.
+const (
+	PlanPending = "pending"
+	PlanActive  = "active"
+	PlanDone    = "done"
+)
+
+// Bounds. A task list is a panel in a 300px column, not a document: past a
+// few dozen lines it has stopped being a summary of the work and the reader
+// has stopped reading it either way.
+const (
+	maxPlanItems    = 32
+	maxPlanItemText = 200
+)
+
+// ParsePlan reads the shape a todo-writing tool produces and returns the list
+// it means. The second result says whether the input was a task list at all —
+// a tool of this name whose input does not parse is not a plan, and the
+// caller falls back to recording it as an ordinary step rather than
+// silently swallowing a call that did something else.
+//
+// Written against the Claude CLI's TodoWrite: {"todos":[{"content","status"}]}.
+// The key names are the tool's, not ours, so both spellings of the text field
+// are read — "content" is what the tool sends, "text" is what a reasonable
+// alternative would.
+func ParsePlan(input map[string]any) ([]PlanItem, bool) {
+	raw, ok := input["todos"].([]any)
+	if !ok {
+		return nil, false
+	}
+	items := make([]PlanItem, 0, len(raw))
+	for _, entry := range raw {
+		fields, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		text, _ := fields["content"].(string)
+		if text == "" {
+			text, _ = fields["text"].(string)
+		}
+		text = boundedMeta(strings.TrimSpace(text), maxPlanItemText)
+		if text == "" {
+			continue
+		}
+		state, _ := fields["status"].(string)
+		items = append(items, PlanItem{Text: text, State: planState(state)})
+		if len(items) == maxPlanItems {
+			break
+		}
+	}
+	// An empty list is a real answer — the agent clearing its plan — and has
+	// to be distinguishable from "this was not a plan at all", which is what
+	// the boolean is for.
+	return items, true
+}
+
+func planState(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "in_progress", "active", "running":
+		return PlanActive
+	case "completed", "done", "complete":
+		return PlanDone
+	default:
+		return PlanPending
+	}
 }
 
 // TurnMeta says which engine ran a turn and which model it was told to use.

@@ -30,7 +30,7 @@ import {
   updateComposerState,
 } from "./composer.js";
 import { localCalendarDay, renderThreads } from "./threads.js";
-import { attachLastTurnLog, loadThreadSources, renderStoredWorkLog, renderTaskContext } from "./context-panel.js";
+import { attachLastTurnLog, loadThreadSources, renderStoredWorkLog, renderTaskContext, setPlan } from "./context-panel.js";
 import {
   chooseModeForThread,
   closeRenameForm,
@@ -211,6 +211,13 @@ function buildExchangeNodes(item, isLast) {
     // agent did — the strip the live turn drew, not a live-only privilege.
     if (Array.isArray(item.tool_steps) && item.tool_steps.length > 0) {
       renderStoredWorkLog(node, item.tool_steps);
+    }
+    // The plan the LAST answer left behind is the plan that is still open —
+    // earlier ones are versions of it that the agent has already replaced,
+    // and showing an older list beside a newer answer would be the panel
+    // disagreeing with the conversation about what is left to do.
+    if (isLast && Array.isArray(item.plan) && item.plan.length > 0) {
+      setPlan(item.plan);
     }
     nodes.push(node);
   }

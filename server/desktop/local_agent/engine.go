@@ -66,7 +66,18 @@ const maxAgentTurns = 24
 // approved by the bypass anyway. Measured on the real CLI: a Bash call that
 // the model invented ran `touch` on a path outside the workspace and the file
 // landed. toolSurface below is what actually holds the line.
-var allowedTools = []string{"Read", "Write", "Edit", "Glob", "Grep"}
+// todoToolName is the Claude CLI's task-list tool. Named once so the surface
+// below, the runtime that intercepts it and the tests all mean the same
+// string — a literal repeated in three files is one rename away from a
+// silently empty panel.
+const todoToolName = "TodoWrite"
+
+// TodoWrite is on the surface and touches nothing: it is how the agent
+// writes down what it intends to do, and the panel that shows that list can
+// only show a list the agent was allowed to write. It reads no file, writes
+// no file, and runs no command, so the path guard has nothing to say about
+// it (validateToolCall passes any tool it holds no path keys for).
+var allowedTools = []string{"Read", "Write", "Edit", "Glob", "Grep", todoToolName}
 
 // toolSurface is allowedTools as the PreToolUse hook enforces it: an
 // allowlist, so a tool the CLI grows tomorrow (or a hostile endpoint asks for
@@ -86,7 +97,11 @@ var toolSurface = func() map[string]bool {
 // It is deliberately NOT the approval policy: it goes to WithAllowedTools, so
 // it may name only tools this CLI actually has. The policy vocabulary is
 // agentruntime.ApprovalReadSurface, which is the union across both runtimes.
-var readOnlyTools = []string{"Read", "Glob", "Grep"}
+// TodoWrite is here for the same reason it is on the surface: asking a
+// person to approve the agent writing down its own plan is asking them to
+// approve nothing happening, once per step, and a card that never means
+// anything is how a reader learns to dismiss the cards that do.
+var readOnlyTools = []string{"Read", "Glob", "Grep", todoToolName}
 
 // askTools is the claude CLI's write surface: these consult the user.
 var askTools = []string{"Write", "Edit"}

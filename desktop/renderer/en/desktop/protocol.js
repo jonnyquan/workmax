@@ -202,10 +202,34 @@ function parseMessage(value) {
     // construction: rows from before the column carry none, and a malformed
     // array degrades to "no work log", never to a failed message list.
     tool_steps: parseToolSteps(value.tool_steps),
+    // The agent's task list as it stood when the turn ended. Same terms as
+    // the work log above: absent on old rows, and a malformed one degrades
+    // to "no plan" rather than to a failed message list.
+    plan: parsePlanItems(value.plan),
     // Validated above; carried so the transcript can date its rows.
     created_at: optionalString(value.created_at),
     updated_at: optionalString(value.updated_at),
   };
+}
+
+const PLAN_ITEM_STATES = new Set(["pending", "active", "done"]);
+
+function parsePlanItems(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const item of value) {
+    if (out.length >= 32) break;
+    if (!isRecord(item)) continue;
+    const text = boundedString(item.text, 200);
+    if (!text) continue;
+    out.push({
+      text,
+      // A state this build does not know is "not started": the panel is
+      // worth more rendered than refused, and the sidecar normalises too.
+      state: PLAN_ITEM_STATES.has(item.state) ? item.state : "pending",
+    });
+  }
+  return out;
 }
 
 function parseToolSteps(value) {

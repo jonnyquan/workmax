@@ -47,6 +47,11 @@ type LocalMessageRow struct {
 	// hidden engine room. Empty for rows written before the column was
 	// used, and for turns that ran no tools.
 	ToolSteps []LocalToolStep `json:"tool_steps,omitempty"`
+	// Plan is the agent's task list as it stood when the turn ended, from the
+	// same metadata column. A plan outlives its turn — that is what a plan
+	// is — so a reopened conversation shows what the agent set out to do and
+	// how far it got, rather than an empty panel beside a finished answer.
+	Plan      []LocalPlanItem `json:"plan,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
 }
@@ -59,6 +64,43 @@ type LocalToolStep struct {
 	Reason string `json:"reason,omitempty"`
 	Done   bool   `json:"done,omitempty"`
 	Failed bool   `json:"failed,omitempty"`
+}
+
+// LocalPlanItem mirrors one line of the stored task list.
+type LocalPlanItem struct {
+	Text  string `json:"text"`
+	State string `json:"state,omitempty"`
+}
+
+// parseMessagePlan extracts the task list from a metadata blob, on the same
+// terms as the work log beside it: a blob that is empty, malformed or from
+// some other writer yields no plan, because a missing panel is a degraded
+// display and a failed message list is a broken conversation.
+func parseMessagePlan(metadata string) []LocalPlanItem {
+	if metadata == "" {
+		return nil
+	}
+	var envelope struct {
+		Plan []LocalPlanItem `json:"plan"`
+	}
+	if err := json.Unmarshal([]byte(metadata), &envelope); err != nil {
+		return nil
+	}
+	items := envelope.Plan
+	if len(items) > 32 {
+		items = items[:32]
+	}
+	out := items[:0]
+	for _, item := range items {
+		if item.Text == "" {
+			continue
+		}
+		out = append(out, item)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // parseMessageToolSteps extracts the work log from a metadata blob. A blob
@@ -261,6 +303,7 @@ func ListLocalMessages(db *gorm.DB, uid uint64, threadUUID string, limit int) ([
 			return nil, fmt.Errorf("list messages: scan: %w", err)
 		}
 		r.ToolSteps = parseMessageToolSteps(metadata)
+		r.Plan = parseMessagePlan(metadata)
 		r.CreatedAt = parseSQLiteTime(createdAt)
 		r.UpdatedAt = parseSQLiteTime(updatedAt)
 		out = append(out, r)

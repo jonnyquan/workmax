@@ -7919,6 +7919,205 @@ async function testAssistantMarkdownIsRenderedAsElements() {
 // came out of their own documents rather than out of the model. This drives it
 // the whole way: a turn streams the event, the panel names the sources, and
 // the next turn does not inherit them.
+// The agent's own task list, from its own tool. Everything else in this
+// column is a record of what already happened; this is the one section that
+// says what is still coming, which is why it leads the column and why it
+// does NOT clear when a turn ends: a plan outlives the turn that wrote it.
+async function testPlanPanelFollowsTheAgentsOwnList() {
+  let emit = null;
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        return response({ items: [thread("plan-thread", "Work with a plan")] });
+      }
+      if (pathname === "/agent/threads/plan-thread/messages") return response({ items: [] });
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  let turnSeq = 0;
+  const desktopBridge = {
+    agent: {
+      async uploadThreadFile() { throw new Error("not exercised"); },
+      async listSkills() { return typedSuccess(pptCatalog()); },
+      startTurn(input, callback) {
+        turnSeq += 1;
+        const turnID = `plan-turn-${turnSeq}`;
+        emit = (event) => callback({ ...event, turnID });
+        return { turnID };
+      },
+      async cancelTurn(turnID) { return { turnID, canceled: true }; },
+    },
+  };
+
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+
+  const section = () => document.byId.get("context-plan");
+  const rows = () => Array.from(document.byId.get("plan-list").children || []);
+  assert.equal(section().hidden, true, "no plan, no section");
+
+  const input = document.byId.get("chat-input");
+  input.value = "Ship the parser";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+
+  emit({
+    type: "plan",
+    items: [
+      { text: "Read the spec", state: "done" },
+      { text: "Write the parser", state: "active" },
+      { text: "Run the suite", state: "pending" },
+    ],
+  });
+  await settle();
+
+  assert.equal(section().hidden, false, "the section appears with the agent's first list");
+  assert.equal(rows().length, 3);
+  assert.match(rows()[0].textContent, /Read the spec/);
+  // How far along, not how long: a count of the lines says nothing the reader
+  // cannot already see.
+  assert.equal(document.byId.get("plan-meta").textContent, "1/3");
+  assert.equal(rows()[1].classList.contains("is-active"), true, "the live line says so");
+  assert.equal(rows()[0].classList.contains("is-done"), true);
+  // The glyph is decoration; the state has to reach a screen reader as a word.
+  assert.match(rows()[1].getAttribute("aria-label"), /^In progress: Write the parser$/u);
+
+  // The whole list every time — the tool sends it that way, and a panel that
+  // merged updates would keep showing a line the agent has stopped saying.
+  emit({
+    type: "plan",
+    items: [
+      { text: "Read the spec", state: "done" },
+      { text: "Write the parser", state: "done" },
+    ],
+  });
+  await settle();
+  assert.equal(rows().length, 2, "the replaced list replaces, it does not merge");
+  assert.equal(document.byId.get("plan-meta").textContent, "2/2");
+
+  // A turn ending does NOT clear it. Retrieval and the work log are per-turn
+  // because they describe one answer; a plan describes the work.
+  emit({ type: "text_delta", delta: "Parser written." });
+  emit({ type: "done", result: { subtype: "success" } });
+  await settle();
+  assert.equal(section().hidden, false, "the plan survives the turn that wrote it");
+
+  // And an emptied list is a real answer: the agent finished, and the panel
+  // has to stop claiming there is work left.
+  input.value = "Anything else?";
+  input.dispatch("input");
+  document.byId.get("chat-form").submit();
+  await settle();
+  emit({ type: "plan", items: [] });
+  await settle();
+  assert.equal(section().hidden, true, "an emptied plan takes the section with it");
+}
+
+// A plan outlives the app, not just the turn: it is stored on the message
+// and replayed, so reopening a conversation shows what the agent set out to
+// do and how far it got — the same promise the work log makes beside it.
+async function testStoredPlanSurvivesReopen() {
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        return response({ items: [thread("replay-plan", "Reopened")] });
+      }
+      if (pathname === "/agent/threads/replay-plan/messages") {
+        return response({
+          items: [
+            {
+              ...message("m-1", "First question", "First answer"),
+              // An older version of the list, on an older answer. Replaying
+              // this one would put the panel behind the conversation.
+              plan: [
+                { text: "Read the spec", state: "active" },
+                { text: "Write the parser", state: "pending" },
+              ],
+            },
+            {
+              ...message("m-2", "Second question", "Second answer"),
+              plan: [
+                { text: "Read the spec", state: "done" },
+                { text: "Write the parser", state: "done" },
+                { text: "Run the suite", state: "active" },
+              ],
+            },
+          ],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const { desktopBridge } = localModeBridge({ localRoute: true });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+  await settle();
+
+  const rows = Array.from(document.byId.get("plan-list").children || []);
+  assert.equal(
+    document.byId.get("context-plan").hidden,
+    false,
+    "a reopened conversation shows the plan it left behind",
+  );
+  assert.equal(rows.length, 3, "the LAST answer's list, not the first answer's");
+  assert.match(rows[2].textContent, /Run the suite/);
+  assert.equal(document.byId.get("plan-meta").textContent, "2/3");
+}
+
+// The other half of "the last answer's list": a conversation that HAD a plan
+// and no longer does must not show the old one. Walking every message and
+// replaying any list it finds passes the test above — the last one wins by
+// arriving last — and fails here, which is the case that separates "replay
+// the newest" from "replay whatever you pass on the way".
+async function testAPlanThatWasDroppedStaysDropped() {
+  const bridge = {
+    async fetch(pathname) {
+      if (pathname === "/auth/status") {
+        return response({ state: "authenticated", updated_at: "2026-05-21T00:00:00Z" });
+      }
+      if (pathname === "/agent/threads?include_paused=true") {
+        return response({ items: [thread("dropped-plan", "Plan then none")] });
+      }
+      if (pathname === "/agent/threads/dropped-plan/messages") {
+        return response({
+          items: [
+            {
+              ...message("d-1", "Start", "Working on it"),
+              plan: [{ text: "Read the spec", state: "active" }],
+            },
+            // The agent finished and cleared its list; this answer carries none.
+            message("d-2", "And now", "All done"),
+          ],
+        });
+      }
+      if (pathname.startsWith("/agent/threads/")) return response({ items: [] });
+      throw new Error(`unexpected fetch path ${pathname}`);
+    },
+  };
+  const { desktopBridge } = localModeBridge({ localRoute: true });
+  const { document } = await runRenderer(bridge, desktopBridge);
+  walk(document.byId.get("thread-list"), (node) => node.tagName === "BUTTON")[0].click();
+  await settle();
+  await settle();
+
+  assert.equal(
+    document.byId.get("context-plan").hidden,
+    true,
+    "a plan the conversation has moved past is not the plan",
+  );
+}
+
 async function testRetrievedContextIsShownAndResetPerTurn() {
   let emit = null;
   const bridge = {
@@ -11611,6 +11810,9 @@ await testAppearanceIsThreeStateAndPersisted();
 await testDensityIsThreeStateAndPersisted();
 await testCodeTokenizerClassifiesTheLanguagesWeShip();
 await testCodeBlocksArePaintedWithoutMarkup();
+await testPlanPanelFollowsTheAgentsOwnList();
+await testStoredPlanSurvivesReopen();
+await testAPlanThatWasDroppedStaysDropped();
 await testRetrievedContextIsShownAndResetPerTurn();
 await testShimValidatesRetrievalPayloads();
 await testShimDropsMalformedApprovalAndReasoningFrames();

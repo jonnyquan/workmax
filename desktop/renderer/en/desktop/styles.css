@@ -3650,6 +3650,56 @@ button.composer-chip:hover {
   background: hsl(var(--rail-surface));
 }
 
+/* The agent's task list. Numbered by the <ol> itself would be a second
+   number beside the state glyph, so the marker is off and the glyph is the
+   only thing in the gutter: a reader scanning this list wants to know which
+   line is live, not which line is fourth. */
+.context-plan-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.context-plan-item {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: 3px 0;
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-small);
+}
+
+.context-plan-mark {
+  color: hsl(var(--muted-foreground));
+  font-size: var(--fs-micro);
+  line-height: var(--lh-ui);
+  text-align: center;
+}
+
+/* The line being worked on is the one the reader came for: it is the only
+   one at full strength, and the only one that says so twice — the colour and
+   the glyph. Done lines recede rather than strike through; a struck line is
+   harder to read and the point of keeping them is that they can be read. */
+.context-plan-item.is-active {
+  color: hsl(var(--foreground));
+  font-weight: var(--fw-medium);
+}
+
+.context-plan-item.is-active .context-plan-mark {
+  color: hsl(var(--primary));
+}
+
+.context-plan-item.is-done .context-plan-mark {
+  color: hsl(var(--success));
+}
+
+.context-plan-item.is-done .context-plan-text {
+  opacity: 0.62;
+}
+
 /* --- Workspace panel --------------------------------------------------------
    The thread's materials ledger — produced files, attached files, retrieved
    passages — and it says nothing about the run except one live line. The run is narrated on the message that produced it, where the

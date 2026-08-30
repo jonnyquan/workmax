@@ -354,6 +354,27 @@ func (r *claudeRuntime) pump(ctx context.Context, iter claudesdk.MessageIterator
 						return werr
 					}
 				case *claudesdk.ToolUseBlock:
+					// Writing the plan down is not a step of the work; it is
+					// the agent saying what the steps are. Sent as its own
+					// event and NOT as a tool call, so the work log stays a
+					// record of things that happened to the workspace — a
+					// log where every other line reads "TodoWrite" is a log
+					// nobody finishes reading.
+					//
+					// A TodoWrite whose input does not parse falls through to
+					// the ordinary path: the call did something, and a step
+					// nobody can explain is better than a step nobody sees.
+					if b.Name == todoToolName {
+						if items, ok := agentruntime.ParsePlan(b.Input); ok {
+							if werr := emit(agentruntime.Event{
+								Kind: agentruntime.EventPlan,
+								Plan: items,
+							}); werr != nil {
+								return werr
+							}
+							continue
+						}
+					}
 					call := agentruntime.ToolEvent{Name: b.Name, Target: toolTarget(b.Input)}
 					if b.ID != "" && len(openCalls) < maxOpenToolCalls {
 						openCalls[b.ID] = call

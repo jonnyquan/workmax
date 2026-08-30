@@ -36,6 +36,7 @@ import {
   recordReasoningDelta,
   recordToolActivity,
   recordToolResult,
+  setPlan,
   setRetrievedContext,
 } from "./context-panel.js";
 import { noteMindActivity } from "./mind.js";
@@ -69,6 +70,7 @@ const AGENT_EVENT_TYPES = new Set([
   "reasoning_delta",
   "turn_meta",
   "retrieval",
+  "plan",
   "tool_use",
   "tool_denied",
   "tool_result",
@@ -87,6 +89,13 @@ const MAX_RETRIEVED_SOURCES = 12;
 const MAX_RETRIEVED_LABEL_CHARS = 120;
 const MAX_RETRIEVED_SNIPPET_CHARS = 400;
 const RETRIEVED_SOURCE_KINDS = new Set(["file", "conversation"]);
+// Bounds for the agent's task list, restated at this end of the bridge for
+// the same reason the retrieval bounds are: the renderer trusts no bridge.
+// The sidecar caps the list too; a cap on one side only is a cap that stops
+// applying the day something else feeds this frame.
+const MAX_PLAN_ITEMS = 32;
+const MAX_PLAN_TEXT_CHARS = 200;
+const PLAN_STATES = new Set(["pending", "active", "done"]);
 const MAX_EVENT_TEXT_BYTES = 262_144;
 
 function parseProxyError(value) {
@@ -139,6 +148,27 @@ function parseSafeDoneResult(value) {
     code: value.code,
     subtype: value.subtype,
     isError: value.is_error,
+  };
+}
+
+// One line of the task list. A state outside the vocabulary becomes
+// "pending" rather than throwing: the sidecar already normalises, and a
+// panel that refuses the whole list over one unexpected word is worse than
+// one that calls a line not-started.
+function parseSafePlanItem(value) {
+  if (!isRecord(value) || !hasExactKeys(value, ["text", "state"])) {
+    throw new Error("Malformed agent turn event");
+  }
+  if (
+    typeof value.text !== "string" ||
+    !hasWellFormedUTF16(value.text) ||
+    value.text.length > MAX_PLAN_TEXT_CHARS
+  ) {
+    throw new Error("Malformed agent turn event");
+  }
+  return {
+    text: value.text,
+    state: PLAN_STATES.has(value.state) ? value.state : "pending",
   };
 }
 
@@ -279,6 +309,22 @@ export function parseAgentTurnEvent(value) {
         type: value.type,
         turnID: value.turnID,
         sources: value.sources.map(parseSafeRetrievedSource),
+      };
+    case "plan":
+      // The whole list, every time. An empty array is a real answer — the
+      // agent cleared its plan — so it is accepted rather than treated as a
+      // missing field.
+      if (
+        !hasExactKeys(value, ["type", "turnID", "items"]) ||
+        !Array.isArray(value.items) ||
+        value.items.length > MAX_PLAN_ITEMS
+      ) {
+        throw new Error("Malformed agent turn event");
+      }
+      return {
+        type: value.type,
+        turnID: value.turnID,
+        items: value.items.map(parseSafePlanItem),
       };
     case "unknown":
       if (
@@ -604,6 +650,13 @@ export function handleParsedTurnEvent(activeTurn, event) {
       // one way or the other. Nothing new appears — a result with no step to
       // settle names nothing a reader could act on.
       recordToolResult({ name: event.name, target: event.target, isError: event.isError }, activeTurn);
+      return;
+    case "plan":
+      // The agent's own task list. Not fenced to the turn the way retrieval
+      // is: a plan is what the agent means to do next, and the next turn
+      // inherits it. It is replaced wholesale when the agent says so and
+      // cleared when the SELECTION moves, not when a turn ends.
+      setPlan(event.items);
       return;
     case "retrieval":
       // What the local model was given from the knowledge base, announced

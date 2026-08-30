@@ -909,6 +909,20 @@
 
         <p class="context-run" id="context-run-line" role="status" aria-live="polite" hidden></p>
 
+        <!-- The agent's own task list, first because it is the only section
+             that says what is still COMING. Everything under it is a record
+             of what already happened — files written, files given, passages
+             recalled — and a reader scanning this column for "where is this
+             going" should not have to pass three answers to "where has it
+             been" to find out. -->
+        <section class="context-section" id="context-plan" hidden>
+          <h3 class="context-section-title">
+            Plan
+            <span class="context-section-meta" id="plan-meta"></span>
+          </h3>
+          <ol class="context-plan-list" id="plan-list"></ol>
+        </section>
+
         <section class="context-section" id="context-diff" hidden>
           <h3 class="context-section-title">
             Changes

@@ -192,6 +192,12 @@ const ZH = new Map(Object.entries({
   "Add": "添加",
 
   // --- Workspace panel --------------------------------------------------
+  "Plan": "计划",
+  "{done}/{total}": "{done}/{total}",
+  "{state}: {text}": "{state}：{text}",
+  "To do": "待办",
+  "In progress": "进行中",
+  "Done": "完成",
   "Changes": "改动",
   "Produced": "产出",
   "Attached": "附件",

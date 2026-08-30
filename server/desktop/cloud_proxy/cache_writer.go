@@ -70,6 +70,7 @@ type CacheWriter struct {
 	mu           sync.Mutex
 	row          *cacheRow // nil until first Enqueue triggers INSERT
 	toolSteps    []CachedToolStep
+	plan         []map[string]string
 	pendingText  strings.Builder
 	pendingHits  int       // events since last flush
 	lastFlushAt  time.Time // wall-clock of last flush; drives time-threshold trigger
@@ -300,14 +301,41 @@ func (w *CacheWriter) RecordToolResult(name, target string, isError bool) {
 	}
 }
 
+// RecordPlan keeps the agent's task list as it stood at the end of the turn.
+//
+// Last write wins, deliberately: the tool sends the whole list every time it
+// changes, so the final one is the only one that describes where the work
+// actually got to. Keeping the intermediate versions would be keeping a
+// history of intentions nobody asked for, on a row that has to be read in a
+// 300px column.
+func (w *CacheWriter) RecordPlan(items []map[string]string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.finalized {
+		return
+	}
+	w.plan = items
+}
+
 // toolStepsJSONLocked serialises the fold for the metadata column. Empty
 // slice → empty string, so rows without tool turns stay NULL-ish rather
 // than carrying "{}" noise. Caller must hold w.mu.
+//
+// The name is older than the column: metadata now holds the work log AND the
+// task list, which travel together because they answer the same question
+// from two directions — what the agent did, and what it meant to do.
 func (w *CacheWriter) toolStepsJSONLocked() string {
-	if len(w.toolSteps) == 0 {
+	if len(w.toolSteps) == 0 && len(w.plan) == 0 {
 		return ""
 	}
-	blob, err := json.Marshal(map[string]any{"tool_steps": w.toolSteps})
+	payload := map[string]any{}
+	if len(w.toolSteps) > 0 {
+		payload["tool_steps"] = w.toolSteps
+	}
+	if len(w.plan) > 0 {
+		payload["plan"] = w.plan
+	}
+	blob, err := json.Marshal(payload)
 	if err != nil {
 		return ""
 	}
